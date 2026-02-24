@@ -1125,6 +1125,26 @@ function viewerHtml(): string {
     animation: blink 1s infinite;
   }
 
+  .card-links-badge {
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    color: var(--teal);
+    border: 1px solid var(--teal);
+    padding: 0.15rem 0.4rem;
+    opacity: 0.8;
+  }
+  .connections-section { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  .connections-title { font-size: 0.6rem; letter-spacing: 0.2em; color: var(--amber); text-transform: uppercase; margin-bottom: 0.75rem; }
+  .connection-chip {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    background: var(--bg3); border: 1px solid var(--border);
+    padding: 0.35rem 0.7rem; margin: 0.25rem 0.25rem 0.25rem 0;
+    cursor: pointer; transition: border-color 0.15s;
+    font-size: 0.72rem; color: var(--text);
+  }
+  .connection-chip:hover { border-color: var(--amber); color: var(--amber); }
+  .connection-chip .chip-type { font-size: 0.55rem; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.6; }
+  .connection-chip .chip-label { font-size: 0.6rem; color: var(--text-dim); font-style: italic; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
@@ -1152,6 +1172,9 @@ function viewerHtml(): string {
       <div class="hdr-meta">
         <div id="hdr-count">— entries</div>
         <div id="hdr-time"></div>
+      </div>
+      <div id="live-indicator" style="font-size:0.6rem;letter-spacing:0.15em;color:var(--text-dim);display:none;align-items:center">
+        <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--teal);margin-right:4px;animation:blink 2s infinite"></span>LIVE
       </div>
       <button class="logout-btn" onclick="doLogout()">LOCK</button>
     </div>
@@ -1200,6 +1223,7 @@ function viewerHtml(): string {
     <div id="expand-header"></div>
     <div class="expand-content" id="expand-content"></div>
     <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border);font-size:0.6rem;color:var(--text-dim);letter-spacing:0.08em" id="expand-meta"></div>
+    <div id="expand-connections"></div>
   </div>
 </div>
 
@@ -1224,6 +1248,7 @@ function viewerHtml(): string {
         document.getElementById('app').style.flexDirection = 'column';
         updateTime();
         loadMemories();
+        startLivePolling();
       } else {
         document.getElementById('login-error').style.display = 'block';
         document.getElementById('token-input').style.borderColor = 'var(--red)';
@@ -1283,6 +1308,7 @@ function viewerHtml(): string {
     grid.innerHTML = memories.map((m, i) => {
       const date = new Date(m.created_at * 1000).toISOString().slice(0,10);
       const tags = m.tags ? m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('') : '';
+      const linkBadge = m.link_count > 0 ? \`<span class="card-links-badge">⬡ \${m.link_count}</span>\` : '';
       const titleHtml = m.title ? \`<div class="card-title">\${esc(m.title)}</div>\` : '';
       const keyHtml = m.key ? \`<div class="card-key"><span>KEY /</span> \${esc(m.key)}</div>\` : '';
       return \`<div class="card" data-type="\${m.type}" data-idx="\${i}" onclick="expandCard(\${i})" style="animation-delay:\${Math.min(i*0.04,0.4)}s">
@@ -1293,7 +1319,7 @@ function viewerHtml(): string {
         </div>
         <div class="card-content">\${esc(m.content)}</div>
         <div class="card-footer">
-          <div class="card-tags">\${tags}</div>
+          <div class="card-tags">\${tags}\${linkBadge}</div>
           <div class="card-date">\${date}</div>
         </div>
         <div class="card-id">\${m.id}</div>
@@ -1318,6 +1344,30 @@ function viewerHtml(): string {
     document.getElementById('expand-meta').textContent = 'ID: ' + m.id + '  ·  Created ' + date + updated;
     document.getElementById('expand-overlay').classList.add('open');
     document.body.style.overflow = 'hidden';
+
+    // Lazy-load connections
+    const connEl = document.getElementById('expand-connections');
+    connEl.innerHTML = '<div style="font-size:0.65rem;color:var(--text-dim);letter-spacing:0.1em;margin-top:1rem">LOADING CONNECTIONS...</div>';
+    fetch(BASE + '/api/links/' + m.id, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      .then(r => r.json())
+      .then(links => {
+        if (!links || !links.length) { connEl.innerHTML = ''; return; }
+        connEl.innerHTML = \`<div class="connections-section">
+          <div class="connections-title">⬡ Connections (\${links.length})</div>
+          \${links.map(l => {
+            const cm = l.memory;
+            const label = l.label ? \`<span class="chip-label">"\${esc(l.label)}"</span>\` : '';
+            const name = cm.title || cm.key || (cm.content || '').slice(0, 40) + '…';
+            return \`<span class="connection-chip" onclick="expandById('\${cm.id}')">
+              <span class="chip-type">\${cm.type}</span>
+              \${esc(name)}
+              \${label}
+              <span style="opacity:0.4">→</span>
+            </span>\`;
+          }).join('')}
+        </div>\`;
+      })
+      .catch(() => { connEl.innerHTML = ''; });
   }
 
   function closeExpand(e) {
@@ -1343,6 +1393,31 @@ function viewerHtml(): string {
 
   function esc(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function expandById(id) {
+    const idx = allMemories.findIndex(m => m.id === id);
+    if (idx !== -1) expandCard(idx);
+  }
+
+  let lastPollSig = '';
+
+  function startLivePolling() {
+    const liveEl = document.getElementById('live-indicator');
+    if (liveEl) liveEl.style.display = 'flex';
+    setInterval(async () => {
+      if (!TOKEN) return;
+      try {
+        const r = await fetch(BASE + '/api/memories?limit=1', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+        if (!r.ok) return;
+        const data = await r.json();
+        const sig = (data.stats || []).map(s => s.type + ':' + s.count).join('|');
+        if (lastPollSig && sig !== lastPollSig) {
+          loadMemories();
+        }
+        lastPollSig = sig;
+      } catch {}
+    }, 10000);
   }
 
   // Enter key on login
