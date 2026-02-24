@@ -1,0 +1,28 @@
+name: Smoke OAuth Isolation
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL for deployed MemoryVault service"
+        required: true
+        default: "https://ai-memory-mcp.guirguispierre.workers.dev"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run smoke test
+        run: bash scripts/smoke_oauth_isolation.sh "${{ inputs.base_url }}"

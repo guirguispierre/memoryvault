@@ -103,6 +103,8 @@ Use this server URL:
 - `GET /api/links/:id` links for a memory
 - `POST /auth/signup|login|refresh|logout`
 - `GET /auth/me`
+- `GET /auth/sessions`
+- `POST /auth/sessions/revoke`
 - `POST /register` OAuth dynamic client registration
 - `GET|POST /authorize` OAuth authorization endpoint
 - `POST /token` OAuth token endpoint
@@ -123,6 +125,23 @@ Use this server URL:
 - `npm run type-check` TypeScript check
 - `npm test` alias for type-check
 - `npm run deploy` deploy to Cloudflare
+- `npm run smoke:oauth-isolation` run OAuth + tenant isolation + session revocation smoke test
+
+Smoke test examples:
+
+```bash
+# Against production (default)
+npm run smoke:oauth-isolation
+
+# Against local/dev target
+BASE_URL=http://127.0.0.1:8787 npm run smoke:oauth-isolation
+```
+
+Notes:
+- The smoke test creates temporary users/memories in the target environment.
+- GitHub Actions includes:
+  - `CI` (automatic type-check on push/PR)
+  - `Smoke OAuth Isolation` (manual workflow_dispatch against a selected base URL)
 
 ## Security Notes
 

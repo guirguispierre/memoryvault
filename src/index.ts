@@ -2998,6 +2998,105 @@ async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
   });
 }
 
+type SessionSummary = {
+  id: string;
+  brain_id: string;
+  brain_name: string | null;
+  created_at: number;
+  used_at: number;
+  expires_at: number;
+  revoked_at: number | null;
+};
+
+async function listSessionsForUser(userId: string, env: Env): Promise<SessionSummary[]> {
+  const rows = await env.DB.prepare(
+    `SELECT
+      s.id,
+      s.brain_id,
+      b.name AS brain_name,
+      s.created_at,
+      s.used_at,
+      s.expires_at,
+      s.revoked_at
+     FROM auth_sessions s
+     LEFT JOIN brains b ON b.id = s.brain_id
+     WHERE s.user_id = ?
+     ORDER BY s.used_at DESC, s.created_at DESC
+     LIMIT 200`
+  ).bind(userId).all<SessionSummary>();
+  return rows.results;
+}
+
+async function handleAuthSessions(authCtx: AuthContext, env: Env): Promise<Response> {
+  if (authCtx.kind !== 'user' || !authCtx.userId) {
+    return corsJsonResponse({ error: 'Session listing requires a user account.' }, 403);
+  }
+  const sessions = await listSessionsForUser(authCtx.userId, env);
+  const tsNow = now();
+  return corsJsonResponse({
+    count: sessions.length,
+    sessions: sessions.map((s) => ({
+      id: s.id,
+      brain_id: s.brain_id,
+      brain_name: s.brain_name,
+      created_at: s.created_at,
+      used_at: s.used_at,
+      expires_at: s.expires_at,
+      revoked_at: s.revoked_at,
+      is_current: authCtx.sessionId === s.id,
+      is_active: s.revoked_at === null && s.expires_at > tsNow,
+    })),
+  });
+}
+
+async function handleAuthSessionRevoke(request: Request, authCtx: AuthContext, env: Env): Promise<Response> {
+  if (authCtx.kind !== 'user' || !authCtx.userId) {
+    return corsJsonResponse({ error: 'Session revocation requires a user account.' }, 403);
+  }
+
+  const body = await readJsonBody(request) ?? {};
+  const sessionId = typeof body.session_id === 'string' ? body.session_id.trim() : '';
+  const revokeAll = body.all === true;
+  const keepCurrent = body.keep_current !== false;
+  const ts = now();
+
+  if (sessionId) {
+    if (authCtx.sessionId && sessionId === authCtx.sessionId) {
+      return corsJsonResponse({ error: 'Cannot revoke the current session via session_id. Use all=true with keep_current=false if you intend full logout.' }, 400);
+    }
+    const result = await env.DB.prepare(
+      'UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL'
+    ).bind(ts, sessionId, authCtx.userId).run();
+    return corsJsonResponse({
+      revoked_count: result.meta.changes ?? 0,
+      session_id: sessionId,
+    });
+  }
+
+  if (revokeAll) {
+    if (keepCurrent && authCtx.sessionId) {
+      const result = await env.DB.prepare(
+        'UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND id != ? AND revoked_at IS NULL'
+      ).bind(ts, authCtx.userId, authCtx.sessionId).run();
+      return corsJsonResponse({
+        revoked_count: result.meta.changes ?? 0,
+        all: true,
+        kept_current_session: true,
+      });
+    }
+    const result = await env.DB.prepare(
+      'UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL'
+    ).bind(ts, authCtx.userId).run();
+    return corsJsonResponse({
+      revoked_count: result.meta.changes ?? 0,
+      all: true,
+      kept_current_session: false,
+    });
+  }
+
+  return corsJsonResponse({ error: 'Provide session_id or all=true.' }, 400);
+}
+
 type OAuthClientRow = {
   id: string;
   client_id: string;
@@ -5410,6 +5509,20 @@ export default {
       const authCtx = await authenticateRequest(request, env);
       if (!authCtx) return unauthorized(url);
       return handleAuthMe(authCtx, env);
+    }
+
+    if (url.pathname === '/auth/sessions') {
+      if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) return unauthorized(url);
+      return handleAuthSessions(authCtx, env);
+    }
+
+    if (url.pathname === '/auth/sessions/revoke') {
+      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) return unauthorized(url);
+      return handleAuthSessionRevoke(request, authCtx, env);
     }
 
     if (url.pathname === '/api/memories') {

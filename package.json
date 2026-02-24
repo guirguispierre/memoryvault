@@ -6,7 +6,8 @@
     "test": "npm run type-check",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "type-check": "tsc"
+    "type-check": "tsc",
+    "smoke:oauth-isolation": "bash scripts/smoke_oauth_isolation.sh"
   },
   "keywords": [
     "mcp",
