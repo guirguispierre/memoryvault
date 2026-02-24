@@ -12,6 +12,9 @@ It supports:
 Production URL:
 - `https://ai-memory-mcp.guirguispierre.workers.dev`
 
+Changelog:
+- [CHANGELOG.md](./CHANGELOG.md)
+
 ## Architecture
 
 - Runtime: Cloudflare Workers
