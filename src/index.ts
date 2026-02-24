@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.5.0';
+const SERVER_VERSION = '1.6.0';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -496,6 +496,36 @@ const EMPTY_LINK_STATS: LinkStats = {
   example_of_count: 0,
 };
 
+type ScoreComponent = {
+  name: string;
+  delta: number;
+};
+
+type DynamicScoreBreakdown = {
+  score_model: string;
+  evaluated_at: number;
+  memory_type: string;
+  source: string | null;
+  age_days: number;
+  link_stats: LinkStats;
+  base_confidence: number;
+  base_importance: number;
+  raw_confidence: number;
+  raw_importance: number;
+  dynamic_confidence: number;
+  dynamic_importance: number;
+  confidence_components: ScoreComponent[];
+  importance_components: ScoreComponent[];
+  signals: {
+    certainty_hits: number;
+    hedge_hits: number;
+    importance_hits: number;
+    high_signal_source: boolean;
+    low_signal_source: boolean;
+    content_length: number;
+  };
+};
+
 function toFiniteNumber(value: unknown, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -507,6 +537,43 @@ function clamp01(value: number): number {
 
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function canonicalizeForJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeForJson(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    out[key] = canonicalizeForJson(obj[key]);
+  }
+  return out;
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalizeForJson(value));
+}
+
+function parseSemver(version: string): [number, number, number] | null {
+  const trimmed = version.trim();
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(trimmed);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(a: string, b: string): number {
+  const aParts = parseSemver(a);
+  const bParts = parseSemver(b);
+  if (!aParts || !bParts) {
+    return a.localeCompare(b);
+  }
+  if (aParts[0] !== bParts[0]) return aParts[0] - bParts[0];
+  if (aParts[1] !== bParts[1]) return aParts[1] - bParts[1];
+  return aParts[2] - bParts[2];
 }
 
 function countKeywordHits(haystack: string, terms: string[]): number {
@@ -562,11 +629,11 @@ async function loadLinkStatsMap(env: Env, brainId: string): Promise<Map<string, 
   return statsMap;
 }
 
-function computeDynamicScores(
+function computeDynamicScoreBreakdown(
   memory: Record<string, unknown>,
   rawStats?: Partial<LinkStats>,
   tsNow = now()
-): Record<string, unknown> {
+): DynamicScoreBreakdown {
   const stats = normalizeLinkStats(rawStats);
   const baseConfidence = clamp01(toFiniteNumber(memory.confidence, 0.7));
   const baseImportance = clamp01(toFiniteNumber(memory.importance, 0.5));
@@ -585,8 +652,12 @@ function computeDynamicScores(
   const certaintyHits = countKeywordHits(textBlob, ['verified', 'confirmed', 'exact', 'measured', 'token', 'id', 'official', 'passed']);
   const hedgeHits = countKeywordHits(textBlob, ['maybe', 'might', 'perhaps', 'guess', 'probably', 'vague', 'unsure', 'i think']);
   const importanceHits = countKeywordHits(textBlob, ['goal', 'strategy', 'deadline', 'todo', 'must', 'critical', 'priority', 'plan', 'task', 'decision', 'launch', 'ship']);
-  const highSignalSource = sourceText && countKeywordHits(sourceText, ['api', 'system', 'log', 'metric', 'official', 'doc', 'test', 'monitor']);
-  const lowSignalSource = sourceText && countKeywordHits(sourceText, ['rumor', 'guess', 'hearsay', 'vibe', 'idea']);
+  const highSignalSource = sourceText
+    ? countKeywordHits(sourceText, ['api', 'system', 'log', 'metric', 'official', 'doc', 'test', 'monitor']) > 0
+    : false;
+  const lowSignalSource = sourceText
+    ? countKeywordHits(sourceText, ['rumor', 'guess', 'hearsay', 'vibe', 'idea']) > 0
+    : false;
   const contentLength = textBlob.replace(/\s+/g, '').length;
 
   const sourceBonus = highSignalSource
@@ -616,37 +687,73 @@ function computeDynamicScores(
         ? 0.03
         : -Math.min(0.18, (ageDays - 60) / 365 * 0.18);
 
-  const dynamicConfidence = round3(clamp01(
-    baseConfidence
-      + sourceBonus
-      + certaintySignal
-      + typeConfidenceBias
-      + supportSignal
-      + (linkSignal * 0.35)
-      + (exampleSignal * 0.25)
-      - contradictionPenalty
-      - hedgePenalty
-      - sourcePenalty
-      - stalePenalty
-  ));
+  const confidenceComponentsRaw: ScoreComponent[] = [
+    { name: 'base_confidence', delta: baseConfidence },
+    { name: 'source_bonus', delta: sourceBonus },
+    { name: 'certainty_signal', delta: certaintySignal },
+    { name: 'type_confidence_bias', delta: typeConfidenceBias },
+    { name: 'support_signal', delta: supportSignal },
+    { name: 'link_signal', delta: linkSignal * 0.35 },
+    { name: 'example_signal', delta: exampleSignal * 0.25 },
+    { name: 'contradiction_penalty', delta: -contradictionPenalty },
+    { name: 'hedge_penalty', delta: -hedgePenalty },
+    { name: 'source_penalty', delta: -sourcePenalty },
+    { name: 'stale_penalty', delta: -stalePenalty },
+  ];
+  const importanceComponentsRaw: ScoreComponent[] = [
+    { name: 'base_importance', delta: baseImportance },
+    { name: 'importance_keyword_signal', delta: importanceKeywordSignal },
+    { name: 'content_depth_signal', delta: contentDepthSignal },
+    { name: 'type_importance_bias', delta: typeImportanceBias },
+    { name: 'link_signal', delta: linkSignal },
+    { name: 'cause_signal', delta: causeSignal },
+    { name: 'example_signal', delta: exampleSignal },
+    { name: 'supersede_signal', delta: supersedeSignal },
+    { name: 'recency_signal', delta: recencyImportance },
+    { name: 'contradiction_penalty', delta: -(contradictionPenalty * 0.25) },
+  ];
 
-  const dynamicImportance = round3(clamp01(
-    baseImportance
-      + importanceKeywordSignal
-      + contentDepthSignal
-      + typeImportanceBias
-      + linkSignal
-      + causeSignal
-      + exampleSignal
-      + supersedeSignal
-      + recencyImportance
-      - (contradictionPenalty * 0.25)
-  ));
+  const rawConfidence = confidenceComponentsRaw.reduce((sum, c) => sum + c.delta, 0);
+  const rawImportance = importanceComponentsRaw.reduce((sum, c) => sum + c.delta, 0);
+  const dynamicConfidence = round3(clamp01(rawConfidence));
+  const dynamicImportance = round3(clamp01(rawImportance));
 
   return {
-    ...stats,
+    score_model: 'memoryvault-dynamic-v1',
+    evaluated_at: tsNow,
+    memory_type: memoryType || 'unknown',
+    source: sourceText || null,
+    age_days: round3(ageDays),
+    link_stats: stats,
+    base_confidence: round3(baseConfidence),
+    base_importance: round3(baseImportance),
+    raw_confidence: round3(rawConfidence),
+    raw_importance: round3(rawImportance),
     dynamic_confidence: dynamicConfidence,
     dynamic_importance: dynamicImportance,
+    confidence_components: confidenceComponentsRaw.map((c) => ({ name: c.name, delta: round3(c.delta) })),
+    importance_components: importanceComponentsRaw.map((c) => ({ name: c.name, delta: round3(c.delta) })),
+    signals: {
+      certainty_hits: certaintyHits,
+      hedge_hits: hedgeHits,
+      importance_hits: importanceHits,
+      high_signal_source: highSignalSource,
+      low_signal_source: lowSignalSource,
+      content_length: contentLength,
+    },
+  };
+}
+
+function computeDynamicScores(
+  memory: Record<string, unknown>,
+  rawStats?: Partial<LinkStats>,
+  tsNow = now()
+): Record<string, unknown> {
+  const breakdown = computeDynamicScoreBreakdown(memory, rawStats, tsNow);
+  return {
+    ...breakdown.link_stats,
+    dynamic_confidence: breakdown.dynamic_confidence,
+    dynamic_importance: breakdown.dynamic_importance,
   };
 }
 
@@ -807,7 +914,168 @@ async function ensureObjectiveRoot(env: Env, brainId: string): Promise<string> {
   return id;
 }
 
-const TOOLS = [
+type ToolDefinition = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+};
+
+type ToolReleaseMeta = {
+  introduced_in: string;
+  deprecated_in?: string;
+  replaced_by?: string;
+  notes?: string;
+};
+
+type ToolChangelogChange = {
+  type: 'added' | 'updated' | 'deprecated' | 'security' | 'fix';
+  target: 'tool' | 'endpoint' | 'scoring' | 'auth';
+  name: string;
+  description: string;
+};
+
+type ToolChangelogEntry = {
+  id: string;
+  version: string;
+  released_at: number;
+  summary: string;
+  changes: ToolChangelogChange[];
+};
+
+const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
+  memory_link: {
+    introduced_in: '1.4.0',
+    notes: 'Structured memory relationships and graph reasoning.',
+  },
+  memory_unlink: {
+    introduced_in: '1.4.0',
+    notes: 'Relationship cleanup and correction.',
+  },
+  memory_links: {
+    introduced_in: '1.4.0',
+    notes: 'Neighborhood inspection for a specific memory.',
+  },
+  memory_changelog: {
+    introduced_in: '1.5.0',
+    notes: 'Memory-level audit/event stream for agent sync.',
+  },
+  memory_conflicts: {
+    introduced_in: '1.5.0',
+    notes: 'Contradiction detection across high-confidence facts.',
+  },
+  objective_set: {
+    introduced_in: '1.5.0',
+    notes: 'Autonomous objective node creation and updates.',
+  },
+  objective_list: {
+    introduced_in: '1.5.0',
+    notes: 'Objective planning view for long-term goals.',
+  },
+  tool_manifest: {
+    introduced_in: '1.6.0',
+    notes: 'Canonical MCP tool registry with definition hashes.',
+  },
+  tool_changelog: {
+    introduced_in: '1.6.0',
+    notes: 'Versioned tool/endpoints/scoring change feed.',
+  },
+  memory_explain_score: {
+    introduced_in: '1.6.0',
+    notes: 'Explainable confidence/importance scoring breakdown.',
+  },
+};
+
+const TOOL_CHANGELOG: ToolChangelogEntry[] = [
+  {
+    id: 'tooling-1.6.0',
+    version: '1.6.0',
+    released_at: 1771963200,
+    summary: 'Tool discovery and scoring transparency release.',
+    changes: [
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'tool_manifest',
+        description: 'Introduced canonical tool manifest output with schema/definition hashes and release metadata.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'tool_changelog',
+        description: 'Introduced versioned changelog feed for MCP tools, auth updates, and scoring model updates.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_explain_score',
+        description: 'Added explainable scoring API for confidence/importance values and contributing factors.',
+      },
+      {
+        type: 'updated',
+        target: 'scoring',
+        name: 'memory scoring model',
+        description: 'Standardized explainable dynamic score model output as memoryvault-dynamic-v1.',
+      },
+    ],
+  },
+  {
+    id: 'auth-1.5.1',
+    version: '1.5.1',
+    released_at: 1771933500,
+    summary: 'User session governance endpoints.',
+    changes: [
+      {
+        type: 'added',
+        target: 'endpoint',
+        name: 'GET /auth/sessions',
+        description: 'Added per-user session inventory with active/current flags.',
+      },
+      {
+        type: 'added',
+        target: 'endpoint',
+        name: 'POST /auth/sessions/revoke',
+        description: 'Added single-session and bulk session revocation controls.',
+      },
+    ],
+  },
+  {
+    id: 'oauth-1.5.0',
+    version: '1.5.0',
+    released_at: 1771888500,
+    summary: 'OAuth-first multi-tenant MemoryVault rollout.',
+    changes: [
+      {
+        type: 'added',
+        target: 'auth',
+        name: 'OAuth authorization code + PKCE',
+        description: 'Enabled dynamic registration and OAuth metadata discovery for keyless MCP setup.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_conflicts',
+        description: 'Added contradiction detection for high-confidence facts.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'objective_set/objective_list',
+        description: 'Added autonomous objective graph nodes for long-term planning.',
+      },
+    ],
+  },
+];
+
+function getToolReleaseMeta(toolName: string): ToolReleaseMeta {
+  return TOOL_RELEASE_META[toolName] ?? { introduced_in: '1.0.0' };
+}
+
+function isToolDeprecated(meta: ToolReleaseMeta): boolean {
+  if (!meta.deprecated_in) return false;
+  return compareSemver(SERVER_VERSION, meta.deprecated_in) >= 0;
+}
+
+const TOOLS: ToolDefinition[] = [
   {
     name: 'memory_save',
     description: 'Save a new memory. Use type="note" for titled knowledge entries, type="fact" for key=value pairs, type="journal" for free-form thoughts.',
@@ -900,6 +1168,45 @@ const TOOLS = [
     name: 'memory_stats',
     description: 'Get statistics about stored memories: counts by type and recent activity.',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'tool_manifest',
+    description: 'Return canonical MCP tool definitions, schema hashes, and release/deprecation metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tool: { type: 'string', description: 'Optional tool name filter' },
+        include_schema: { type: 'boolean', description: 'Include full input schema in each result (default true)' },
+        include_hashes: { type: 'boolean', description: 'Include schema_hash and definition_hash fields (default true)' },
+        include_deprecated: { type: 'boolean', description: 'Include deprecated tools (default true)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'tool_changelog',
+    description: 'Return versioned tool/auth/scoring changes so agents can detect what is new.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since_version: { type: 'string', description: 'Only return entries with version greater than this semver' },
+        since: { type: 'number', description: 'Only return entries released at/after this unix timestamp (seconds)' },
+        limit: { type: 'number', description: 'Max entries to return (default 20, max 100)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_explain_score',
+    description: 'Explain why a memory has its current dynamic confidence/importance values.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Memory ID to explain' },
+        at: { type: 'number', description: 'Optional evaluation timestamp (unix seconds) for what-if analysis' },
+      },
+      required: ['id'],
+    },
   },
   {
     name: 'memory_link',
@@ -1313,6 +1620,176 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
             avg_recent_dynamic_confidence: avgDynamicConfidence,
             avg_recent_dynamic_importance: avgDynamicImportance,
             recent_5: recentScored,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'tool_manifest': {
+      const { tool: rawTool, include_schema: rawIncludeSchema, include_hashes: rawIncludeHashes, include_deprecated: rawIncludeDeprecated } = args as {
+        tool?: unknown;
+        include_schema?: unknown;
+        include_hashes?: unknown;
+        include_deprecated?: unknown;
+      };
+      if (rawTool !== undefined && typeof rawTool !== 'string') {
+        return { content: [{ type: 'text', text: 'tool must be a string when provided.' }] };
+      }
+      if (rawIncludeSchema !== undefined && typeof rawIncludeSchema !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_schema must be a boolean when provided.' }] };
+      }
+      if (rawIncludeHashes !== undefined && typeof rawIncludeHashes !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_hashes must be a boolean when provided.' }] };
+      }
+      if (rawIncludeDeprecated !== undefined && typeof rawIncludeDeprecated !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_deprecated must be a boolean when provided.' }] };
+      }
+
+      const toolFilter = typeof rawTool === 'string' ? rawTool.trim() : '';
+      const includeSchema = rawIncludeSchema !== false;
+      const includeHashes = rawIncludeHashes !== false;
+      const includeDeprecated = rawIncludeDeprecated !== false;
+
+      const selected = toolFilter
+        ? TOOLS.filter((tool) => tool.name === toolFilter)
+        : TOOLS;
+      if (toolFilter && !selected.length) {
+        return { content: [{ type: 'text', text: `Unknown tool: ${toolFilter}` }] };
+      }
+
+      const manifestTools: Array<Record<string, unknown>> = [];
+      for (const toolDef of selected) {
+        const meta = getToolReleaseMeta(toolDef.name);
+        const deprecated = isToolDeprecated(meta);
+        if (!includeDeprecated && deprecated) continue;
+
+        const schemaJson = canonicalJson(toolDef.inputSchema);
+        const entry: Record<string, unknown> = {
+          name: toolDef.name,
+          description: toolDef.description,
+          introduced_in: meta.introduced_in,
+          deprecated: deprecated,
+          deprecated_in: meta.deprecated_in ?? null,
+          replaced_by: meta.replaced_by ?? null,
+          notes: meta.notes ?? null,
+        };
+        if (includeSchema) entry.input_schema = toolDef.inputSchema;
+        if (includeHashes) {
+          entry.schema_hash = await sha256DigestBase64Url(schemaJson);
+          entry.definition_hash = await sha256DigestBase64Url(`${toolDef.name}\n${toolDef.description}\n${schemaJson}`);
+        }
+        manifestTools.push(entry);
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            server: { name: SERVER_NAME, version: SERVER_VERSION },
+            generated_at: now(),
+            hash_algorithm: includeHashes ? 'sha256/base64url' : null,
+            requested_tool: toolFilter || null,
+            tool_count: manifestTools.length,
+            deprecated_count: manifestTools.filter((t) => t.deprecated === true).length,
+            tools: manifestTools,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'tool_changelog': {
+      const { since_version: rawSinceVersion, since, limit: rawLimit } = args as {
+        since_version?: unknown;
+        since?: unknown;
+        limit?: unknown;
+      };
+      if (rawSinceVersion !== undefined && typeof rawSinceVersion !== 'string') {
+        return { content: [{ type: 'text', text: 'since_version must be a semver string when provided.' }] };
+      }
+      const sinceVersion = typeof rawSinceVersion === 'string' ? rawSinceVersion.trim() : '';
+      if (sinceVersion && !parseSemver(sinceVersion)) {
+        return { content: [{ type: 'text', text: 'since_version must match semver format (for example "1.6.0").' }] };
+      }
+      let sinceTs: number | null = null;
+      if (since !== undefined) {
+        const sinceVal = Number(since);
+        if (!Number.isFinite(sinceVal) || sinceVal < 0) {
+          return { content: [{ type: 'text', text: 'since must be a non-negative unix timestamp.' }] };
+        }
+        sinceTs = Math.floor(sinceVal);
+      }
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 20, 1), 100);
+
+      let entries = [...TOOL_CHANGELOG];
+      if (sinceVersion) {
+        entries = entries.filter((entry) => compareSemver(entry.version, sinceVersion) > 0);
+      }
+      if (sinceTs !== null) {
+        entries = entries.filter((entry) => entry.released_at >= sinceTs);
+      }
+      entries.sort((a, b) => {
+        if (b.released_at !== a.released_at) return b.released_at - a.released_at;
+        return compareSemver(b.version, a.version);
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            server: { name: SERVER_NAME, version: SERVER_VERSION },
+            latest_version: SERVER_VERSION,
+            filter: {
+              since_version: sinceVersion || null,
+              since: sinceTs,
+              limit,
+            },
+            count: Math.min(entries.length, limit),
+            entries: entries.slice(0, limit),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_explain_score': {
+      const { id, at } = args as { id: unknown; at?: unknown };
+      if (typeof id !== 'string' || !id.trim()) {
+        return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
+      }
+      let tsNow = now();
+      if (at !== undefined) {
+        const atNum = Number(at);
+        if (!Number.isFinite(atNum) || atNum < 0) {
+          return { content: [{ type: 'text', text: 'at must be a non-negative unix timestamp when provided.' }] };
+        }
+        tsNow = Math.floor(atNum);
+      }
+
+      const row = await env.DB.prepare(
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, archived_at, confidence, importance FROM memories WHERE brain_id = ? AND id = ? LIMIT 1'
+      ).bind(brainId, id.trim()).first<Record<string, unknown>>();
+      if (!row) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+
+      const linkStatsMap = await loadLinkStatsMap(env, brainId);
+      const stats = linkStatsMap.get(String(row.id ?? '')) ?? EMPTY_LINK_STATS;
+      const breakdown = computeDynamicScoreBreakdown(row, stats, tsNow);
+      const memory = projectMemoryForClient({
+        ...row,
+        ...breakdown.link_stats,
+        dynamic_confidence: breakdown.dynamic_confidence,
+        dynamic_importance: breakdown.dynamic_importance,
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            memory_id: row.id,
+            memory,
+            explanation: {
+              ...breakdown,
+              confidence_delta: round3(breakdown.dynamic_confidence - breakdown.base_confidence),
+              importance_delta: round3(breakdown.dynamic_importance - breakdown.base_importance),
+            },
           }, null, 2),
         }],
       };

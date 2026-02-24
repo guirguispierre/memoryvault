@@ -118,6 +118,7 @@ Use this server URL:
 - `memory_activate`, `memory_reinforce`, `memory_decay`
 - `memory_changelog`, `memory_conflicts`
 - `objective_set`, `objective_list`
+- `tool_manifest`, `tool_changelog`, `memory_explain_score`
 
 ## Scripts
 
