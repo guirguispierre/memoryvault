@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.2.2';
+const SERVER_VERSION = '1.2.3';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -110,6 +110,152 @@ async function ensureSchema(env: Env): Promise<void> {
     });
   }
   await schemaReady;
+}
+
+type LinkStats = {
+  link_count: number;
+  supports_count: number;
+  contradicts_count: number;
+  supersedes_count: number;
+  causes_count: number;
+  example_of_count: number;
+};
+
+const EMPTY_LINK_STATS: LinkStats = {
+  link_count: 0,
+  supports_count: 0,
+  contradicts_count: 0,
+  supersedes_count: 0,
+  causes_count: 0,
+  example_of_count: 0,
+};
+
+function toFiniteNumber(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clamp01(value: number): number {
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function normalizeLinkStats(raw?: Partial<LinkStats>): LinkStats {
+  return {
+    link_count: toFiniteNumber(raw?.link_count, 0),
+    supports_count: toFiniteNumber(raw?.supports_count, 0),
+    contradicts_count: toFiniteNumber(raw?.contradicts_count, 0),
+    supersedes_count: toFiniteNumber(raw?.supersedes_count, 0),
+    causes_count: toFiniteNumber(raw?.causes_count, 0),
+    example_of_count: toFiniteNumber(raw?.example_of_count, 0),
+  };
+}
+
+async function loadLinkStatsMap(env: Env): Promise<Map<string, LinkStats>> {
+  const rows = await env.DB.prepare(
+    `SELECT
+      rel.memory_id,
+      COUNT(*) AS link_count,
+      SUM(CASE WHEN rel.relation_type = 'supports' THEN 1 ELSE 0 END) AS supports_count,
+      SUM(CASE WHEN rel.relation_type = 'contradicts' THEN 1 ELSE 0 END) AS contradicts_count,
+      SUM(CASE WHEN rel.relation_type = 'supersedes' THEN 1 ELSE 0 END) AS supersedes_count,
+      SUM(CASE WHEN rel.relation_type = 'causes' THEN 1 ELSE 0 END) AS causes_count,
+      SUM(CASE WHEN rel.relation_type = 'example_of' THEN 1 ELSE 0 END) AS example_of_count
+    FROM (
+      SELECT from_id AS memory_id, relation_type FROM memory_links
+      UNION ALL
+      SELECT to_id AS memory_id, relation_type FROM memory_links
+    ) AS rel
+    GROUP BY rel.memory_id`
+  ).all<Record<string, unknown>>();
+
+  const statsMap = new Map<string, LinkStats>();
+  for (const row of rows.results) {
+    const memoryId = typeof row.memory_id === 'string' ? row.memory_id : '';
+    if (!memoryId) continue;
+    statsMap.set(memoryId, {
+      link_count: toFiniteNumber(row.link_count, 0),
+      supports_count: toFiniteNumber(row.supports_count, 0),
+      contradicts_count: toFiniteNumber(row.contradicts_count, 0),
+      supersedes_count: toFiniteNumber(row.supersedes_count, 0),
+      causes_count: toFiniteNumber(row.causes_count, 0),
+      example_of_count: toFiniteNumber(row.example_of_count, 0),
+    });
+  }
+  return statsMap;
+}
+
+function computeDynamicScores(
+  memory: Record<string, unknown>,
+  rawStats?: Partial<LinkStats>,
+  tsNow = now()
+): Record<string, unknown> {
+  const stats = normalizeLinkStats(rawStats);
+  const baseConfidence = clamp01(toFiniteNumber(memory.confidence, 0.7));
+  const baseImportance = clamp01(toFiniteNumber(memory.importance, 0.5));
+  const createdAt = toFiniteNumber(memory.created_at, tsNow);
+  const updatedAt = toFiniteNumber(memory.updated_at, createdAt);
+  const ageDays = Math.max(0, (tsNow - updatedAt) / 86400);
+
+  const sourceBonus = (typeof memory.source === 'string' && memory.source.trim()) ? 0.05 : 0;
+  const linkSignal = Math.min(0.18, Math.log1p(stats.link_count) * 0.06);
+  const supportSignal = Math.min(0.22, stats.supports_count * 0.05);
+  const contradictionPenalty = Math.min(0.28, stats.contradicts_count * 0.09);
+  const causeSignal = Math.min(0.14, stats.causes_count * 0.04);
+  const exampleSignal = Math.min(0.08, stats.example_of_count * 0.02);
+  const supersedeSignal = Math.min(0.08, stats.supersedes_count * 0.02);
+  const stalePenalty = Math.min(0.2, ageDays / 365 * 0.16);
+  const recencyImportance = ageDays < 3
+    ? 0.12
+    : ageDays < 14
+      ? 0.07
+      : ageDays < 60
+        ? 0.03
+        : -Math.min(0.18, (ageDays - 60) / 365 * 0.18);
+
+  const dynamicConfidence = round3(clamp01(
+    baseConfidence
+      + sourceBonus
+      + supportSignal
+      + (linkSignal * 0.35)
+      + (exampleSignal * 0.25)
+      - contradictionPenalty
+      - stalePenalty
+  ));
+
+  const dynamicImportance = round3(clamp01(
+    baseImportance
+      + linkSignal
+      + causeSignal
+      + exampleSignal
+      + supersedeSignal
+      + recencyImportance
+      - (contradictionPenalty * 0.25)
+  ));
+
+  return {
+    ...stats,
+    dynamic_confidence: dynamicConfidence,
+    dynamic_importance: dynamicImportance,
+  };
+}
+
+function enrichMemoryRowsWithDynamics(
+  rows: Array<Record<string, unknown>>,
+  linkStatsMap: Map<string, LinkStats>,
+  tsNow = now()
+): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const id = typeof row.id === 'string' ? row.id : '';
+    const stats = id ? (linkStatsMap.get(id) ?? EMPTY_LINK_STATS) : EMPTY_LINK_STATS;
+    return {
+      ...row,
+      ...computeDynamicScores(row, stats, tsNow),
+    };
+  });
 }
 
 const TOOLS = [
@@ -912,9 +1058,22 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
   params.push(limit);
 
   const results = await env.DB.prepare(query).bind(...params).all();
+  const tsNow = now();
+  const linkStatsMap = await loadLinkStatsMap(env);
+  const enrichedMemories = enrichMemoryRowsWithDynamics(
+    results.results as Array<Record<string, unknown>>,
+    linkStatsMap,
+    tsNow
+  );
+  const sortedMemories = [...enrichedMemories].sort((a, b) => {
+    const impA = toFiniteNumber(a.dynamic_importance ?? a.importance, 0.5);
+    const impB = toFiniteNumber(b.dynamic_importance ?? b.importance, 0.5);
+    if (impB !== impA) return impB - impA;
+    return toFiniteNumber(b.created_at, 0) - toFiniteNumber(a.created_at, 0);
+  });
   const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE archived_at IS NULL GROUP BY type').all();
   const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NOT NULL').first<{ count: number }>();
-  return new Response(JSON.stringify({ memories: results.results, stats: stats.results, archived_count: archived?.count ?? 0 }), {
+  return new Response(JSON.stringify({ memories: sortedMemories, stats: stats.results, archived_count: archived?.count ?? 0 }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }
@@ -933,20 +1092,71 @@ async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
     'SELECT ml.id as link_id, ml.relation_type, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.source, m.confidence, m.importance, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ? AND m.archived_at IS NULL'
   ).bind(memoryId).all();
 
+  const tsNow = now();
+  const linkStatsMap = await loadLinkStatsMap(env);
+
   const results = [
     ...fromLinks.results.map((r: Record<string, unknown>) => ({
       link_id: r.link_id,
       relation_type: r.relation_type,
       label: r.label,
       direction: 'from',
-      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, source: r.source, confidence: r.confidence, importance: r.importance, created_at: r.created_at, updated_at: r.updated_at },
+      memory: {
+        id: r.id,
+        type: r.type,
+        title: r.title,
+        key: r.key,
+        content: r.content,
+        tags: r.tags,
+        source: r.source,
+        confidence: r.confidence,
+        importance: r.importance,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        ...computeDynamicScores(
+          {
+            id: r.id,
+            source: r.source,
+            confidence: r.confidence,
+            importance: r.importance,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+          },
+          linkStatsMap.get(String(r.id ?? '')),
+          tsNow
+        ),
+      },
     })),
     ...toLinks.results.map((r: Record<string, unknown>) => ({
       link_id: r.link_id,
       relation_type: r.relation_type,
       label: r.label,
       direction: 'to',
-      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, source: r.source, confidence: r.confidence, importance: r.importance, created_at: r.created_at, updated_at: r.updated_at },
+      memory: {
+        id: r.id,
+        type: r.type,
+        title: r.title,
+        key: r.key,
+        content: r.content,
+        tags: r.tags,
+        source: r.source,
+        confidence: r.confidence,
+        importance: r.importance,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        ...computeDynamicScores(
+          {
+            id: r.id,
+            source: r.source,
+            confidence: r.confidence,
+            importance: r.importance,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+          },
+          linkStatsMap.get(String(r.id ?? '')),
+          tsNow
+        ),
+      },
     })),
   ];
 
@@ -963,7 +1173,13 @@ async function handleApiGraph(env: Env): Promise<Response> {
     'SELECT ml.id, ml.from_id, ml.to_id, ml.label, ml.relation_type FROM memory_links ml JOIN memories m1 ON m1.id = ml.from_id AND m1.archived_at IS NULL JOIN memories m2 ON m2.id = ml.to_id AND m2.archived_at IS NULL LIMIT 5000'
   ).all();
 
-  const nodes = memories.results as Array<Record<string, unknown>>;
+  const tsNow = now();
+  const linkStatsMap = await loadLinkStatsMap(env);
+  const nodes = enrichMemoryRowsWithDynamics(
+    memories.results as Array<Record<string, unknown>>,
+    linkStatsMap,
+    tsNow
+  );
   const explicitEdges = links.results as Array<Record<string, unknown>>;
 
   // Build inferred (non-persisted) graph edges from shared tags.
@@ -2079,7 +2295,7 @@ function viewerHtml(): string {
     document.getElementById('count-fact').textContent = counts.fact;
     document.getElementById('count-journal').textContent = counts.journal;
     const confidenceValues = memories
-      .map((m) => Number(m.confidence))
+      .map((m) => Number(m.dynamic_confidence ?? m.confidence))
       .filter((v) => Number.isFinite(v));
     const avgConfidence = confidenceValues.length
       ? Math.round((confidenceValues.reduce((a, b) => a + b, 0) / confidenceValues.length) * 100)
@@ -2101,8 +2317,8 @@ function viewerHtml(): string {
       const linkBadge = m.link_count > 0 ? \`<span class="card-links-badge">⬡ \${m.link_count} connections</span>\` : '';
       const titleHtml = m.title ? \`<div class="card-title">\${esc(m.title)}</div>\` : '';
       const keyHtml = m.key ? \`<div class="card-key"><span>KEY /</span> \${esc(m.key)}</div>\` : '';
-      const confidenceNum = Number(m.confidence);
-      const importanceNum = Number(m.importance);
+      const confidenceNum = Number(m.dynamic_confidence ?? m.confidence);
+      const importanceNum = Number(m.dynamic_importance ?? m.importance);
       const confidencePct = Number.isFinite(confidenceNum) ? Math.round(Math.min(Math.max(confidenceNum, 0), 1) * 100) : null;
       const importancePct = Number.isFinite(importanceNum) ? Math.round(Math.min(Math.max(importanceNum, 0), 1) * 100) : null;
       const sourceLabel = m.source ? String(m.source).trim() : '';
@@ -2140,8 +2356,8 @@ function viewerHtml(): string {
     const typeColors = { note: 'var(--teal)', fact: 'var(--amber)', journal: '#8888ff' };
     const qualityChips = [
       m.source ? \`<span class="tag">src:\${esc(m.source)}</span>\` : '',
-      Number.isFinite(Number(m.confidence)) ? \`<span class="tag">conf:\${Math.round(Number(m.confidence) * 100)}%</span>\` : '',
-      Number.isFinite(Number(m.importance)) ? \`<span class="tag">imp:\${Math.round(Number(m.importance) * 100)}%</span>\` : '',
+      Number.isFinite(Number(m.dynamic_confidence ?? m.confidence)) ? \`<span class="tag">conf:\${Math.round(Number(m.dynamic_confidence ?? m.confidence) * 100)}%</span>\` : '',
+      Number.isFinite(Number(m.dynamic_importance ?? m.importance)) ? \`<span class="tag">imp:\${Math.round(Number(m.dynamic_importance ?? m.importance) * 100)}%</span>\` : '',
     ].filter(Boolean).join('');
     document.getElementById('expand-header').innerHTML =
       \`<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;flex-wrap:wrap">
@@ -2549,8 +2765,8 @@ function viewerHtml(): string {
       const key = String(edge.relation_type || 'related');
       relationCounts[key] = (relationCounts[key] || 0) + 1;
     });
-    const confidenceVals = nodes.map((n) => Number(n.confidence)).filter((n) => Number.isFinite(n));
-    const importanceVals = nodes.map((n) => Number(n.importance)).filter((n) => Number.isFinite(n));
+    const confidenceVals = nodes.map((n) => Number(n.dynamic_confidence ?? n.confidence)).filter((n) => Number.isFinite(n));
+    const importanceVals = nodes.map((n) => Number(n.dynamic_importance ?? n.importance)).filter((n) => Number.isFinite(n));
     const avgConfidence = confidenceVals.length ? confidenceVals.reduce((a, b) => a + b, 0) / confidenceVals.length : null;
     const avgImportance = importanceVals.length ? importanceVals.reduce((a, b) => a + b, 0) / importanceVals.length : null;
     updateGraphLegend(
@@ -2623,12 +2839,12 @@ function viewerHtml(): string {
         const degree = degreeById.get(d.id) || 0;
         const base = isMobile ? 8 : 6;
         const maxR = isMobile ? 17 : 15;
-        const importance = Math.min(Math.max(Number.isFinite(Number(d.importance)) ? Number(d.importance) : 0.5, 0), 1);
+        const importance = Math.min(Math.max(Number.isFinite(Number(d.dynamic_importance ?? d.importance)) ? Number(d.dynamic_importance ?? d.importance) : 0.5, 0), 1);
         return Math.min(maxR, base + degree * 0.4 + importance * (isMobile ? 4.2 : 3.6));
       })
       .attr('fill', d => typeColor[d.type] || '#888')
       .attr('fill-opacity', (d) => {
-        const confidence = Math.min(Math.max(Number.isFinite(Number(d.confidence)) ? Number(d.confidence) : 0.7, 0), 1);
+        const confidence = Math.min(Math.max(Number.isFinite(Number(d.dynamic_confidence ?? d.confidence)) ? Number(d.dynamic_confidence ?? d.confidence) : 0.7, 0), 1);
         const visible = isNodeVisible(d.id);
         const baseOpacity = 0.42 + confidence * 0.5;
         return visible ? baseOpacity : Math.max(0.08, baseOpacity * 0.25);
@@ -2636,7 +2852,7 @@ function viewerHtml(): string {
       .attr('stroke', d => typeColor[d.type] || '#888')
       .attr('stroke-opacity', (d) => isNodeVisible(d.id) ? 1 : 0.2)
       .attr('stroke-width', (d) => {
-        const importance = Math.min(Math.max(Number.isFinite(Number(d.importance)) ? Number(d.importance) : 0.5, 0), 1);
+        const importance = Math.min(Math.max(Number.isFinite(Number(d.dynamic_importance ?? d.importance)) ? Number(d.dynamic_importance ?? d.importance) : 0.5, 0), 1);
         return 1.4 + importance * 1.6;
       });
 
@@ -2647,8 +2863,8 @@ function viewerHtml(): string {
 
     node.append('title').text((d) => {
       const label = d.title || d.key || (d.content || '').slice(0, 70) || d.id;
-      const confidence = Math.round(Math.min(Math.max(Number(d.confidence) || 0.7, 0), 1) * 100);
-      const importance = Math.round(Math.min(Math.max(Number(d.importance) || 0.5, 0), 1) * 100);
+      const confidence = Math.round(Math.min(Math.max(Number(d.dynamic_confidence ?? d.confidence) || 0.7, 0), 1) * 100);
+      const importance = Math.round(Math.min(Math.max(Number(d.dynamic_importance ?? d.importance) || 0.5, 0), 1) * 100);
       const source = d.source ? \`\\nsource: \${d.source}\` : '';
       return \`\${label}\\nconfidence: \${confidence}%\\nimportance: \${importance}%\${source}\`;
     });
