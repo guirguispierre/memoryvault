@@ -26,10 +26,16 @@ function checkAuth(request: Request, env: Env): boolean {
   const auth = request.headers.get('Authorization');
   if (!auth) return false;
   const parts = auth.split(' ');
-  return parts[0] === 'Bearer' && parts[1] === env.AUTH_SECRET;
+  return parts.length === 2 && parts[0] === 'Bearer' && parts[1] === env.AUTH_SECRET;
 }
 
-// Tool definitions for MCP tools/list response
+const VALID_TYPES = ['note', 'fact', 'journal'] as const;
+type MemoryType = typeof VALID_TYPES[number];
+
+function isValidType(t: unknown): t is MemoryType {
+  return typeof t === 'string' && (VALID_TYPES as readonly string[]).includes(t);
+}
+
 const TOOLS = [
   {
     name: 'memory_save',
@@ -120,30 +126,42 @@ const TOOLS = [
 ];
 
 type ToolArgs = Record<string, unknown>;
+type McpResult = { content: Array<{ type: string; text: string }> };
 
-async function callTool(name: string, args: ToolArgs, env: Env): Promise<unknown> {
+async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResult> {
   switch (name) {
     case 'memory_save': {
       const { type, content, title, key, tags } = args as {
-        type: string; content: string; title?: string; key?: string; tags?: string;
+        type: unknown; content: unknown; title?: unknown; key?: unknown; tags?: unknown;
       };
+      if (!isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type. Must be note, fact, or journal.' }] };
+      if (typeof content !== 'string' || content.trim() === '') return { content: [{ type: 'text', text: 'content must be a non-empty string.' }] };
       const id = generateId();
       const ts = now();
       await env.DB.prepare(
         'INSERT INTO memories (id, type, title, key, content, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).bind(id, type, title ?? null, key ?? null, content, tags ?? null, ts, ts).run();
+      ).bind(
+        id, type,
+        typeof title === 'string' ? title : null,
+        typeof key === 'string' ? key : null,
+        content.trim(),
+        typeof tags === 'string' ? tags : null,
+        ts, ts
+      ).run();
       return { content: [{ type: 'text', text: `Saved memory with id: ${id}` }] };
     }
 
     case 'memory_get': {
-      const { id } = args as { id: string };
+      const { id } = args as { id: unknown };
+      if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
       const row = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first();
       if (!row) return { content: [{ type: 'text', text: 'Memory not found.' }] };
       return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
     }
 
     case 'memory_get_fact': {
-      const { key } = args as { key: string };
+      const { key } = args as { key: unknown };
+      if (typeof key !== 'string' || !key) return { content: [{ type: 'text', text: 'key must be a non-empty string.' }] };
       const row = await env.DB.prepare(
         'SELECT * FROM memories WHERE type = ? AND key = ? LIMIT 1'
       ).bind('fact', key).first();
@@ -152,8 +170,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<unknown
     }
 
     case 'memory_search': {
-      const { query, type } = args as { query: string; type?: string };
-      const like = `%${query}%`;
+      const { query, type } = args as { query: unknown; type?: unknown };
+      if (typeof query !== 'string' || query.trim() === '') return { content: [{ type: 'text', text: 'query must be a non-empty string.' }] };
+      if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
+      const like = `%${query.trim()}%`;
       let stmt;
       if (type) {
         stmt = env.DB.prepare(
@@ -170,13 +190,15 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<unknown
     }
 
     case 'memory_list': {
-      const { type, tag, limit = 20 } = args as { type?: string; tag?: string; limit?: number };
+      const { type, tag, limit: rawLimit } = args as { type?: unknown; tag?: unknown; limit?: unknown };
+      if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 20, 1), 100);
       let query = 'SELECT * FROM memories WHERE 1=1';
       const params: unknown[] = [];
       if (type) { query += ' AND type = ?'; params.push(type); }
-      if (tag) { query += ' AND tags LIKE ?'; params.push(`%${tag}%`); }
+      if (typeof tag === 'string' && tag) { query += ' AND tags LIKE ?'; params.push(`%${tag}%`); }
       query += ' ORDER BY created_at DESC LIMIT ?';
-      params.push(Math.min(Math.max(Number(limit), 1), 100));
+      params.push(limit);
       const results = await env.DB.prepare(query).bind(...params).all();
       if (!results.results.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
       return { content: [{ type: 'text', text: JSON.stringify(results.results, null, 2) }] };
@@ -184,16 +206,19 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<unknown
 
     case 'memory_update': {
       const { id, content, title, tags } = args as {
-        id: string; content?: string; title?: string; tags?: string;
+        id: unknown; content?: unknown; title?: unknown; tags?: unknown;
       };
-      const existing = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first() as Record<string, unknown> | null;
+      if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
+      const existing = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<{
+        content: string; title: string | null; tags: string | null;
+      }>();
       if (!existing) return { content: [{ type: 'text', text: 'Memory not found.' }] };
       await env.DB.prepare(
         'UPDATE memories SET content = ?, title = ?, tags = ?, updated_at = ? WHERE id = ?'
       ).bind(
-        content ?? existing.content,
-        title ?? existing.title,
-        tags ?? existing.tags,
+        typeof content === 'string' && content.trim() ? content.trim() : existing.content,
+        typeof title === 'string' ? title : existing.title,
+        typeof tags === 'string' ? tags : existing.tags,
         now(),
         id
       ).run();
@@ -201,7 +226,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<unknown
     }
 
     case 'memory_delete': {
-      const { id } = args as { id: string };
+      const { id } = args as { id: unknown };
+      if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
       const result = await env.DB.prepare('DELETE FROM memories WHERE id = ?').bind(id).run();
       if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found.' }] };
       return { content: [{ type: 'text', text: `Memory ${id} deleted.` }] };
@@ -226,7 +252,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<unknown
     }
 
     default:
-      throw new Error(`Unknown tool: ${name}`);
+      throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32601 });
   }
 }
 
@@ -267,7 +293,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
     }
 
     if (method === 'notifications/initialized') {
-      return jsonResponse({ jsonrpc: '2.0', id, result: {} });
+      return new Response(null, { status: 204 });
     }
 
     return jsonResponse({
@@ -275,11 +301,11 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
       error: { code: -32601, message: `Method not found: ${method}` },
     });
   } catch (err) {
+    const code = (err instanceof Error && 'code' in err && typeof (err as { code?: unknown }).code === 'number')
+      ? (err as { code: number }).code
+      : -32603;
     const message = err instanceof Error ? err.message : 'Internal error';
-    return jsonResponse({
-      jsonrpc: '2.0', id,
-      error: { code: -32603, message },
-    });
+    return jsonResponse({ jsonrpc: '2.0', id, error: { code, message } });
   }
 }
 
@@ -287,7 +313,6 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         headers: {
