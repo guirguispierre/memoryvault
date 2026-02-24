@@ -29,6 +29,33 @@ function checkAuth(request: Request, env: Env): boolean {
   return parts.length === 2 && parts[0] === 'Bearer' && parts[1] === env.AUTH_SECRET;
 }
 
+async function isRateLimited(ip: string, env: Env): Promise<boolean> {
+  const window = Math.floor(Date.now() / (15 * 60 * 1000));
+  const row = await env.DB.prepare(
+    'SELECT count FROM rate_limits WHERE ip = ? AND window = ?'
+  ).bind(ip, window).first<{ count: number }>();
+  return (row?.count ?? 0) >= 10;
+}
+
+async function recordFailedAttempt(ip: string, env: Env): Promise<void> {
+  const window = Math.floor(Date.now() / (15 * 60 * 1000));
+  await env.DB.prepare(
+    'INSERT INTO rate_limits (ip, window, count) VALUES (?, ?, 1) ON CONFLICT(ip, window) DO UPDATE SET count = count + 1'
+  ).bind(ip, window).run();
+  // 1% chance: delete rows older than 2 hours (8 windows) to prevent unbounded growth
+  if (Math.random() < 0.01) {
+    const cutoff = window - 8;
+    await env.DB.prepare('DELETE FROM rate_limits WHERE window < ?').bind(cutoff).run();
+  }
+}
+
+async function clearRateLimit(ip: string, env: Env): Promise<void> {
+  const window = Math.floor(Date.now() / (15 * 60 * 1000));
+  await env.DB.prepare(
+    'DELETE FROM rate_limits WHERE ip = ? AND window = ?'
+  ).bind(ip, window).run();
+}
+
 const VALID_TYPES = ['note', 'fact', 'journal'] as const;
 type MemoryType = typeof VALID_TYPES[number];
 
@@ -122,6 +149,42 @@ const TOOLS = [
     name: 'memory_stats',
     description: 'Get statistics about stored memories: counts by type and recent activity.',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'memory_link',
+    description: 'Create a link between two memories. Use label to describe the relationship in natural language (e.g. "relates to work", "led to this decision", "supports", "contradicts").',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from_id: { type: 'string', description: 'Source memory ID' },
+        to_id: { type: 'string', description: 'Target memory ID' },
+        label: { type: 'string', description: 'Optional free-text description of the relationship' },
+      },
+      required: ['from_id', 'to_id'],
+    },
+  },
+  {
+    name: 'memory_unlink',
+    description: 'Remove a link between two memories.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from_id: { type: 'string', description: 'Source memory ID' },
+        to_id: { type: 'string', description: 'Target memory ID' },
+      },
+      required: ['from_id', 'to_id'],
+    },
+  },
+  {
+    name: 'memory_links',
+    description: 'Get all memories linked to a given memory, with full memory data and relationship labels. Use this to explore the knowledge graph around a memory.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Memory ID to get connections for' },
+      },
+      required: ['id'],
+    },
   },
 ];
 
@@ -249,6 +312,82 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
           }, null, 2),
         }],
       };
+    }
+
+    case 'memory_link': {
+      const { from_id, to_id, label } = args as { from_id: unknown; to_id: unknown; label?: unknown };
+      if (typeof from_id !== 'string' || !from_id) return { content: [{ type: 'text', text: 'from_id must be a non-empty string.' }] };
+      if (typeof to_id !== 'string' || !to_id) return { content: [{ type: 'text', text: 'to_id must be a non-empty string.' }] };
+      if (from_id === to_id) return { content: [{ type: 'text', text: 'Cannot link a memory to itself.' }] };
+
+      // Verify both memories exist
+      const fromMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(from_id).first();
+      if (!fromMem) return { content: [{ type: 'text', text: `Memory not found: ${from_id}` }] };
+      const toMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(to_id).first();
+      if (!toMem) return { content: [{ type: 'text', text: `Memory not found: ${to_id}` }] };
+
+      // Prevent duplicate links (either direction)
+      const existing = await env.DB.prepare(
+        'SELECT id FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)'
+      ).bind(from_id, to_id, to_id, from_id).first();
+      if (existing) return { content: [{ type: 'text', text: 'A link between these memories already exists.' }] };
+
+      const link_id = generateId();
+      const labelVal = typeof label === 'string' && label.trim() ? label.trim() : null;
+      await env.DB.prepare(
+        'INSERT INTO memory_links (id, from_id, to_id, label, created_at) VALUES (?, ?, ?, ?, ?)'
+      ).bind(link_id, from_id, to_id, labelVal, now()).run();
+
+      return { content: [{ type: 'text', text: JSON.stringify({ link_id, from_id, to_id, label: labelVal }) }] };
+    }
+
+    case 'memory_unlink': {
+      const { from_id, to_id } = args as { from_id: unknown; to_id: unknown };
+      if (typeof from_id !== 'string' || !from_id) return { content: [{ type: 'text', text: 'from_id must be a non-empty string.' }] };
+      if (typeof to_id !== 'string' || !to_id) return { content: [{ type: 'text', text: 'to_id must be a non-empty string.' }] };
+
+      const result = await env.DB.prepare(
+        'DELETE FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)'
+      ).bind(from_id, to_id, to_id, from_id).run();
+
+      if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'No link found between these memories.' }] };
+      return { content: [{ type: 'text', text: `Link removed between ${from_id} and ${to_id}.` }] };
+    }
+
+    case 'memory_links': {
+      const { id } = args as { id: unknown };
+      if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
+
+      // Verify memory exists
+      const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(id).first();
+      if (!mem) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+
+      // Fetch links in both directions with full memory data
+      const fromLinks = await env.DB.prepare(
+        'SELECT ml.id as link_id, ml.label, ml.to_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ?'
+      ).bind(id).all();
+
+      const toLinks = await env.DB.prepare(
+        'SELECT ml.id as link_id, ml.label, ml.from_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ?'
+      ).bind(id).all();
+
+      const results = [
+        ...fromLinks.results.map((r: Record<string, unknown>) => ({
+          link_id: r.link_id,
+          label: r.label,
+          direction: 'from',
+          memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+        })),
+        ...toLinks.results.map((r: Record<string, unknown>) => ({
+          link_id: r.link_id,
+          label: r.label,
+          direction: 'to',
+          memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+        })),
+      ];
+
+      if (!results.length) return { content: [{ type: 'text', text: 'No links found for this memory.' }] };
+      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
     }
 
     default:
@@ -1012,10 +1151,6 @@ function viewerHtml(): string {
   let searchTimeout = null;
   let allMemories = [];
 
-  function getToken() {
-    return sessionStorage.getItem('mv_token') || '';
-  }
-
   function doLogin() {
     const val = document.getElementById('token-input').value.trim();
     if (!val) return;
@@ -1025,7 +1160,6 @@ function viewerHtml(): string {
     }).then(r => {
       if (r.ok) {
         TOKEN = val;
-        sessionStorage.setItem('mv_token', val);
         document.getElementById('login-screen').style.display = 'none';
         document.getElementById('app').style.display = 'flex';
         document.getElementById('app').style.flexDirection = 'column';
@@ -1041,7 +1175,6 @@ function viewerHtml(): string {
   }
 
   function doLogout() {
-    sessionStorage.removeItem('mv_token');
     TOKEN = '';
     location.reload();
   }
@@ -1053,7 +1186,6 @@ function viewerHtml(): string {
   }
 
   async function loadMemories() {
-    TOKEN = getToken();
     const grid = document.getElementById('grid');
     grid.innerHTML = '<div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>';
     const search = document.getElementById('search-input').value;
@@ -1156,17 +1288,6 @@ function viewerHtml(): string {
 
   // Enter key on login
   document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-
-  // Auto-login if token in sessionStorage
-  const saved = sessionStorage.getItem('mv_token');
-  if (saved) {
-    TOKEN = saved;
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    document.getElementById('app').style.flexDirection = 'column';
-    updateTime();
-    loadMemories();
-  }
 </script>
 </body>
 </html>`;
@@ -1191,12 +1312,34 @@ export default {
     }
 
     if (url.pathname === '/api/memories') {
-      if (!checkAuth(request, env)) return unauthorized();
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+          status: 429,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+        });
+      }
+      if (!checkAuth(request, env)) {
+        await recordFailedAttempt(ip, env);
+        return unauthorized();
+      }
+      await clearRateLimit(ip, env);
       return handleApiMemories(request, env);
     }
 
     if (url.pathname === '/mcp') {
-      if (!checkAuth(request, env)) return unauthorized();
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+          status: 429,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+        });
+      }
+      if (!checkAuth(request, env)) {
+        await recordFailedAttempt(ip, env);
+        return unauthorized();
+      }
+      await clearRateLimit(ip, env);
       return handleMcp(request, env, url);
     }
 
