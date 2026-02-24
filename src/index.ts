@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.3.0';
+const SERVER_VERSION = '1.4.0';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -104,6 +104,19 @@ async function ensureSchema(env: Env): Promise<void> {
       await runMigrationStatement(env, "UPDATE memories SET confidence = 0.7 WHERE confidence IS NULL");
       await runMigrationStatement(env, "UPDATE memories SET importance = 0.5 WHERE importance IS NULL");
       await runMigrationStatement(env, "UPDATE memory_links SET relation_type = 'related' WHERE relation_type IS NULL");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS memory_changelog (
+          id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          payload TEXT,
+          created_at INTEGER NOT NULL
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_changelog_created ON memory_changelog(created_at DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_changelog_entity ON memory_changelog(entity_type, entity_id, created_at DESC)");
     })().catch((err) => {
       schemaReady = null;
       throw err;
@@ -372,6 +385,71 @@ function buildAdjacencyFromEdges(edges: GraphEdge[]): Map<string, GraphNeighbor[
   return adjacency;
 }
 
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'objective';
+}
+
+function stableJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return JSON.stringify({ note: 'unserializable payload' });
+  }
+}
+
+async function logChangelog(
+  env: Env,
+  eventType: string,
+  entityType: string,
+  entityId: string,
+  summary: string,
+  payload?: unknown
+): Promise<void> {
+  await env.DB.prepare(
+    'INSERT INTO memory_changelog (id, event_type, entity_type, entity_id, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(
+    generateId(),
+    eventType,
+    entityType,
+    entityId,
+    summary,
+    payload === undefined ? null : stableJson(payload),
+    now()
+  ).run();
+}
+
+async function ensureObjectiveRoot(env: Env): Promise<string> {
+  const key = 'autonomous_objectives_root';
+  const existing = await env.DB.prepare(
+    'SELECT id FROM memories WHERE key = ? AND archived_at IS NULL ORDER BY created_at ASC LIMIT 1'
+  ).bind(key).first<{ id: string }>();
+  if (existing?.id) return existing.id;
+
+  const ts = now();
+  const id = generateId();
+  await env.DB.prepare(
+    'INSERT INTO memories (id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
+  ).bind(
+    id,
+    'note',
+    'Autonomous Objectives Network',
+    key,
+    'Root node for long-term goals and curiosities.',
+    'objective_root,autonomous_objectives,system_node',
+    'system',
+    0.9,
+    0.95,
+    ts,
+    ts
+  ).run();
+  await logChangelog(env, 'objective_root_created', 'memory', id, 'Created autonomous objectives root');
+  return id;
+}
+
 const TOOLS = [
   {
     name: 'memory_save',
@@ -579,6 +657,63 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'memory_changelog',
+    description: 'Read the memory changelog so agents can quickly detect what changed since last run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max entries to return (default 25, max 200)' },
+        since: { type: 'number', description: 'Unix timestamp (seconds). Return entries after this time' },
+        event_type: { type: 'string', description: 'Optional event type filter' },
+        entity_id: { type: 'string', description: 'Optional entity id filter' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_conflicts',
+    description: 'Detect contradictions between high-confidence facts (explicit contradict links + conflicting fact keys).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        min_confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Only include conflicts when both sides are >= this confidence (default 0.7)' },
+        limit: { type: 'number', description: 'Max conflicts returned (default 40)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'objective_set',
+    description: 'Create or update a dedicated autonomous objective node (goal or curiosity) and connect it to the root objective node.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Existing objective memory id (optional)' },
+        title: { type: 'string', description: 'Objective title' },
+        content: { type: 'string', description: 'Objective details or rationale' },
+        kind: { type: 'string', enum: ['goal', 'curiosity'], description: 'Objective type (default goal)' },
+        horizon: { type: 'string', enum: ['short', 'medium', 'long'], description: 'Planning horizon (default long)' },
+        status: { type: 'string', enum: ['active', 'paused', 'done'], description: 'Objective status (default active)' },
+        priority: { type: 'number', minimum: 0, maximum: 1, description: 'Base priority/importance (default 0.8)' },
+        tags: { type: 'string', description: 'Additional comma-separated tags' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'objective_list',
+    description: 'List autonomous objective nodes (goals/curiosities) for planning.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['goal', 'curiosity'], description: 'Optional objective kind filter' },
+        status: { type: 'string', enum: ['active', 'paused', 'done'], description: 'Optional status filter' },
+        limit: { type: 'number', description: 'Max objectives to return (default 50)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 type ToolArgs = Record<string, unknown>;
@@ -662,6 +797,11 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         base_importance: scoredMemory.base_importance,
       };
       if (suggestedLinks.length > 0) saveResult.suggested_links = suggestedLinks;
+      await logChangelog(env, 'memory_created', 'memory', id, 'Created memory', {
+        type,
+        title: typeof title === 'string' ? title : null,
+        key: typeof key === 'string' ? key : null,
+      });
       return { content: [{ type: 'text', text: JSON.stringify(saveResult) }] };
     }
 
@@ -765,6 +905,17 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const updated = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<Record<string, unknown>>();
       if (!updated) return { content: [{ type: 'text', text: `Memory ${id} updated.` }] };
       const [scored] = await enrichAndProjectRows(env, [updated]);
+      await logChangelog(env, 'memory_updated', 'memory', id, 'Updated memory', {
+        updated_fields: {
+          content: content !== undefined,
+          title: title !== undefined,
+          tags: tags !== undefined,
+          source: source !== undefined,
+          confidence: confidence !== undefined,
+          importance: importance !== undefined,
+          archived: archived !== undefined,
+        },
+      });
       return { content: [{ type: 'text', text: JSON.stringify({ message: `Memory ${id} updated.`, memory: scored ?? updated }) }] };
     }
 
@@ -773,6 +924,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
       const result = await env.DB.prepare('DELETE FROM memories WHERE id = ?').bind(id).run();
       if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+      await logChangelog(env, 'memory_deleted', 'memory', id, 'Deleted memory');
       return { content: [{ type: 'text', text: `Memory ${id} deleted.` }] };
     }
 
@@ -836,6 +988,11 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         await env.DB.prepare(
           'UPDATE memory_links SET relation_type = ?, label = ? WHERE id = ?'
         ).bind(relationType, labelVal, existing.id).run();
+        await logChangelog(env, 'memory_link_updated', 'memory_link', existing.id, 'Updated link relation', {
+          from_id,
+          to_id,
+          relation_type: relationType,
+        });
         return { content: [{ type: 'text', text: JSON.stringify({ link_id: existing.id, from_id, to_id, relation_type: relationType, label: labelVal, updated: true }) }] };
       }
 
@@ -843,6 +1000,11 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       await env.DB.prepare(
         'INSERT INTO memory_links (id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)'
       ).bind(link_id, from_id, to_id, relationType, labelVal, now()).run();
+      await logChangelog(env, 'memory_link_created', 'memory_link', link_id, 'Created memory link', {
+        from_id,
+        to_id,
+        relation_type: relationType,
+      });
 
       return { content: [{ type: 'text', text: JSON.stringify({ link_id, from_id, to_id, relation_type: relationType, label: labelVal }) }] };
     }
@@ -862,6 +1024,11 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const result = await env.DB.prepare(sql).bind(...params).run();
 
       if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'No link found between these memories.' }] };
+      await logChangelog(env, 'memory_link_removed', 'memory_link', `${from_id}::${to_id}`, 'Removed memory link', {
+        from_id,
+        to_id,
+        relation_type: relation_type ?? null,
+      });
       return { content: [{ type: 'text', text: `Link removed between ${from_id} and ${to_id}.` }] };
     }
 
@@ -1021,6 +1188,13 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         }
       }
 
+      if (groups.length > 0) {
+        await logChangelog(env, 'memory_consolidated', 'memory', groups[0].canonical_id, 'Consolidated duplicate memories', {
+          groups_consolidated: groups.length,
+          archived_count: archivedCount,
+        });
+      }
+
       return {
         content: [{
           type: 'text',
@@ -1091,6 +1265,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const placeholders = ids.map(() => '?').join(', ');
       if (mode === 'hard') {
         await env.DB.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).bind(...ids).run();
+        await logChangelog(env, 'memory_forget_hard', 'memory', ids[0], 'Hard-forgot memories', { count: ids.length, ids });
         return { content: [{ type: 'text', text: JSON.stringify({ mode, deleted: ids.length, ids }, null, 2) }] };
       }
 
@@ -1098,6 +1273,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       await env.DB.prepare(
         `UPDATE memories SET archived_at = ?, updated_at = ? WHERE id IN (${placeholders})`
       ).bind(ts, ts, ...ids).run();
+      await logChangelog(env, 'memory_forget_soft', 'memory', ids[0], 'Soft-forgot memories', { count: ids.length, ids });
       return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: ids.length, ids }, null, 2) }] };
     }
 
@@ -1416,6 +1592,14 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         )
         : [];
 
+      if (changedIds.length > 0) {
+        await logChangelog(env, 'memory_reinforced', 'memory', id, 'Reinforced memory graph', {
+          updated_count: changedIds.length,
+          spread_hops: spreadHops,
+          spread: spreadFactor,
+        });
+      }
+
       return {
         content: [{
           type: 'text',
@@ -1486,6 +1670,14 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         });
       }
 
+      if (decayedIds.length > 0) {
+        await logChangelog(env, 'memory_decayed', 'memory', decayedIds[0], 'Applied memory decay', {
+          decayed_count: decayedIds.length,
+          older_than_days: olderThanDays,
+          max_link_count: maxLinkCount,
+        });
+      }
+
       return {
         content: [{
           type: 'text',
@@ -1497,6 +1689,344 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
             candidate_count: candidates.results.length,
             decayed_count: decayedIds.length,
             updates: updates.slice(0, 50),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_changelog': {
+      const { limit: rawLimit, since, event_type, entity_id } = args as {
+        limit?: unknown;
+        since?: unknown;
+        event_type?: unknown;
+        entity_id?: unknown;
+      };
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 25, 1), 200);
+      const where: string[] = ['1=1'];
+      const params: unknown[] = [];
+      if (since !== undefined) {
+        const sinceVal = Number(since);
+        if (!Number.isFinite(sinceVal) || sinceVal < 0) return { content: [{ type: 'text', text: 'since must be a non-negative unix timestamp.' }] };
+        where.push('created_at >= ?');
+        params.push(Math.floor(sinceVal));
+      }
+      if (typeof event_type === 'string' && event_type.trim()) {
+        where.push('event_type = ?');
+        params.push(event_type.trim());
+      }
+      if (typeof entity_id === 'string' && entity_id.trim()) {
+        where.push('entity_id = ?');
+        params.push(entity_id.trim());
+      }
+      const rows = await env.DB.prepare(
+        `SELECT id, event_type, entity_type, entity_id, summary, payload, created_at
+         FROM memory_changelog
+         WHERE ${where.join(' AND ')}
+         ORDER BY created_at DESC
+         LIMIT ?`
+      ).bind(...params, limit).all<Record<string, unknown>>();
+
+      const entries = rows.results.map((row) => {
+        let parsedPayload: unknown = row.payload;
+        if (typeof row.payload === 'string' && row.payload) {
+          try {
+            parsedPayload = JSON.parse(row.payload);
+          } catch {
+            parsedPayload = row.payload;
+          }
+        }
+        return {
+          id: row.id,
+          event_type: row.event_type,
+          entity_type: row.entity_type,
+          entity_id: row.entity_id,
+          summary: row.summary,
+          payload: parsedPayload,
+          created_at: row.created_at,
+        };
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            server_version: SERVER_VERSION,
+            count: entries.length,
+            entries,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_conflicts': {
+      const { min_confidence, limit: rawLimit } = args as { min_confidence?: unknown; limit?: unknown };
+      const minConfidence = clampToRange(min_confidence, 0.7);
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 40, 1), 200);
+
+      const factsResult = await env.DB.prepare(
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE archived_at IS NULL AND type = ? LIMIT 3000'
+      ).bind('fact').all<Record<string, unknown>>();
+      const scoredFacts = await enrichAndProjectRows(env, factsResult.results);
+      const factMap = new Map<string, Record<string, unknown>>();
+      for (const fact of scoredFacts) {
+        const id = typeof fact.id === 'string' ? fact.id : '';
+        if (id) factMap.set(id, fact);
+      }
+
+      const conflicts: Array<Record<string, unknown>> = [];
+      const seenPairs = new Set<string>();
+      const normalizedContent = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+      // Explicit contradiction edges between fact memories.
+      const contradictionLinks = await env.DB.prepare(
+        `SELECT ml.id as link_id, ml.label, ml.from_id, ml.to_id
+         FROM memory_links ml
+         JOIN memories m1 ON m1.id = ml.from_id AND m1.type = 'fact' AND m1.archived_at IS NULL
+         JOIN memories m2 ON m2.id = ml.to_id AND m2.type = 'fact' AND m2.archived_at IS NULL
+         WHERE ml.relation_type = 'contradicts'
+         LIMIT 2000`
+      ).all<Record<string, unknown>>();
+      for (const row of contradictionLinks.results) {
+        const aId = String(row.from_id ?? '');
+        const bId = String(row.to_id ?? '');
+        const a = factMap.get(aId);
+        const b = factMap.get(bId);
+        if (!a || !b) continue;
+        const confA = toFiniteNumber(a.confidence, 0.7);
+        const confB = toFiniteNumber(b.confidence, 0.7);
+        if (confA < minConfidence || confB < minConfidence) continue;
+        const key = pairKey(aId, bId);
+        if (seenPairs.has(key)) continue;
+        seenPairs.add(key);
+        conflicts.push({
+          conflict_type: 'explicit_contradiction_link',
+          confidence_pair: [round3(confA), round3(confB)],
+          link_id: row.link_id,
+          link_label: row.label,
+          a: { id: aId, key: a.key, title: a.title, content: a.content, confidence: a.confidence, importance: a.importance },
+          b: { id: bId, key: b.key, title: b.title, content: b.content, confidence: b.confidence, importance: b.importance },
+        });
+      }
+
+      // Key-based fact conflicts: same key with materially different values.
+      const byKey = new Map<string, Array<Record<string, unknown>>>();
+      for (const fact of scoredFacts) {
+        const keyRaw = typeof fact.key === 'string' ? fact.key.trim().toLowerCase() : '';
+        if (!keyRaw) continue;
+        const arr = byKey.get(keyRaw);
+        if (arr) arr.push(fact);
+        else byKey.set(keyRaw, [fact]);
+      }
+      for (const [keyName, facts] of byKey) {
+        if (facts.length < 2) continue;
+        const sorted = [...facts].sort((a, b) => toFiniteNumber(b.confidence, 0) - toFiniteNumber(a.confidence, 0));
+        for (let i = 0; i < sorted.length; i++) {
+          for (let j = i + 1; j < sorted.length; j++) {
+            const a = sorted[i];
+            const b = sorted[j];
+            const aId = String(a.id ?? '');
+            const bId = String(b.id ?? '');
+            if (!aId || !bId) continue;
+            const confA = toFiniteNumber(a.confidence, 0.7);
+            const confB = toFiniteNumber(b.confidence, 0.7);
+            if (confA < minConfidence || confB < minConfidence) continue;
+            const contentA = normalizedContent(a.content);
+            const contentB = normalizedContent(b.content);
+            if (!contentA || !contentB || contentA === contentB) continue;
+            const key = pairKey(aId, bId);
+            if (seenPairs.has(key)) continue;
+            seenPairs.add(key);
+            conflicts.push({
+              conflict_type: 'fact_key_value_conflict',
+              fact_key: keyName,
+              confidence_pair: [round3(confA), round3(confB)],
+              a: { id: aId, content: a.content, confidence: a.confidence, importance: a.importance, updated_at: a.updated_at },
+              b: { id: bId, content: b.content, confidence: b.confidence, importance: b.importance, updated_at: b.updated_at },
+            });
+            if (conflicts.length >= limit) break;
+          }
+          if (conflicts.length >= limit) break;
+        }
+        if (conflicts.length >= limit) break;
+      }
+
+      conflicts.sort((a, b) => {
+        const aPair = Array.isArray(a.confidence_pair) ? a.confidence_pair : [0, 0];
+        const bPair = Array.isArray(b.confidence_pair) ? b.confidence_pair : [0, 0];
+        const aScore = toFiniteNumber(aPair[0], 0) + toFiniteNumber(aPair[1], 0);
+        const bScore = toFiniteNumber(bPair[0], 0) + toFiniteNumber(bPair[1], 0);
+        return bScore - aScore;
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            min_confidence: minConfidence,
+            total_conflicts: conflicts.length,
+            conflicts: conflicts.slice(0, limit),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'objective_set': {
+      const { id: rawId, title, content, kind: rawKind, horizon: rawHorizon, status: rawStatus, priority, tags } = args as {
+        id?: unknown;
+        title: unknown;
+        content?: unknown;
+        kind?: unknown;
+        horizon?: unknown;
+        status?: unknown;
+        priority?: unknown;
+        tags?: unknown;
+      };
+      if (typeof title !== 'string' || !title.trim()) return { content: [{ type: 'text', text: 'title must be a non-empty string.' }] };
+      if (content !== undefined && typeof content !== 'string') return { content: [{ type: 'text', text: 'content must be a string when provided.' }] };
+      if (tags !== undefined && typeof tags !== 'string') return { content: [{ type: 'text', text: 'tags must be a comma-separated string when provided.' }] };
+      const kind = rawKind === 'curiosity' ? 'curiosity' : 'goal';
+      const horizon = rawHorizon === 'short' || rawHorizon === 'medium' || rawHorizon === 'long' ? rawHorizon : 'long';
+      const status = rawStatus === 'paused' || rawStatus === 'done' ? rawStatus : 'active';
+      const priorityVal = clampToRange(priority, kind === 'goal' ? 0.82 : 0.74);
+
+      const rootId = await ensureObjectiveRoot(env);
+      const ts = now();
+      const extraTags = typeof tags === 'string'
+        ? tags.split(',').map((t) => t.trim()).filter(Boolean)
+        : [];
+      const objectiveTags = Array.from(new Set([
+        'objective_node',
+        'autonomous_objective',
+        `kind_${kind}`,
+        `horizon_${horizon}`,
+        `status_${status}`,
+        ...extraTags,
+      ])).join(',');
+      const objectiveContent = typeof content === 'string' && content.trim()
+        ? content.trim()
+        : (kind === 'goal'
+          ? `Long-term goal: ${title.trim()}`
+          : `Curiosity to explore: ${title.trim()}`);
+
+      let objectiveId = typeof rawId === 'string' && rawId.trim() ? rawId.trim() : '';
+      if (objectiveId) {
+        const exists = await env.DB.prepare(
+          'SELECT id FROM memories WHERE id = ? AND archived_at IS NULL'
+        ).bind(objectiveId).first<{ id: string }>();
+        if (!exists?.id) return { content: [{ type: 'text', text: `Objective memory not found: ${objectiveId}` }] };
+        await env.DB.prepare(
+          'UPDATE memories SET type = ?, title = ?, content = ?, tags = ?, source = ?, importance = ?, updated_at = ? WHERE id = ?'
+        ).bind('note', title.trim(), objectiveContent, objectiveTags, 'autonomous_objective', priorityVal, ts, objectiveId).run();
+      } else {
+        const key = `objective:${kind}:${slugify(title.trim())}`;
+        const existing = await env.DB.prepare(
+          'SELECT id FROM memories WHERE key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
+        ).bind(key).first<{ id: string }>();
+        if (existing?.id) {
+          objectiveId = existing.id;
+          await env.DB.prepare(
+            'UPDATE memories SET title = ?, content = ?, tags = ?, source = ?, importance = ?, updated_at = ? WHERE id = ?'
+          ).bind(title.trim(), objectiveContent, objectiveTags, 'autonomous_objective', priorityVal, ts, objectiveId).run();
+        } else {
+          objectiveId = generateId();
+          await env.DB.prepare(
+            'INSERT INTO memories (id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
+          ).bind(
+            objectiveId,
+            'note',
+            title.trim(),
+            key,
+            objectiveContent,
+            objectiveTags,
+            'autonomous_objective',
+            kind === 'goal' ? 0.84 : 0.72,
+            priorityVal,
+            ts,
+            ts
+          ).run();
+        }
+      }
+
+      const linkRelation: RelationType = kind === 'goal' ? 'supports' : 'example_of';
+      const linkLabel = kind === 'goal'
+        ? `objective (${horizon})`
+        : `curiosity (${horizon})`;
+      const existingLink = await env.DB.prepare(
+        'SELECT id FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) LIMIT 1'
+      ).bind(rootId, objectiveId, objectiveId, rootId).first<{ id: string }>();
+      if (existingLink?.id) {
+        await env.DB.prepare(
+          'UPDATE memory_links SET relation_type = ?, label = ? WHERE id = ?'
+        ).bind(linkRelation, linkLabel, existingLink.id).run();
+      } else {
+        await env.DB.prepare(
+          'INSERT INTO memory_links (id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(generateId(), rootId, objectiveId, linkRelation, linkLabel, ts).run();
+      }
+
+      const objectiveRow = await env.DB.prepare(
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE id = ? LIMIT 1'
+      ).bind(objectiveId).first<Record<string, unknown>>();
+      const [objectiveMemory] = objectiveRow ? await enrichAndProjectRows(env, [objectiveRow]) : [];
+      await logChangelog(env, 'objective_upserted', 'memory', objectiveId, 'Upserted autonomous objective node', {
+        kind,
+        horizon,
+        status,
+        root_id: rootId,
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            root_objective_id: rootId,
+            objective_id: objectiveId,
+            kind,
+            horizon,
+            status,
+            objective: objectiveMemory ?? objectiveRow,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'objective_list': {
+      const { kind: rawKind, status: rawStatus, limit: rawLimit } = args as {
+        kind?: unknown;
+        status?: unknown;
+        limit?: unknown;
+      };
+      const kind = rawKind === 'goal' || rawKind === 'curiosity' ? rawKind : null;
+      const status = rawStatus === 'active' || rawStatus === 'paused' || rawStatus === 'done' ? rawStatus : null;
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 50, 1), 200);
+
+      let query = 'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE archived_at IS NULL AND tags LIKE ?';
+      const params: unknown[] = ['%objective_node%'];
+      if (kind) {
+        query += ' AND tags LIKE ?';
+        params.push(`%kind_${kind}%`);
+      }
+      if (status) {
+        query += ' AND tags LIKE ?';
+        params.push(`%status_${status}%`);
+      }
+      query += ' ORDER BY created_at DESC LIMIT ?';
+      params.push(limit);
+
+      const rows = await env.DB.prepare(query).bind(...params).all<Record<string, unknown>>();
+      const objectives = await enrichAndProjectRows(env, rows.results);
+      const root = await env.DB.prepare(
+        'SELECT id FROM memories WHERE key = ? AND archived_at IS NULL LIMIT 1'
+      ).bind('autonomous_objectives_root').first<{ id: string }>();
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            root_objective_id: root?.id ?? null,
+            count: objectives.length,
+            objectives,
           }, null, 2),
         }],
       };
