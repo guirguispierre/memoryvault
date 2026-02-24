@@ -256,57 +256,128 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
   }
 }
 
-async function handleMcp(request: Request, env: Env): Promise<Response> {
-  if (request.method !== 'POST') {
-    return jsonResponse({ error: 'Method not allowed' }, 405);
-  }
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
+};
 
-  let body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> };
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
-  }
-
+async function processMcpBody(
+  body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
+  env: Env
+): Promise<unknown> {
   const { id, method, params = {} } = body;
 
-  try {
-    if (method === 'initialize') {
-      return jsonResponse({
-        jsonrpc: '2.0', id,
-        result: {
-          protocolVersion: '2024-11-05',
-          capabilities: { tools: {} },
-          serverInfo: { name: 'ai-memory', version: '1.0.0' },
+  if (method === 'initialize') {
+    return {
+      jsonrpc: '2.0', id,
+      result: {
+        protocolVersion: '2024-11-05',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'ai-memory', version: '1.0.0' },
+      },
+    };
+  }
+
+  if (method === 'tools/list') {
+    return { jsonrpc: '2.0', id, result: { tools: TOOLS } };
+  }
+
+  if (method === 'tools/call') {
+    const { name, arguments: toolArgs = {} } = params as { name: string; arguments?: ToolArgs };
+    const result = await callTool(name, toolArgs, env);
+    return { jsonrpc: '2.0', id, result };
+  }
+
+  if (method === 'notifications/initialized' || method.startsWith('notifications/')) {
+    return null; // notifications get no response
+  }
+
+  return {
+    jsonrpc: '2.0', id,
+    error: { code: -32601, message: `Method not found: ${method}` },
+  };
+}
+
+async function handleMcp(request: Request, env: Env, url: URL): Promise<Response> {
+  const acceptsSse = (request.headers.get('Accept') ?? '').includes('text/event-stream');
+
+  // SSE transport: GET /mcp opens the event stream
+  if (request.method === 'GET' && acceptsSse) {
+    const postUrl = `${url.origin}/mcp`;
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const enc = new TextEncoder();
+
+    // Send the endpoint event immediately then keep-alive
+    (async () => {
+      // endpoint event tells client where to POST messages
+      await writer.write(enc.encode(`event: endpoint\ndata: ${postUrl}\n\n`));
+      // Keep the connection alive with periodic pings
+      const interval = setInterval(async () => {
+        try {
+          await writer.write(enc.encode(': ping\n\n'));
+        } catch {
+          clearInterval(interval);
+        }
+      }, 15000);
+    })();
+
+    return new Response(readable, {
+      headers: {
+        ...CORS_HEADERS,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    });
+  }
+
+  // SSE transport: POST sends a message and returns SSE response
+  if (request.method === 'POST') {
+    let body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> };
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
+    }
+
+    let responseObj: unknown;
+    try {
+      responseObj = await processMcpBody(body, env);
+    } catch (err) {
+      const code = (err instanceof Error && 'code' in err && typeof (err as { code?: unknown }).code === 'number')
+        ? (err as { code: number }).code
+        : -32603;
+      const message = err instanceof Error ? err.message : 'Internal error';
+      responseObj = { jsonrpc: '2.0', id: body.id, error: { code, message } };
+    }
+
+    // If client accepts SSE, stream the response as an SSE event
+    if (acceptsSse || (request.headers.get('Accept') ?? '').includes('text/event-stream')) {
+      if (responseObj === null) {
+        return new Response(null, { status: 204, headers: CORS_HEADERS });
+      }
+      const sseBody = `event: message\ndata: ${JSON.stringify(responseObj)}\n\n`;
+      return new Response(sseBody, {
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
         },
       });
     }
 
-    if (method === 'tools/list') {
-      return jsonResponse({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
+    // Plain HTTP JSON response (for standard MCP HTTP transport)
+    if (responseObj === null) {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
-
-    if (method === 'tools/call') {
-      const { name, arguments: toolArgs = {} } = params as { name: string; arguments?: ToolArgs };
-      const result = await callTool(name, toolArgs, env);
-      return jsonResponse({ jsonrpc: '2.0', id, result });
-    }
-
-    if (method === 'notifications/initialized') {
-      return new Response(null, { status: 204 });
-    }
-
-    return jsonResponse({
-      jsonrpc: '2.0', id,
-      error: { code: -32601, message: `Method not found: ${method}` },
+    return new Response(JSON.stringify(responseObj), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
-  } catch (err) {
-    const code = (err instanceof Error && 'code' in err && typeof (err as { code?: unknown }).code === 'number')
-      ? (err as { code: number }).code
-      : -32603;
-    const message = err instanceof Error ? err.message : 'Internal error';
-    return jsonResponse({ jsonrpc: '2.0', id, error: { code, message } });
   }
+
+  return jsonResponse({ error: 'Method not allowed' }, 405);
 }
 
 export default {
@@ -314,13 +385,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        },
-      });
+      return new Response(null, { headers: CORS_HEADERS });
     }
 
     if (url.pathname === '/') {
@@ -329,7 +394,7 @@ export default {
 
     if (url.pathname === '/mcp') {
       if (!checkAuth(request, env)) return unauthorized();
-      return handleMcp(request, env);
+      return handleMcp(request, env, url);
     }
 
     return jsonResponse({ error: 'Not found' }, 404);
