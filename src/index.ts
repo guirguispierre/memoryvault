@@ -8,7 +8,7 @@ const SERVER_VERSION = '1.5.0';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
-const PBKDF2_ITERATIONS = 180_000;
+const PBKDF2_ITERATIONS = 100_000;
 
 type SessionTokens = {
   access_token: string;
