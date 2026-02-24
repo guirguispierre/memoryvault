@@ -1422,7 +1422,11 @@ function viewerHtml(): string {
         note.style.cssText = 'font-size:0.65rem;color:var(--text-dim);letter-spacing:0.1em;margin-top:0.5rem';
         note.textContent = '⚠ Linked memory not visible in current filter.';
         const existing = connEl.querySelector('.connections-section');
-        if (existing) existing.appendChild(note);
+        if (existing) {
+          existing.appendChild(note);
+        } else {
+          connEl.appendChild(note);
+        }
       }
     }
   }
