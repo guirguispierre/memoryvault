@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.2.4';
+const SERVER_VERSION = '1.3.0';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -325,6 +325,53 @@ async function enrichAndProjectRows(
   return enrichMemoryRowsWithDynamics(rows, linkStatsMap, tsNow).map(projectMemoryForClient);
 }
 
+type GraphEdge = { from: string; to: string; relation_type: RelationType };
+type GraphNeighbor = { id: string; relation_type: RelationType };
+
+function relationSignalWeight(relationType: RelationType): number {
+  switch (relationType) {
+    case 'supports': return 0.88;
+    case 'causes': return 0.82;
+    case 'example_of': return 0.7;
+    case 'supersedes': return 0.65;
+    case 'contradicts': return -0.75;
+    case 'related':
+    default:
+      return 0.62;
+  }
+}
+
+function relationSpreadWeight(relationType: RelationType): number {
+  switch (relationType) {
+    case 'supports': return 1;
+    case 'causes': return 0.9;
+    case 'example_of': return 0.75;
+    case 'supersedes': return 0.72;
+    case 'contradicts': return -0.65;
+    case 'related':
+    default:
+      return 0.68;
+  }
+}
+
+function normalizeRelation(raw: unknown): RelationType {
+  return isValidRelationType(raw) ? raw : 'related';
+}
+
+function buildAdjacencyFromEdges(edges: GraphEdge[]): Map<string, GraphNeighbor[]> {
+  const adjacency = new Map<string, GraphNeighbor[]>();
+  for (const edge of edges) {
+    const rel = normalizeRelation(edge.relation_type);
+    const fromArr = adjacency.get(edge.from);
+    if (fromArr) fromArr.push({ id: edge.to, relation_type: rel });
+    else adjacency.set(edge.from, [{ id: edge.to, relation_type: rel }]);
+    const toArr = adjacency.get(edge.to);
+    if (toArr) toArr.push({ id: edge.from, relation_type: rel });
+    else adjacency.set(edge.to, [{ id: edge.from, relation_type: rel }]);
+  }
+  return adjacency;
+}
+
 const TOOLS = [
   {
     name: 'memory_save',
@@ -364,7 +411,7 @@ const TOOLS = [
   },
   {
     name: 'memory_search',
-    description: 'Search memories by text content across all memory types.',
+    description: 'Search memories by name/title, key, id, source, or text content across all memory types.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -487,6 +534,51 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'memory_activate',
+    description: 'Run spreading-activation retrieval from seed memories (id/query) across the memory graph.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        seed_id: { type: 'string', description: 'Optional seed memory id' },
+        query: { type: 'string', description: 'Optional query to select seed memories by id/name/content' },
+        hops: { type: 'number', description: 'Propagation depth (1-4, default 2)' },
+        limit: { type: 'number', description: 'Max returned activations (1-100, default 20)' },
+        include_inferred: { type: 'boolean', description: 'Include tag-based inferred synapses (default true)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_reinforce',
+    description: 'Apply Hebbian-style reinforcement to a memory and optionally spread updates to connected neighbors.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Memory id to reinforce' },
+        delta_confidence: { type: 'number', description: 'Base confidence delta (default +0.04)' },
+        delta_importance: { type: 'number', description: 'Base importance delta (default +0.06)' },
+        spread: { type: 'number', minimum: 0, maximum: 1, description: 'How much update spreads to neighbors (default 0.35)' },
+        hops: { type: 'number', description: 'Spread depth (0-3, default 1)' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'memory_decay',
+    description: 'Apply homeostatic decay to stale low-connectivity memories.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        older_than_days: { type: 'number', description: 'Only decay memories older than N days (default 30)' },
+        max_link_count: { type: 'number', description: 'Only decay memories with links <= this count (default 1)' },
+        decay_confidence: { type: 'number', description: 'Confidence decrement per memory (default 0.01)' },
+        decay_importance: { type: 'number', description: 'Importance decrement per memory (default 0.03)' },
+        limit: { type: 'number', description: 'Max memories to decay (default 200)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 type ToolArgs = Record<string, unknown>;
@@ -601,12 +693,12 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       let stmt;
       if (type) {
         stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE archived_at IS NULL AND type = ? AND (content LIKE ? OR title LIKE ? OR key LIKE ?) ORDER BY created_at DESC LIMIT 20'
-        ).bind(type, like, like, like);
+          'SELECT * FROM memories WHERE archived_at IS NULL AND type = ? AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
+        ).bind(type, like, like, like, like, like);
       } else {
         stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE archived_at IS NULL AND (content LIKE ? OR title LIKE ? OR key LIKE ?) ORDER BY created_at DESC LIMIT 20'
-        ).bind(like, like, like);
+          'SELECT * FROM memories WHERE archived_at IS NULL AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
+        ).bind(like, like, like, like, like);
       }
       const results = await stmt.all<Record<string, unknown>>();
       if (!results.results.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
@@ -1009,6 +1101,407 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: ids.length, ids }, null, 2) }] };
     }
 
+    case 'memory_activate': {
+      const { seed_id, query, hops: rawHops, limit: rawLimit, include_inferred } = args as {
+        seed_id?: unknown;
+        query?: unknown;
+        hops?: unknown;
+        limit?: unknown;
+        include_inferred?: unknown;
+      };
+      if (seed_id !== undefined && typeof seed_id !== 'string') return { content: [{ type: 'text', text: 'seed_id must be a string when provided.' }] };
+      if (query !== undefined && typeof query !== 'string') return { content: [{ type: 'text', text: 'query must be a string when provided.' }] };
+      const hops = Math.min(Math.max(Number.isInteger(rawHops) ? (rawHops as number) : 2, 1), 4);
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 20, 1), 100);
+      const includeInferred = include_inferred === undefined ? true : Boolean(include_inferred);
+
+      const memoriesResult = await env.DB.prepare(
+        'SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 2000'
+      ).all<Record<string, unknown>>();
+      const memories = memoriesResult.results;
+      if (!memories.length) return { content: [{ type: 'text', text: 'No active memories found.' }] };
+
+      const memoryMap = new Map<string, Record<string, unknown>>();
+      for (const m of memories) {
+        const id = typeof m.id === 'string' ? m.id : '';
+        if (id) memoryMap.set(id, m);
+      }
+
+      const seedIds = new Set<string>();
+      if (typeof seed_id === 'string' && seed_id.trim()) {
+        if (!memoryMap.has(seed_id)) return { content: [{ type: 'text', text: `Seed memory not found: ${seed_id}` }] };
+        seedIds.add(seed_id);
+      }
+      if (typeof query === 'string' && query.trim()) {
+        const q = query.trim().toLowerCase();
+        const scoredMatches = memories.map((m) => {
+          const id = String(m.id ?? '');
+          const title = String(m.title ?? '');
+          const key = String(m.key ?? '');
+          const content = String(m.content ?? '');
+          const source = String(m.source ?? '');
+          const tags = String(m.tags ?? '');
+          const idLc = id.toLowerCase();
+          const titleLc = title.toLowerCase();
+          const keyLc = key.toLowerCase();
+          const contentLc = content.toLowerCase();
+          const sourceLc = source.toLowerCase();
+          const tagsLc = tags.toLowerCase();
+
+          let score = 0;
+          if (idLc === q) score += 9;
+          else if (idLc.startsWith(q)) score += 6;
+          else if (idLc.includes(q)) score += 4;
+          if (titleLc.includes(q)) score += 4.5;
+          if (keyLc.includes(q)) score += 3.8;
+          if (sourceLc.includes(q)) score += 2.4;
+          if (tagsLc.includes(q)) score += 2.2;
+          if (contentLc.includes(q)) score += 1.2;
+          return { id, score };
+        }).filter((m) => m.score > 0);
+
+        scoredMatches.sort((a, b) => b.score - a.score);
+        for (const match of scoredMatches.slice(0, 5)) seedIds.add(match.id);
+      }
+      if (!seedIds.size) return { content: [{ type: 'text', text: 'Provide seed_id or query that matches at least one memory.' }] };
+
+      const linksResult = await env.DB.prepare(
+        'SELECT from_id, to_id, relation_type FROM memory_links LIMIT 12000'
+      ).all<Record<string, unknown>>();
+      const edges: GraphEdge[] = [];
+      for (const row of linksResult.results) {
+        const from = typeof row.from_id === 'string' ? row.from_id : '';
+        const to = typeof row.to_id === 'string' ? row.to_id : '';
+        if (!from || !to || !memoryMap.has(from) || !memoryMap.has(to)) continue;
+        edges.push({ from, to, relation_type: normalizeRelation(row.relation_type) });
+      }
+      const adjacency = buildAdjacencyFromEdges(edges);
+
+      const tagToIds = new Map<string, string[]>();
+      for (const memory of memories) {
+        const id = String(memory.id ?? '');
+        const tagsRaw = typeof memory.tags === 'string' ? memory.tags : '';
+        if (!id || !tagsRaw) continue;
+        for (const raw of tagsRaw.split(',')) {
+          const tag = raw.trim().toLowerCase();
+          if (!tag) continue;
+          const ids = tagToIds.get(tag);
+          if (ids) ids.push(id);
+          else tagToIds.set(tag, [id]);
+        }
+      }
+
+      const inferredNeighborsFor = (id: string): Array<{ id: string; weight: number; shared: number }> => {
+        if (!includeInferred) return [];
+        const memory = memoryMap.get(id);
+        const tagsRaw = typeof memory?.tags === 'string' ? memory.tags : '';
+        if (!tagsRaw) return [];
+        const explicitNeighborIds = new Set((adjacency.get(id) ?? []).map((n) => n.id));
+        const sharedCounts = new Map<string, number>();
+        for (const raw of tagsRaw.split(',')) {
+          const tag = raw.trim().toLowerCase();
+          if (!tag) continue;
+          const ids = tagToIds.get(tag) ?? [];
+          for (const candidateId of ids) {
+            if (candidateId === id || explicitNeighborIds.has(candidateId)) continue;
+            sharedCounts.set(candidateId, (sharedCounts.get(candidateId) ?? 0) + 1);
+          }
+        }
+        return Array.from(sharedCounts.entries())
+          .map(([neighborId, shared]) => ({
+            id: neighborId,
+            shared,
+            weight: Math.min(0.42, 0.16 + shared * 0.08),
+          }))
+          .filter((e) => e.shared >= 1)
+          .sort((a, b) => b.weight - a.weight)
+          .slice(0, 6);
+      };
+
+      const activation = new Map<string, number>();
+      let frontier = new Map<string, number>();
+      const contributions = new Map<string, Array<{ from_id: string; relation: string; delta: number }>>();
+      for (const id of seedIds) {
+        activation.set(id, 1);
+        frontier.set(id, 1);
+      }
+
+      for (let hop = 1; hop <= hops; hop++) {
+        const next = new Map<string, number>();
+        for (const [sourceId, sourceSignal] of frontier) {
+          const explicit = adjacency.get(sourceId) ?? [];
+          for (const neighbor of explicit) {
+            const delta = sourceSignal * relationSignalWeight(neighbor.relation_type) * Math.pow(0.78, hop - 1);
+            if (Math.abs(delta) < 0.01) continue;
+            next.set(neighbor.id, (next.get(neighbor.id) ?? 0) + delta);
+            const arr = contributions.get(neighbor.id);
+            const item = { from_id: sourceId, relation: neighbor.relation_type, delta: round3(delta) };
+            if (arr) arr.push(item);
+            else contributions.set(neighbor.id, [item]);
+          }
+          for (const neighbor of inferredNeighborsFor(sourceId)) {
+            const delta = sourceSignal * neighbor.weight * Math.pow(0.72, hop - 1);
+            if (Math.abs(delta) < 0.008) continue;
+            next.set(neighbor.id, (next.get(neighbor.id) ?? 0) + delta);
+            const arr = contributions.get(neighbor.id);
+            const item = { from_id: sourceId, relation: `inferred(shared:${neighbor.shared})`, delta: round3(delta) };
+            if (arr) arr.push(item);
+            else contributions.set(neighbor.id, [item]);
+          }
+        }
+
+        frontier = new Map<string, number>();
+        for (const [id, signal] of next) {
+          const damped = signal * 0.74;
+          if (Math.abs(damped) < 0.006) continue;
+          frontier.set(id, damped);
+          activation.set(id, (activation.get(id) ?? 0) + damped);
+        }
+      }
+
+      const scoredMemories = await enrichAndProjectRows(env, memories);
+      const scoredMap = new Map<string, Record<string, unknown>>();
+      for (const memory of scoredMemories) {
+        const id = typeof memory.id === 'string' ? memory.id : '';
+        if (id) scoredMap.set(id, memory);
+      }
+
+      const ranked = Array.from(activation.entries())
+        .map(([id, act]) => {
+          const memory = scoredMap.get(id);
+          if (!memory) return null;
+          const conf = toFiniteNumber(memory.confidence, 0.7);
+          const imp = toFiniteNumber(memory.importance, 0.5);
+          const seedBonus = seedIds.has(id) ? 0.45 : 0;
+          const neuralScore = round3(act + imp * 0.45 + conf * 0.2 + seedBonus);
+          const contribs = (contributions.get(id) ?? [])
+            .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+            .slice(0, 3);
+          return {
+            id,
+            type: memory.type,
+            title: memory.title,
+            key: memory.key,
+            confidence: memory.confidence,
+            importance: memory.importance,
+            activation: round3(act),
+            neural_score: neuralScore,
+            top_signals: contribs,
+          };
+        })
+        .filter((r): r is NonNullable<typeof r> => Boolean(r))
+        .sort((a, b) => b.neural_score - a.neural_score)
+        .slice(0, limit);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            seeds: Array.from(seedIds),
+            hops,
+            include_inferred: includeInferred,
+            results: ranked,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_reinforce': {
+      const { id, delta_confidence, delta_importance, spread, hops } = args as {
+        id: unknown;
+        delta_confidence?: unknown;
+        delta_importance?: unknown;
+        spread?: unknown;
+        hops?: unknown;
+      };
+      if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
+      const deltaConf = clampToRange(delta_confidence, 0.04, -0.5, 0.5);
+      const deltaImp = clampToRange(delta_importance, 0.06, -0.5, 0.5);
+      const spreadFactor = clampToRange(spread, 0.35);
+      const spreadHops = Math.min(Math.max(Number.isInteger(hops) ? (hops as number) : 1, 0), 3);
+
+      const memoriesResult = await env.DB.prepare(
+        'SELECT id, confidence, importance FROM memories WHERE archived_at IS NULL'
+      ).all<Record<string, unknown>>();
+      const memoryMap = new Map<string, { confidence: number; importance: number }>();
+      for (const row of memoriesResult.results) {
+        const memoryId = typeof row.id === 'string' ? row.id : '';
+        if (!memoryId) continue;
+        memoryMap.set(memoryId, {
+          confidence: clamp01(toFiniteNumber(row.confidence, 0.7)),
+          importance: clamp01(toFiniteNumber(row.importance, 0.5)),
+        });
+      }
+      if (!memoryMap.has(id)) return { content: [{ type: 'text', text: `Memory not found: ${id}` }] };
+
+      const linksResult = await env.DB.prepare(
+        'SELECT from_id, to_id, relation_type FROM memory_links LIMIT 12000'
+      ).all<Record<string, unknown>>();
+      const edges: GraphEdge[] = [];
+      for (const row of linksResult.results) {
+        const from = typeof row.from_id === 'string' ? row.from_id : '';
+        const to = typeof row.to_id === 'string' ? row.to_id : '';
+        if (!from || !to || !memoryMap.has(from) || !memoryMap.has(to)) continue;
+        edges.push({ from, to, relation_type: normalizeRelation(row.relation_type) });
+      }
+      const adjacency = buildAdjacencyFromEdges(edges);
+
+      const updates = new Map<string, { delta_confidence: number; delta_importance: number; hops: number }>();
+      updates.set(id, { delta_confidence: deltaConf, delta_importance: deltaImp, hops: 0 });
+
+      let frontier = new Map<string, number>([[id, 1]]);
+      for (let depth = 1; depth <= spreadHops; depth++) {
+        const next = new Map<string, number>();
+        for (const [sourceId, sourceEnergy] of frontier) {
+          const neighbors = adjacency.get(sourceId) ?? [];
+          for (const neighbor of neighbors) {
+            const signal = sourceEnergy * relationSpreadWeight(neighbor.relation_type);
+            if (Math.abs(signal) < 0.04) continue;
+            next.set(neighbor.id, (next.get(neighbor.id) ?? 0) + signal);
+          }
+        }
+        frontier = new Map<string, number>();
+        for (const [targetId, signal] of next) {
+          const dampedSignal = signal * Math.pow(0.62, depth - 1);
+          if (Math.abs(dampedSignal) < 0.04) continue;
+          frontier.set(targetId, dampedSignal);
+          if (targetId === id) continue;
+          const prev = updates.get(targetId) ?? { delta_confidence: 0, delta_importance: 0, hops: depth };
+          prev.delta_confidence += deltaConf * spreadFactor * dampedSignal;
+          prev.delta_importance += deltaImp * spreadFactor * dampedSignal;
+          prev.hops = Math.min(prev.hops, depth);
+          updates.set(targetId, prev);
+        }
+      }
+
+      const rankedUpdateIds = Array.from(updates.entries())
+        .sort((a, b) => {
+          const absA = Math.abs(a[1].delta_confidence) + Math.abs(a[1].delta_importance);
+          const absB = Math.abs(b[1].delta_confidence) + Math.abs(b[1].delta_importance);
+          return absB - absA;
+        })
+        .slice(0, 300)
+        .map(([memoryId]) => memoryId);
+
+      const ts = now();
+      const changedIds: string[] = [];
+      const changeSummary: Array<Record<string, unknown>> = [];
+      for (const memoryId of rankedUpdateIds) {
+        const current = memoryMap.get(memoryId);
+        const update = updates.get(memoryId);
+        if (!current || !update) continue;
+        const newConfidence = round3(clamp01(current.confidence + update.delta_confidence));
+        const newImportance = round3(clamp01(current.importance + update.delta_importance));
+        if (newConfidence === current.confidence && newImportance === current.importance) continue;
+        await env.DB.prepare(
+          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE id = ?'
+        ).bind(newConfidence, newImportance, ts, memoryId).run();
+        changedIds.push(memoryId);
+        changeSummary.push({
+          id: memoryId,
+          hops: update.hops,
+          confidence_before: round3(current.confidence),
+          confidence_after: newConfidence,
+          importance_before: round3(current.importance),
+          importance_after: newImportance,
+        });
+      }
+
+      const scoredChanged = changedIds.length
+        ? await enrichAndProjectRows(
+          env,
+          (await env.DB.prepare(
+            `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE id IN (${changedIds.map(() => '?').join(',')})`
+          ).bind(...changedIds).all<Record<string, unknown>>()).results
+        )
+        : [];
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            seed_id: id,
+            spread_hops: spreadHops,
+            spread: spreadFactor,
+            updated_count: changedIds.length,
+            updates: changeSummary.slice(0, 25),
+            updated_memories: scoredChanged.slice(0, 25),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_decay': {
+      const { older_than_days, max_link_count, decay_confidence, decay_importance, limit: rawLimit } = args as {
+        older_than_days?: unknown;
+        max_link_count?: unknown;
+        decay_confidence?: unknown;
+        decay_importance?: unknown;
+        limit?: unknown;
+      };
+      const olderThanDays = Math.max(0, Number.isFinite(Number(older_than_days)) ? Number(older_than_days) : 30);
+      const maxLinkCount = Math.max(0, Number.isFinite(Number(max_link_count)) ? Math.floor(Number(max_link_count)) : 1);
+      const decayConf = Math.min(Math.max(Number.isFinite(Number(decay_confidence)) ? Number(decay_confidence) : 0.01, 0), 0.5);
+      const decayImp = Math.min(Math.max(Number.isFinite(Number(decay_importance)) ? Number(decay_importance) : 0.03, 0), 0.5);
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 200, 1), 1000);
+      const cutoffTs = now() - Math.floor(olderThanDays * 86400);
+
+      const candidates = await env.DB.prepare(
+        `SELECT
+          m.id,
+          m.confidence,
+          m.importance,
+          m.updated_at,
+          (SELECT COUNT(*) FROM memory_links ml WHERE ml.from_id = m.id OR ml.to_id = m.id) AS link_count
+        FROM memories m
+        WHERE m.archived_at IS NULL
+          AND m.updated_at <= ?
+          AND (SELECT COUNT(*) FROM memory_links ml2 WHERE ml2.from_id = m.id OR ml2.to_id = m.id) <= ?
+        ORDER BY m.updated_at ASC
+        LIMIT ?`
+      ).bind(cutoffTs, maxLinkCount, limit).all<Record<string, unknown>>();
+
+      const ts = now();
+      const decayedIds: string[] = [];
+      const updates: Array<Record<string, unknown>> = [];
+      for (const row of candidates.results) {
+        const memoryId = typeof row.id === 'string' ? row.id : '';
+        if (!memoryId) continue;
+        const currentConf = clamp01(toFiniteNumber(row.confidence, 0.7));
+        const currentImp = clamp01(toFiniteNumber(row.importance, 0.5));
+        const newConf = round3(clamp01(currentConf - decayConf));
+        const newImp = round3(clamp01(currentImp - decayImp));
+        if (newConf === currentConf && newImp === currentImp) continue;
+        await env.DB.prepare(
+          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE id = ?'
+        ).bind(newConf, newImp, ts, memoryId).run();
+        decayedIds.push(memoryId);
+        updates.push({
+          id: memoryId,
+          link_count: toFiniteNumber(row.link_count, 0),
+          confidence_before: round3(currentConf),
+          confidence_after: newConf,
+          importance_before: round3(currentImp),
+          importance_after: newImp,
+        });
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            older_than_days: olderThanDays,
+            max_link_count: maxLinkCount,
+            decay_confidence: decayConf,
+            decay_importance: decayImp,
+            candidate_count: candidates.results.length,
+            decayed_count: decayedIds.length,
+            updates: updates.slice(0, 50),
+          }, null, 2),
+        }],
+      };
+    }
+
     default:
       throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32601 });
   }
@@ -1152,10 +1645,10 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
   }
   if (search) {
     const like = `%${search}%`;
-    query += ' AND (content LIKE ? OR title LIKE ? OR key LIKE ?)';
-    params.push(like, like, like);
+    query += ' AND (m.id LIKE ? OR m.content LIKE ? OR m.title LIKE ? OR m.key LIKE ? OR m.source LIKE ?)';
+    params.push(like, like, like, like, like);
   }
-  query += ' ORDER BY m.importance DESC, m.created_at DESC LIMIT ?';
+  query += ' ORDER BY m.created_at DESC LIMIT ?';
   params.push(limit);
 
   const results = await env.DB.prepare(query).bind(...params).all();
@@ -1167,12 +1660,9 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
     tsNow
   );
   const projectedMemories = enrichedMemories.map(projectMemoryForClient);
-  const sortedMemories = [...projectedMemories].sort((a, b) => {
-    const impA = toFiniteNumber(a.dynamic_importance ?? a.importance, 0.5);
-    const impB = toFiniteNumber(b.dynamic_importance ?? b.importance, 0.5);
-    if (impB !== impA) return impB - impA;
-    return toFiniteNumber(b.created_at, 0) - toFiniteNumber(a.created_at, 0);
-  });
+  const sortedMemories = [...projectedMemories].sort(
+    (a, b) => toFiniteNumber(b.created_at, 0) - toFiniteNumber(a.created_at, 0)
+  );
   const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE archived_at IS NULL GROUP BY type').all();
   const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NOT NULL').first<{ count: number }>();
   return new Response(JSON.stringify({ memories: sortedMemories, stats: stats.results, archived_count: archived?.count ?? 0 }), {
@@ -2225,7 +2715,7 @@ function viewerHtml(): string {
 
   <div class="controls">
     <div class="search-wrap">
-      <input type="text" class="search-input" id="search-input" placeholder="Search memories..." inputmode="search" oninput="onSearch(this.value)">
+      <input type="text" class="search-input" id="search-input" placeholder="Search by name, id, key, or text..." inputmode="search" oninput="onSearch(this.value)">
     </div>
     <button class="refresh-btn" onclick="loadMemories()">↻ REFRESH</button>
   </div>
