@@ -1269,9 +1269,12 @@ function viewerHtml(): string {
     setTimeout(updateTime, 1000);
   }
 
-  async function loadMemories() {
+  async function loadMemories(silent = false) {
     const grid = document.getElementById('grid');
-    grid.innerHTML = '<div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>';
+    const scrollY = window.scrollY;
+    if (!silent) {
+      grid.innerHTML = '<div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>';
+    }
     const search = document.getElementById('search-input').value;
     let url = BASE + '/api/memories?limit=500';
     if (activeFilter) url += '&type=' + encodeURIComponent(activeFilter);
@@ -1283,6 +1286,7 @@ function viewerHtml(): string {
       allMemories = data.memories || [];
       updateStats(data.stats || []);
       renderGrid(allMemories);
+      if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div>CONNECTION ERROR</div>';
     }
@@ -1308,7 +1312,7 @@ function viewerHtml(): string {
     grid.innerHTML = memories.map((m, i) => {
       const date = new Date(m.created_at * 1000).toISOString().slice(0,10);
       const tags = m.tags ? m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('') : '';
-      const linkBadge = m.link_count > 0 ? \`<span class="card-links-badge">⬡ \${m.link_count}</span>\` : '';
+      const linkBadge = m.link_count > 0 ? \`<span class="card-links-badge">⬡ \${m.link_count} connections</span>\` : '';
       const titleHtml = m.title ? \`<div class="card-title">\${esc(m.title)}</div>\` : '';
       const keyHtml = m.key ? \`<div class="card-key"><span>KEY /</span> \${esc(m.key)}</div>\` : '';
       return \`<div class="card" data-type="\${m.type}" data-idx="\${i}" onclick="expandCard(\${i})" style="animation-delay:\${Math.min(i*0.04,0.4)}s">
@@ -1359,7 +1363,7 @@ function viewerHtml(): string {
             const label = l.label ? \`<span class="chip-label">"\${esc(l.label)}"</span>\` : '';
             const name = cm.title || cm.key || (cm.content || '').slice(0, 40) + '…';
             return \`<span class="connection-chip" onclick="expandById('\${cm.id}')">
-              <span class="chip-type">\${cm.type}</span>
+              <span class="chip-type">[\${cm.type}]</span>
               \${esc(name)}
               \${label}
               <span style="opacity:0.4">→</span>
@@ -1413,7 +1417,7 @@ function viewerHtml(): string {
         const data = await r.json();
         const sig = (data.stats || []).map(s => s.type + ':' + s.count).join('|');
         if (lastPollSig && sig !== lastPollSig) {
-          loadMemories();
+          loadMemories(true); // silent refresh
         }
         lastPollSig = sig;
       } catch {}
