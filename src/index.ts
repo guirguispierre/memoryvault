@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.1.0';
+const SERVER_VERSION = '1.2.0';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -61,9 +61,55 @@ async function clearRateLimit(ip: string, env: Env): Promise<void> {
 
 const VALID_TYPES = ['note', 'fact', 'journal'] as const;
 type MemoryType = typeof VALID_TYPES[number];
+const RELATION_TYPES = ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'] as const;
+type RelationType = typeof RELATION_TYPES[number];
 
 function isValidType(t: unknown): t is MemoryType {
   return typeof t === 'string' && (VALID_TYPES as readonly string[]).includes(t);
+}
+
+function isValidRelationType(t: unknown): t is RelationType {
+  return typeof t === 'string' && (RELATION_TYPES as readonly string[]).includes(t);
+}
+
+function clampToRange(input: unknown, fallback: number, min = 0, max = 1): number {
+  const n = typeof input === 'number' ? input : Number(input);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
+}
+
+async function runMigrationStatement(env: Env, sql: string): Promise<void> {
+  try {
+    await env.DB.prepare(sql).run();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.toLowerCase() : '';
+    if (msg.includes('duplicate column name') || msg.includes('already exists')) return;
+    throw err;
+  }
+}
+
+let schemaReady: Promise<void> | null = null;
+async function ensureSchema(env: Env): Promise<void> {
+  if (!schemaReady) {
+    schemaReady = (async () => {
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN source TEXT");
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7");
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.5");
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN archived_at INTEGER");
+      await runMigrationStatement(env, "ALTER TABLE memory_links ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'related'");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_archived ON memories(archived_at)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_confidence ON memories(confidence DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_links_relation_type ON memory_links(relation_type)");
+      await runMigrationStatement(env, "UPDATE memories SET confidence = 0.7 WHERE confidence IS NULL");
+      await runMigrationStatement(env, "UPDATE memories SET importance = 0.5 WHERE importance IS NULL");
+      await runMigrationStatement(env, "UPDATE memory_links SET relation_type = 'related' WHERE relation_type IS NULL");
+    })().catch((err) => {
+      schemaReady = null;
+      throw err;
+    });
+  }
+  await schemaReady;
 }
 
 const TOOLS = [
@@ -78,6 +124,9 @@ const TOOLS = [
         title: { type: 'string', description: 'Title (for notes)' },
         key: { type: 'string', description: 'Key name (for facts, e.g. "user_name")' },
         tags: { type: 'string', description: 'Comma-separated tags' },
+        source: { type: 'string', description: 'Source system/person for this memory' },
+        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Reliability score from 0 to 1 (default 0.7)' },
+        importance: { type: 'number', minimum: 0, maximum: 1, description: 'Priority score from 0 to 1 (default 0.5)' },
       },
       required: ['type', 'content'],
     },
@@ -135,6 +184,10 @@ const TOOLS = [
         content: { type: 'string', description: 'New content' },
         title: { type: 'string', description: 'New title' },
         tags: { type: 'string', description: 'New comma-separated tags' },
+        source: { type: 'string', description: 'New source' },
+        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Updated confidence score (0..1)' },
+        importance: { type: 'number', minimum: 0, maximum: 1, description: 'Updated importance score (0..1)' },
+        archived: { type: 'boolean', description: 'Set true to archive, false to restore' },
       },
       required: ['id'],
     },
@@ -155,12 +208,13 @@ const TOOLS = [
   },
   {
     name: 'memory_link',
-    description: 'Create a link between two memories. Use label to describe the relationship in natural language (e.g. "relates to work", "led to this decision", "supports", "contradicts").',
+    description: 'Create or update a relationship between two memories. Set relation_type for graph reasoning (supports/contradicts/supersedes/etc).',
     inputSchema: {
       type: 'object',
       properties: {
         from_id: { type: 'string', description: 'Source memory ID' },
         to_id: { type: 'string', description: 'Target memory ID' },
+        relation_type: { type: 'string', enum: ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'], description: 'Structured relationship type (default "related")' },
         label: { type: 'string', description: 'Optional free-text description of the relationship' },
       },
       required: ['from_id', 'to_id'],
@@ -174,19 +228,50 @@ const TOOLS = [
       properties: {
         from_id: { type: 'string', description: 'Source memory ID' },
         to_id: { type: 'string', description: 'Target memory ID' },
+        relation_type: { type: 'string', enum: ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'], description: 'Optional relation type filter when unlinking' },
       },
       required: ['from_id', 'to_id'],
     },
   },
   {
     name: 'memory_links',
-    description: 'Get all memories linked to a given memory, with full memory data and relationship labels. Use this to explore the knowledge graph around a memory.',
+    description: 'Get all memories linked to a given memory, including relation_type and labels.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Memory ID to get connections for' },
       },
       required: ['id'],
+    },
+  },
+  {
+    name: 'memory_consolidate',
+    description: 'Consolidate likely-duplicate memories by keeping one canonical memory and archiving duplicates with supersedes links.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['note', 'fact', 'journal'], description: 'Optional memory type filter' },
+        tag: { type: 'string', description: 'Optional tag filter' },
+        older_than_days: { type: 'number', description: 'Only consolidate memories older than this age' },
+        limit: { type: 'number', description: 'Max memories to scan (default 300, max 1000)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_forget',
+    description: 'Archive or delete memories by ID or policy filters for controlled forgetting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Specific memory ID to forget' },
+        mode: { type: 'string', enum: ['soft', 'hard'], description: 'soft archives; hard deletes (default soft)' },
+        tag: { type: 'string', description: 'Optional tag filter for batch mode' },
+        older_than_days: { type: 'number', description: 'Optional minimum age in days for batch mode' },
+        max_importance: { type: 'number', minimum: 0, maximum: 1, description: 'Only forget memories with importance <= this threshold' },
+        limit: { type: 'number', description: 'Batch size (default 25, max 200)' },
+      },
+      required: [],
     },
   },
 ];
@@ -197,22 +282,37 @@ type McpResult = { content: Array<{ type: string; text: string }> };
 async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResult> {
   switch (name) {
     case 'memory_save': {
-      const { type, content, title, key, tags } = args as {
-        type: unknown; content: unknown; title?: unknown; key?: unknown; tags?: unknown;
+      const { type, content, title, key, tags, source, confidence, importance } = args as {
+        type: unknown;
+        content: unknown;
+        title?: unknown;
+        key?: unknown;
+        tags?: unknown;
+        source?: unknown;
+        confidence?: unknown;
+        importance?: unknown;
       };
       if (!isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type. Must be note, fact, or journal.' }] };
       if (typeof content !== 'string' || content.trim() === '') return { content: [{ type: 'text', text: 'content must be a non-empty string.' }] };
+      if (source !== undefined && typeof source !== 'string') return { content: [{ type: 'text', text: 'source must be a string when provided.' }] };
       const id = generateId();
       const ts = now();
+      const confidenceVal = clampToRange(confidence, 0.7);
+      const importanceVal = clampToRange(importance, 0.5);
       await env.DB.prepare(
-        'INSERT INTO memories (id, type, title, key, content, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO memories (id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
       ).bind(
-        id, type,
+        id,
+        type,
         typeof title === 'string' ? title : null,
         typeof key === 'string' ? key : null,
         content.trim(),
         typeof tags === 'string' ? tags : null,
-        ts, ts
+        typeof source === 'string' ? source : null,
+        confidenceVal,
+        importanceVal,
+        ts,
+        ts
       ).run();
       // Find up to 5 existing memories sharing at least one tag (for suggested linking)
       let suggestedLinks: unknown[] = [];
@@ -222,13 +322,18 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
           const conditions = tagList.map(() => 'tags LIKE ?').join(' OR ');
           const bindings = tagList.map((t: string) => `%${t}%`);
           const suggestions = await env.DB.prepare(
-            `SELECT id, type, title, key, tags FROM memories WHERE id != ? AND (${conditions}) LIMIT 5`
+            `SELECT id, type, title, key, tags FROM memories WHERE archived_at IS NULL AND id != ? AND (${conditions}) LIMIT 5`
           ).bind(id, ...bindings).all();
           suggestedLinks = suggestions.results;
         }
       }
 
-      const saveResult: Record<string, unknown> = { id, message: `Saved memory with id: ${id}` };
+      const saveResult: Record<string, unknown> = {
+        id,
+        message: `Saved memory with id: ${id}`,
+        confidence: confidenceVal,
+        importance: importanceVal,
+      };
       if (suggestedLinks.length > 0) saveResult.suggested_links = suggestedLinks;
       return { content: [{ type: 'text', text: JSON.stringify(saveResult) }] };
     }
@@ -245,7 +350,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const { key } = args as { key: unknown };
       if (typeof key !== 'string' || !key) return { content: [{ type: 'text', text: 'key must be a non-empty string.' }] };
       const row = await env.DB.prepare(
-        'SELECT * FROM memories WHERE type = ? AND key = ? LIMIT 1'
+        'SELECT * FROM memories WHERE type = ? AND key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
       ).bind('fact', key).first();
       if (!row) return { content: [{ type: 'text', text: `No fact found with key: ${key}` }] };
       return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
@@ -259,11 +364,11 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       let stmt;
       if (type) {
         stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE type = ? AND (content LIKE ? OR title LIKE ? OR key LIKE ?) ORDER BY created_at DESC LIMIT 20'
+          'SELECT * FROM memories WHERE archived_at IS NULL AND type = ? AND (content LIKE ? OR title LIKE ? OR key LIKE ?) ORDER BY created_at DESC LIMIT 20'
         ).bind(type, like, like, like);
       } else {
         stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE content LIKE ? OR title LIKE ? OR key LIKE ? ORDER BY created_at DESC LIMIT 20'
+          'SELECT * FROM memories WHERE archived_at IS NULL AND (content LIKE ? OR title LIKE ? OR key LIKE ?) ORDER BY created_at DESC LIMIT 20'
         ).bind(like, like, like);
       }
       const results = await stmt.all();
@@ -275,7 +380,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const { type, tag, limit: rawLimit } = args as { type?: unknown; tag?: unknown; limit?: unknown };
       if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 20, 1), 100);
-      let query = 'SELECT * FROM memories WHERE 1=1';
+      let query = 'SELECT * FROM memories WHERE archived_at IS NULL';
       const params: unknown[] = [];
       if (type) { query += ' AND type = ?'; params.push(type); }
       if (typeof tag === 'string' && tag) { query += ' AND tags LIKE ?'; params.push(`%${tag}%`); }
@@ -287,20 +392,42 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
     }
 
     case 'memory_update': {
-      const { id, content, title, tags } = args as {
-        id: unknown; content?: unknown; title?: unknown; tags?: unknown;
+      const { id, content, title, tags, source, confidence, importance, archived } = args as {
+        id: unknown;
+        content?: unknown;
+        title?: unknown;
+        tags?: unknown;
+        source?: unknown;
+        confidence?: unknown;
+        importance?: unknown;
+        archived?: unknown;
       };
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
+      if (source !== undefined && typeof source !== 'string') return { content: [{ type: 'text', text: 'source must be a string when provided.' }] };
+      if (archived !== undefined && typeof archived !== 'boolean') return { content: [{ type: 'text', text: 'archived must be a boolean when provided.' }] };
       const existing = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<{
-        content: string; title: string | null; tags: string | null;
+        content: string;
+        title: string | null;
+        tags: string | null;
+        source: string | null;
+        confidence: number | null;
+        importance: number | null;
+        archived_at: number | null;
       }>();
       if (!existing) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+      const nextArchivedAt = typeof archived === 'boolean'
+        ? (archived ? now() : null)
+        : (existing.archived_at ?? null);
       await env.DB.prepare(
-        'UPDATE memories SET content = ?, title = ?, tags = ?, updated_at = ? WHERE id = ?'
+        'UPDATE memories SET content = ?, title = ?, tags = ?, source = ?, confidence = ?, importance = ?, archived_at = ?, updated_at = ? WHERE id = ?'
       ).bind(
         typeof content === 'string' && content.trim() ? content.trim() : existing.content,
         typeof title === 'string' ? title : existing.title,
         typeof tags === 'string' ? tags : existing.tags,
+        typeof source === 'string' ? source : existing.source,
+        confidence === undefined ? clampToRange(existing.confidence, 0.7) : clampToRange(confidence, 0.7),
+        importance === undefined ? clampToRange(existing.importance, 0.5) : clampToRange(importance, 0.5),
+        nextArchivedAt,
         now(),
         id
       ).run();
@@ -316,17 +443,21 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
     }
 
     case 'memory_stats': {
-      const total = await env.DB.prepare('SELECT COUNT(*) as count FROM memories').first<{ count: number }>();
-      const byType = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories GROUP BY type').all();
+      const total = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NULL').first<{ count: number }>();
+      const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NOT NULL').first<{ count: number }>();
+      const byType = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE archived_at IS NULL GROUP BY type').all();
+      const relationStats = await env.DB.prepare('SELECT relation_type, COUNT(*) as count FROM memory_links GROUP BY relation_type').all();
       const recent = await env.DB.prepare(
-        'SELECT id, type, title, key, created_at FROM memories ORDER BY created_at DESC LIMIT 5'
+        'SELECT id, type, title, key, created_at, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 5'
       ).all();
       return {
         content: [{
           type: 'text',
           text: JSON.stringify({
             total: total?.count ?? 0,
+            archived: archived?.count ?? 0,
             by_type: byType.results,
+            by_relation: relationStats.results,
             recent_5: recent.results,
           }, null, 2),
         }],
@@ -334,40 +465,58 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
     }
 
     case 'memory_link': {
-      const { from_id, to_id, label } = args as { from_id: unknown; to_id: unknown; label?: unknown };
+      const { from_id, to_id, label, relation_type } = args as {
+        from_id: unknown;
+        to_id: unknown;
+        label?: unknown;
+        relation_type?: unknown;
+      };
       if (typeof from_id !== 'string' || !from_id) return { content: [{ type: 'text', text: 'from_id must be a non-empty string.' }] };
       if (typeof to_id !== 'string' || !to_id) return { content: [{ type: 'text', text: 'to_id must be a non-empty string.' }] };
       if (from_id === to_id) return { content: [{ type: 'text', text: 'Cannot link a memory to itself.' }] };
+      if (relation_type !== undefined && !isValidRelationType(relation_type)) return { content: [{ type: 'text', text: 'Invalid relation_type.' }] };
+      const relationType = isValidRelationType(relation_type) ? relation_type : 'related';
 
       // Verify both memories exist
-      const fromMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(from_id).first();
+      const fromMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(from_id).first();
       if (!fromMem) return { content: [{ type: 'text', text: `Memory not found: ${from_id}` }] };
-      const toMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(to_id).first();
+      const toMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(to_id).first();
       if (!toMem) return { content: [{ type: 'text', text: `Memory not found: ${to_id}` }] };
 
-      // Prevent duplicate links (either direction)
+      // De-duplicate links (treating pair as undirected)
       const existing = await env.DB.prepare(
         'SELECT id FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)'
-      ).bind(from_id, to_id, to_id, from_id).first();
-      if (existing) return { content: [{ type: 'text', text: 'A link between these memories already exists.' }] };
+      ).bind(from_id, to_id, to_id, from_id).first<{ id: string }>();
+
+      const labelVal = typeof label === 'string' && label.trim() ? label.trim() : null;
+      if (existing?.id) {
+        await env.DB.prepare(
+          'UPDATE memory_links SET relation_type = ?, label = ? WHERE id = ?'
+        ).bind(relationType, labelVal, existing.id).run();
+        return { content: [{ type: 'text', text: JSON.stringify({ link_id: existing.id, from_id, to_id, relation_type: relationType, label: labelVal, updated: true }) }] };
+      }
 
       const link_id = generateId();
-      const labelVal = typeof label === 'string' && label.trim() ? label.trim() : null;
       await env.DB.prepare(
-        'INSERT INTO memory_links (id, from_id, to_id, label, created_at) VALUES (?, ?, ?, ?, ?)'
-      ).bind(link_id, from_id, to_id, labelVal, now()).run();
+        'INSERT INTO memory_links (id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).bind(link_id, from_id, to_id, relationType, labelVal, now()).run();
 
-      return { content: [{ type: 'text', text: JSON.stringify({ link_id, from_id, to_id, label: labelVal }) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ link_id, from_id, to_id, relation_type: relationType, label: labelVal }) }] };
     }
 
     case 'memory_unlink': {
-      const { from_id, to_id } = args as { from_id: unknown; to_id: unknown };
+      const { from_id, to_id, relation_type } = args as { from_id: unknown; to_id: unknown; relation_type?: unknown };
       if (typeof from_id !== 'string' || !from_id) return { content: [{ type: 'text', text: 'from_id must be a non-empty string.' }] };
       if (typeof to_id !== 'string' || !to_id) return { content: [{ type: 'text', text: 'to_id must be a non-empty string.' }] };
+      if (relation_type !== undefined && !isValidRelationType(relation_type)) return { content: [{ type: 'text', text: 'Invalid relation_type.' }] };
 
-      const result = await env.DB.prepare(
-        'DELETE FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)'
-      ).bind(from_id, to_id, to_id, from_id).run();
+      let sql = 'DELETE FROM memory_links WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))';
+      const params: unknown[] = [from_id, to_id, to_id, from_id];
+      if (relation_type) {
+        sql += ' AND relation_type = ?';
+        params.push(relation_type);
+      }
+      const result = await env.DB.prepare(sql).bind(...params).run();
 
       if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'No link found between these memories.' }] };
       return { content: [{ type: 'text', text: `Link removed between ${from_id} and ${to_id}.` }] };
@@ -378,35 +527,239 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
 
       // Verify memory exists
-      const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(id).first();
+      const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(id).first();
       if (!mem) return { content: [{ type: 'text', text: 'Memory not found.' }] };
 
       // Fetch links in both directions with full memory data
       const fromLinks = await env.DB.prepare(
-        'SELECT ml.id as link_id, ml.label, ml.to_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ?'
+        'SELECT ml.id as link_id, ml.label, ml.relation_type, ml.to_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ? AND m.archived_at IS NULL'
       ).bind(id).all();
 
       const toLinks = await env.DB.prepare(
-        'SELECT ml.id as link_id, ml.label, ml.from_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ?'
+        'SELECT ml.id as link_id, ml.label, ml.relation_type, ml.from_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ? AND m.archived_at IS NULL'
       ).bind(id).all();
 
       const results = [
         ...fromLinks.results.map((r: Record<string, unknown>) => ({
           link_id: r.link_id,
+          relation_type: r.relation_type,
           label: r.label,
           direction: 'from',
-          memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+          memory: {
+            id: r.id,
+            type: r.type,
+            title: r.title,
+            key: r.key,
+            content: r.content,
+            tags: r.tags,
+            source: r.source,
+            confidence: r.confidence,
+            importance: r.importance,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+          },
         })),
         ...toLinks.results.map((r: Record<string, unknown>) => ({
           link_id: r.link_id,
+          relation_type: r.relation_type,
           label: r.label,
           direction: 'to',
-          memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+          memory: {
+            id: r.id,
+            type: r.type,
+            title: r.title,
+            key: r.key,
+            content: r.content,
+            tags: r.tags,
+            source: r.source,
+            confidence: r.confidence,
+            importance: r.importance,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+          },
         })),
       ];
 
       if (!results.length) return { content: [{ type: 'text', text: 'No links found for this memory.' }] };
       return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+    }
+
+    case 'memory_consolidate': {
+      const { type, tag, older_than_days, limit: rawLimit } = args as {
+        type?: unknown;
+        tag?: unknown;
+        older_than_days?: unknown;
+        limit?: unknown;
+      };
+      if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 300, 1), 1000);
+      const params: unknown[] = [];
+      let query = 'SELECT id, type, title, key, content, tags, importance, created_at FROM memories WHERE archived_at IS NULL';
+      if (type) {
+        query += ' AND type = ?';
+        params.push(type);
+      }
+      if (typeof tag === 'string' && tag.trim()) {
+        query += ' AND tags LIKE ?';
+        params.push(`%${tag.trim()}%`);
+      }
+      if (older_than_days !== undefined) {
+        const days = Number(older_than_days);
+        if (!Number.isFinite(days) || days < 0) return { content: [{ type: 'text', text: 'older_than_days must be a non-negative number.' }] };
+        query += ' AND created_at <= ?';
+        params.push(now() - Math.floor(days * 86400));
+      }
+      query += ' ORDER BY created_at DESC LIMIT ?';
+      params.push(limit);
+
+      const rows = await env.DB.prepare(query).bind(...params).all<Record<string, unknown>>();
+      const byFingerprint = new Map<string, Array<Record<string, unknown>>>();
+
+      for (const row of rows.results) {
+        const kind = String(row.type ?? '');
+        const keyVal = typeof row.key === 'string' ? row.key.trim().toLowerCase() : '';
+        const titleVal = typeof row.title === 'string' ? row.title.trim().toLowerCase() : '';
+        const contentVal = typeof row.content === 'string'
+          ? row.content.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 160)
+          : '';
+        const fingerprint = keyVal
+          ? `${kind}|key|${keyVal}`
+          : titleVal
+            ? `${kind}|title|${titleVal}`
+            : `${kind}|content|${contentVal}`;
+        if (!contentVal && !titleVal && !keyVal) continue;
+        const arr = byFingerprint.get(fingerprint);
+        if (arr) arr.push(row);
+        else byFingerprint.set(fingerprint, [row]);
+      }
+
+      const ts = now();
+      const groups: Array<{ canonical_id: string; archived_ids: string[]; fingerprint: string }> = [];
+      let archivedCount = 0;
+      let linkedCount = 0;
+
+      for (const [fingerprint, group] of byFingerprint) {
+        if (group.length < 2) continue;
+        const sorted = [...group].sort((a, b) => {
+          const impA = clampToRange(a.importance, 0.5);
+          const impB = clampToRange(b.importance, 0.5);
+          if (impB !== impA) return impB - impA;
+          const createdA = Number(a.created_at ?? 0);
+          const createdB = Number(b.created_at ?? 0);
+          return createdB - createdA;
+        });
+        const canonical = sorted[0];
+        const canonicalId = String(canonical.id ?? '');
+        if (!canonicalId) continue;
+
+        const archivedIds: string[] = [];
+        for (const dup of sorted.slice(1)) {
+          const dupId = String(dup.id ?? '');
+          if (!dupId) continue;
+          archivedIds.push(dupId);
+          await env.DB.prepare(
+            'UPDATE memories SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL'
+          ).bind(ts, ts, dupId).run();
+          archivedCount++;
+
+          const existingLink = await env.DB.prepare(
+            'SELECT id FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)'
+          ).bind(canonicalId, dupId, dupId, canonicalId).first<{ id: string }>();
+          if (existingLink?.id) {
+            await env.DB.prepare(
+              'UPDATE memory_links SET relation_type = ?, label = ? WHERE id = ?'
+            ).bind('supersedes', 'consolidated duplicate', existingLink.id).run();
+          } else {
+            await env.DB.prepare(
+              'INSERT INTO memory_links (id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+            ).bind(generateId(), canonicalId, dupId, 'supersedes', 'consolidated duplicate', ts).run();
+          }
+          linkedCount++;
+        }
+
+        if (archivedIds.length > 0) {
+          groups.push({ canonical_id: canonicalId, archived_ids: archivedIds, fingerprint });
+        }
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            scanned: rows.results.length,
+            groups_consolidated: groups.length,
+            archived_count: archivedCount,
+            supersedes_links_written: linkedCount,
+            groups,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_forget': {
+      const { id, mode: rawMode, tag, older_than_days, max_importance, limit: rawLimit } = args as {
+        id?: unknown;
+        mode?: unknown;
+        tag?: unknown;
+        older_than_days?: unknown;
+        max_importance?: unknown;
+        limit?: unknown;
+      };
+      const mode = rawMode === 'hard' ? 'hard' : 'soft';
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 25, 1), 200);
+
+      if (typeof id === 'string' && id.trim()) {
+        if (mode === 'hard') {
+          const result = await env.DB.prepare('DELETE FROM memories WHERE id = ?').bind(id).run();
+          if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ mode, deleted: 1, ids: [id] }) }] };
+        }
+        const ts = now();
+        const result = await env.DB.prepare(
+          'UPDATE memories SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL'
+        ).bind(ts, ts, id).run();
+        if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found or already archived.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: 1, ids: [id] }) }] };
+      }
+
+      const where: string[] = ['archived_at IS NULL'];
+      const params: unknown[] = [];
+      if (typeof tag === 'string' && tag.trim()) {
+        where.push('tags LIKE ?');
+        params.push(`%${tag.trim()}%`);
+      }
+      if (older_than_days !== undefined) {
+        const days = Number(older_than_days);
+        if (!Number.isFinite(days) || days < 0) return { content: [{ type: 'text', text: 'older_than_days must be a non-negative number.' }] };
+        where.push('created_at <= ?');
+        params.push(now() - Math.floor(days * 86400));
+      }
+      if (max_importance !== undefined) {
+        const maxImportance = clampToRange(max_importance, 0.5);
+        where.push('importance <= ?');
+        params.push(maxImportance);
+      }
+      if (where.length === 1) {
+        return { content: [{ type: 'text', text: 'Batch forgetting requires at least one filter (tag, older_than_days, or max_importance).' }] };
+      }
+
+      const idsResult = await env.DB.prepare(
+        `SELECT id FROM memories WHERE ${where.join(' AND ')} ORDER BY importance ASC, created_at ASC LIMIT ?`
+      ).bind(...params, limit).all<{ id: string }>();
+      const ids = idsResult.results.map((r) => r.id).filter(Boolean);
+      if (!ids.length) return { content: [{ type: 'text', text: 'No memories matched forgetting policy.' }] };
+
+      const placeholders = ids.map(() => '?').join(', ');
+      if (mode === 'hard') {
+        await env.DB.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).bind(...ids).run();
+        return { content: [{ type: 'text', text: JSON.stringify({ mode, deleted: ids.length, ids }, null, 2) }] };
+      }
+
+      const ts = now();
+      await env.DB.prepare(
+        `UPDATE memories SET archived_at = ?, updated_at = ? WHERE id IN (${placeholders})`
+      ).bind(ts, ts, ...ids).run();
+      return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: ids.length, ids }, null, 2) }] };
     }
 
     default:
@@ -545,7 +898,7 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
   const limitParam = parseInt(url.searchParams.get('limit') ?? '100', 10);
   const limit = Math.min(Math.max(Number.isNaN(limitParam) ? 100 : limitParam, 1), 500);
 
-  let query = 'SELECT m.*, (SELECT COUNT(*) FROM memory_links ml WHERE ml.from_id = m.id OR ml.to_id = m.id) as link_count FROM memories m WHERE 1=1';
+  let query = 'SELECT m.*, (SELECT COUNT(*) FROM memory_links ml WHERE ml.from_id = m.id OR ml.to_id = m.id) as link_count FROM memories m WHERE m.archived_at IS NULL';
   const params: unknown[] = [];
   if (type && VALID_TYPES.includes(type as MemoryType)) {
     query += ' AND type = ?'; params.push(type);
@@ -555,38 +908,45 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
     query += ' AND (content LIKE ? OR title LIKE ? OR key LIKE ?)';
     params.push(like, like, like);
   }
-  query += ' ORDER BY m.created_at DESC LIMIT ?';
+  query += ' ORDER BY m.importance DESC, m.created_at DESC LIMIT ?';
   params.push(limit);
 
   const results = await env.DB.prepare(query).bind(...params).all();
-  const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories GROUP BY type').all();
-  return new Response(JSON.stringify({ memories: results.results, stats: stats.results }), {
+  const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE archived_at IS NULL GROUP BY type').all();
+  const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NOT NULL').first<{ count: number }>();
+  return new Response(JSON.stringify({ memories: results.results, stats: stats.results, archived_count: archived?.count ?? 0 }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }
 
 async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
-  const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(memoryId).first();
+  const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(memoryId).first();
   if (!mem) return new Response(JSON.stringify({ error: 'Memory not found.' }), {
     status: 404, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 
   const fromLinks = await env.DB.prepare(
-    'SELECT ml.id as link_id, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ?'
+    'SELECT ml.id as link_id, ml.relation_type, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.source, m.confidence, m.importance, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ? AND m.archived_at IS NULL'
   ).bind(memoryId).all();
 
   const toLinks = await env.DB.prepare(
-    'SELECT ml.id as link_id, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ?'
+    'SELECT ml.id as link_id, ml.relation_type, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.source, m.confidence, m.importance, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ? AND m.archived_at IS NULL'
   ).bind(memoryId).all();
 
   const results = [
     ...fromLinks.results.map((r: Record<string, unknown>) => ({
-      link_id: r.link_id, label: r.label, direction: 'from',
-      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+      link_id: r.link_id,
+      relation_type: r.relation_type,
+      label: r.label,
+      direction: 'from',
+      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, source: r.source, confidence: r.confidence, importance: r.importance, created_at: r.created_at, updated_at: r.updated_at },
     })),
     ...toLinks.results.map((r: Record<string, unknown>) => ({
-      link_id: r.link_id, label: r.label, direction: 'to',
-      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+      link_id: r.link_id,
+      relation_type: r.relation_type,
+      label: r.label,
+      direction: 'to',
+      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, source: r.source, confidence: r.confidence, importance: r.importance, created_at: r.created_at, updated_at: r.updated_at },
     })),
   ];
 
@@ -597,10 +957,10 @@ async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
 
 async function handleApiGraph(env: Env): Promise<Response> {
   const memories = await env.DB.prepare(
-    'SELECT id, type, title, key, tags FROM memories ORDER BY created_at DESC LIMIT 1000'
+    'SELECT id, type, title, key, tags, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 1000'
   ).all();
   const links = await env.DB.prepare(
-    'SELECT id, from_id, to_id, label FROM memory_links LIMIT 5000'
+    'SELECT ml.id, ml.from_id, ml.to_id, ml.label, ml.relation_type FROM memory_links ml JOIN memories m1 ON m1.id = ml.from_id AND m1.archived_at IS NULL JOIN memories m2 ON m2.id = ml.to_id AND m2.archived_at IS NULL LIMIT 5000'
   ).all();
 
   const nodes = memories.results as Array<Record<string, unknown>>;
@@ -683,6 +1043,7 @@ function handleApiTools(): Response {
     server: { name: SERVER_NAME, version: SERVER_VERSION },
     tool_count: TOOLS.length,
     tool_names: TOOLS.map((t) => t.name),
+    relation_types: RELATION_TYPES,
   }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
@@ -1233,11 +1594,28 @@ function viewerHtml(): string {
   .connection-chip:hover { border-color: var(--amber); color: var(--amber); }
   .connection-chip .chip-type { font-size: 0.55rem; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.6; }
   .connection-chip .chip-label { font-size: 0.6rem; color: var(--text-dim); font-style: italic; }
+  .connection-chip .chip-relation {
+    font-size: 0.5rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    border: 1px solid var(--border-bright);
+    color: var(--teal);
+    padding: 0.12rem 0.3rem;
+  }
+  .connection-chip .chip-relation.contradicts { border-color: var(--red); color: var(--red); }
+  .connection-chip .chip-relation.supersedes { border-color: var(--amber); color: var(--amber); }
+  .connection-chip .chip-relation.supports { border-color: #2eca75; color: #2eca75; }
   .graph-node circle { stroke-width: 2px; cursor: pointer; transition: r 0.15s; }
   .graph-node circle:hover { r: 10; }
   .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; }
   .graph-link { stroke-width: 1.5px; }
   .graph-link.explicit { stroke: var(--border-bright); opacity: 0.9; }
+  .graph-link.explicit.relation-related { stroke: var(--border-bright); }
+  .graph-link.explicit.relation-supports { stroke: #2eca75; }
+  .graph-link.explicit.relation-contradicts { stroke: var(--red); stroke-dasharray: 6 3; }
+  .graph-link.explicit.relation-supersedes { stroke: var(--amber); }
+  .graph-link.explicit.relation-causes { stroke: #ff9e4f; }
+  .graph-link.explicit.relation-example-of { stroke: #66a9ff; }
   .graph-link.inferred { stroke: var(--teal); opacity: 0.4; stroke-dasharray: 4 4; }
   .graph-link-label { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); pointer-events: none; }
   .graph-toolbar {
@@ -1631,13 +2009,19 @@ function viewerHtml(): string {
     const date = new Date(m.created_at * 1000).toLocaleString();
     const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';
     const typeColors = { note: 'var(--teal)', fact: 'var(--amber)', journal: '#8888ff' };
+    const qualityChips = [
+      m.source ? \`<span class="tag">src:\${esc(m.source)}</span>\` : '',
+      Number.isFinite(Number(m.confidence)) ? \`<span class="tag">conf:\${Math.round(Number(m.confidence) * 100)}%</span>\` : '',
+      Number.isFinite(Number(m.importance)) ? \`<span class="tag">imp:\${Math.round(Number(m.importance) * 100)}%</span>\` : '',
+    ].filter(Boolean).join('');
     document.getElementById('expand-header').innerHTML =
       \`<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;flex-wrap:wrap">
         <span style="font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;border:1px solid \${typeColors[m.type]||'#fff'};color:\${typeColors[m.type]||'#fff'};padding:0.2rem 0.5rem">\${m.type}</span>
         \${m.title ? \`<span style="font-family:var(--sans);font-weight:700;font-size:1.1rem;color:var(--text-bright)">\${esc(m.title)}</span>\` : ''}
         \${m.key ? \`<span style="font-size:0.75rem;color:var(--amber)">KEY: \${esc(m.key)}</span>\` : ''}
       </div>
-      \${m.tags ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('')}</div>\` : ''}\`;
+      \${m.tags ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('')}</div>\` : ''}
+      \${qualityChips ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${qualityChips}</div>\` : ''}\`;
     document.getElementById('expand-content').textContent = m.content;
     document.getElementById('expand-meta').textContent = 'ID: ' + m.id + '  ·  Created ' + date + updated;
     document.getElementById('expand-overlay').classList.add('open');
@@ -1661,13 +2045,18 @@ function viewerHtml(): string {
           <div class="connections-title">⬡ Connections (\${links.length})</div>
           \${links.map(l => {
             const cm = l.memory;
+            const relationRaw = String(l.relation_type || 'related').toLowerCase();
+            const relationLabel = relationRaw.replace(/_/g, ' ');
+            const relationClass = relationRaw.replace(/_/g, '-').replace(/[^a-z-]/g, '');
             const label = l.label ? \`<span class="chip-label">"\${esc(l.label)}"</span>\` : '';
             const name = cm.title || cm.key || (cm.content || '').slice(0, 40) + '…';
+            const arrow = l.direction === 'from' ? '→' : '←';
             return \`<span class="connection-chip" data-conn-id="\${esc(cm.id)}">
               <span class="chip-type">[\${esc(cm.type)}]</span>
               \${esc(name)}
+              <span class="chip-relation \${esc(relationClass)}">\${esc(relationLabel)}</span>
               \${label}
-              <span style="opacity:0.4">→</span>
+              <span style="opacity:0.4">\${arrow}</span>
             </span>\`;
           }).join('')}
         </div>\`;
@@ -1762,16 +2151,23 @@ function viewerHtml(): string {
     }
   }
 
-  function updateGraphLegend(nodesCount, explicitCount, inferredVisibleCount, inferredTotal) {
+  function updateGraphLegend(nodesCount, explicitCount, inferredVisibleCount, inferredTotal, relationCounts = {}) {
     const legend = document.getElementById('graph-legend');
     if (!legend) return;
     const inferredText = graphShowInferred
       ? \`INFERRED \${inferredVisibleCount}/\${inferredTotal}\`
       : \`INFERRED OFF (\${inferredTotal} AVAIL)\`;
+    const relationPriority = ['contradicts', 'supports', 'supersedes', 'causes', 'example_of'];
+    const relationText = relationPriority
+      .filter((key) => relationCounts[key] > 0)
+      .slice(0, 2)
+      .map((key) => \`\${key.toUpperCase().replace('_', ' ')} \${relationCounts[key]}\`)
+      .join(' · ');
     legend.innerHTML = \`
       <span class="graph-legend-item">NODES \${nodesCount}</span>
       <span class="graph-legend-item">LINKS \${explicitCount}</span>
       <span class="graph-legend-item">\${inferredText}</span>
+      \${relationText ? \`<span class="graph-legend-item">\${relationText}</span>\` : ''}
     \`;
   }
 
@@ -1862,7 +2258,7 @@ function viewerHtml(): string {
     const typeColor = { note: '#00c8b4', fact: '#f0a500', journal: '#8888ff' };
 
     const nodeMap = new Map(nodes.map(n => [n.id, n]));
-    const explicitLinks = edges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'explicit' }))
+    const explicitLinks = edges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'explicit', relation_type: (e.relation_type || 'related') }))
       .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target));
     const inferredLinks = graphShowInferred
       ? inferredEdges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'inferred' }))
@@ -1884,7 +2280,12 @@ function viewerHtml(): string {
 
     const svg = d3.select('#graph-svg');
     graphSvgSelection = svg;
-    updateGraphLegend(nodes.length, explicitLinks.length, inferredLinks.length, inferredEdges.length);
+    const relationCounts = {};
+    explicitLinks.forEach((edge) => {
+      const key = String(edge.relation_type || 'related');
+      relationCounts[key] = (relationCounts[key] || 0) + 1;
+    });
+    updateGraphLegend(nodes.length, explicitLinks.length, inferredLinks.length, inferredEdges.length, relationCounts);
     const g = svg.append('g');
 
     const zoom = d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
@@ -1894,12 +2295,21 @@ function viewerHtml(): string {
     svg.call(zoom);
 
     const link = g.append('g').selectAll('line')
-      .data(links).join('line').attr('class', d => \`graph-link \${d.kind}\`);
+      .data(links).join('line').attr('class', d => {
+        if (d.kind !== 'explicit') return 'graph-link inferred';
+        const relationClass = String(d.relation_type || 'related').replace(/_/g, '-').replace(/[^a-z-]/g, '').toLowerCase();
+        return \`graph-link explicit relation-\${relationClass}\`;
+      });
 
     const linkLabel = g.append('g').selectAll('text')
       .data(links).join('text').attr('class', 'graph-link-label')
       .style('display', graphShowLabels ? null : 'none')
-      .text(d => d.kind === 'explicit' ? (d.label || '') : '');
+      .text(d => {
+        if (d.kind !== 'explicit') return '';
+        if (d.label) return d.label;
+        if (d.relation_type && d.relation_type !== 'related') return String(d.relation_type).replace('_', ' ');
+        return '';
+      });
 
     const node = g.append('g').selectAll('g')
       .data(nodes).join('g').attr('class', 'graph-node')
@@ -1960,6 +2370,8 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS_HEADERS });
     }
+
+    await ensureSchema(env);
 
     if (url.pathname === '/') {
       return jsonResponse({ name: SERVER_NAME, version: SERVER_VERSION, status: 'ok', tools: TOOLS.length });
