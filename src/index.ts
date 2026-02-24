@@ -1146,7 +1146,8 @@ function viewerHtml(): string {
   .connection-chip:hover { border-color: var(--amber); color: var(--amber); }
   .connection-chip .chip-type { font-size: 0.55rem; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.6; }
   .connection-chip .chip-label { font-size: 0.6rem; color: var(--text-dim); font-style: italic; }
-  .graph-node circle { stroke-width: 2px; cursor: pointer; }
+  .graph-node circle { stroke-width: 2px; cursor: pointer; transition: r 0.15s; }
+  .graph-node circle:hover { r: 10; }
   .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; }
   .graph-link { stroke: var(--border-bright); stroke-width: 1.5px; }
   .graph-link-label { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); pointer-events: none; }
@@ -1475,6 +1476,8 @@ function viewerHtml(): string {
     document.getElementById('stat-graph').classList.add('active');
     document.querySelector('.grid-wrap').style.display = 'none';
     document.getElementById('graph-view').style.display = 'block';
+    const emptyEl = document.getElementById('graph-empty');
+    if (emptyEl) emptyEl.style.display = 'none';
 
     const svg = document.getElementById('graph-svg');
     svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--amber);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">LOADING GRAPH...</text>';
@@ -1492,10 +1495,11 @@ function viewerHtml(): string {
 
   function renderGraph(nodes, edges) {
     const svgEl = document.getElementById('graph-svg');
+    const emptyEl = document.getElementById('graph-empty');
     svgEl.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = 'none';
 
     if (!nodes.length) {
-      const emptyEl = document.getElementById('graph-empty');
       if (emptyEl) { emptyEl.style.display = 'flex'; }
       return;
     }
