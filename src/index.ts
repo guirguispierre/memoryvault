@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.2.1';
+const SERVER_VERSION = '1.2.2';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -983,12 +983,13 @@ async function handleApiGraph(env: Env): Promise<Response> {
     }
   }
 
-  const inferredByPair = new Map<string, { from_id: string; to_id: string; tags: Set<string> }>();
+  const inferredByPair = new Map<string, { from_id: string; to_id: string; tags: Set<string>; score: number }>();
   for (const [tag, idsRaw] of tagToIds) {
     const ids = Array.from(new Set(idsRaw));
     if (ids.length < 2) continue;
     // Guard against explosive pair counts for broad tags.
-    const limited = ids.slice(0, 40);
+    const limited = ids.slice(0, 28);
+    const tagWeight = 1 / Math.sqrt(limited.length);
     for (let i = 0; i < limited.length; i++) {
       for (let j = i + 1; j < limited.length; j++) {
         const a = limited[i];
@@ -999,8 +1000,9 @@ async function handleApiGraph(env: Env): Promise<Response> {
         const existing = inferredByPair.get(key);
         if (existing) {
           existing.tags.add(tag);
+          existing.score += tagWeight;
         } else {
-          inferredByPair.set(key, { from_id, to_id, tags: new Set([tag]) });
+          inferredByPair.set(key, { from_id, to_id, tags: new Set([tag]), score: tagWeight });
         }
       }
     }
@@ -1014,12 +1016,13 @@ async function handleApiGraph(env: Env): Promise<Response> {
     })
   );
 
-  const inferredEdges = Array.from(inferredByPair.entries())
+  const inferredCandidates = Array.from(inferredByPair.entries())
     .filter(([pair]) => !explicitPairs.has(pair))
     .map(([pair, v]) => {
       const tags = Array.from(v.tags).sort();
       const preview = tags.slice(0, 3);
       const suffix = tags.length > 3 ? ` +${tags.length - 3}` : '';
+      const score = Number(v.score.toFixed(3));
       return {
         id: `inf-${pair.replace('|', '-')}`,
         from_id: v.from_id,
@@ -1027,11 +1030,40 @@ async function handleApiGraph(env: Env): Promise<Response> {
         label: `shared: ${preview.join(', ')}${suffix}`,
         tags,
         strength: tags.length,
+        score,
         inferred: true,
       };
     })
-    .sort((a, b) => b.strength - a.strength)
-    .slice(0, 600);
+    // Keep only meaningful suggestions from shared context.
+    .filter((e) => e.strength >= 2 || e.score >= 0.85)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.strength - a.strength;
+    });
+
+  // Greedy sparsification to prevent inferred hubs from collapsing the graph.
+  const inferredEdges: Array<{
+    id: string;
+    from_id: string;
+    to_id: string;
+    label: string;
+    tags: string[];
+    strength: number;
+    score: number;
+    inferred: boolean;
+  }> = [];
+  const inferredDegreeByNode = new Map<string, number>();
+  const inferredMax = 360;
+  const inferredPerNodeCap = 7;
+  for (const edge of inferredCandidates) {
+    if (inferredEdges.length >= inferredMax) break;
+    const fromDeg = inferredDegreeByNode.get(edge.from_id) ?? 0;
+    const toDeg = inferredDegreeByNode.get(edge.to_id) ?? 0;
+    if (fromDeg >= inferredPerNodeCap || toDeg >= inferredPerNodeCap) continue;
+    inferredEdges.push(edge);
+    inferredDegreeByNode.set(edge.from_id, fromDeg + 1);
+    inferredDegreeByNode.set(edge.to_id, toDeg + 1);
+  }
 
   return new Response(JSON.stringify({ nodes, edges: explicitEdges, inferred_edges: inferredEdges }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -2406,10 +2438,37 @@ function viewerHtml(): string {
       })
       .filter((e) => nodeMap.has(e.source) && nodeMap.has(e.target))
       .filter((e) => graphRelationFilter.has(e.relation_type));
-    const inferredLinks = graphShowInferred
-      ? inferredEdges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'inferred' }))
-        .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target))
+    const inferredCandidates = graphShowInferred
+      ? inferredEdges
+        .map((e) => ({
+          ...e,
+          source: e.from_id,
+          target: e.to_id,
+          kind: 'inferred',
+          score: Number.isFinite(Number(e.score)) ? Number(e.score) : 0,
+          strength: Number.isFinite(Number(e.strength)) ? Number(e.strength) : 1,
+        }))
+        .filter((e) => nodeMap.has(e.source) && nodeMap.has(e.target))
       : [];
+
+    inferredCandidates.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.strength - a.strength;
+    });
+    const inferredPerNodeLimit = isMobile ? 3 : 5;
+    const inferredMaxVisible = isMobile ? 120 : 220;
+    const inferredNodeDegree = new Map();
+    const inferredLinks = [];
+    for (const edge of inferredCandidates) {
+      if (inferredLinks.length >= inferredMaxVisible) break;
+      if (edge.strength < 2 && edge.score < 0.85) continue;
+      const fromDeg = inferredNodeDegree.get(edge.source) || 0;
+      const toDeg = inferredNodeDegree.get(edge.target) || 0;
+      if (fromDeg >= inferredPerNodeLimit || toDeg >= inferredPerNodeLimit) continue;
+      inferredLinks.push(edge);
+      inferredNodeDegree.set(edge.source, fromDeg + 1);
+      inferredNodeDegree.set(edge.target, toDeg + 1);
+    }
     const links = [...explicitLinks, ...inferredLinks];
 
     const normalizedSearch = graphSearchQuery.trim().toLowerCase();
@@ -2435,12 +2494,21 @@ function viewerHtml(): string {
       degreeById.set(l.target, (degreeById.get(l.target) || 0) + 1);
     });
 
+    const inferredHeavy = inferredLinks.length > explicitLinks.length;
     const simulation = d3.forceSimulation(nodes)
       .force('link', d3.forceLink(links).id(d => d.id).distance((d) => {
-        if (d.kind === 'inferred') return isMobile ? 74 : 90;
+        if (d.kind === 'inferred') {
+          const score = Math.min(Math.max(Number(d.score) || 0, 0), 1);
+          const minDist = isMobile ? 92 : 116;
+          const maxDist = isMobile ? 130 : 168;
+          return maxDist - score * (maxDist - minDist);
+        }
         return relationDistance[d.relation_type] ?? (isMobile ? 96 : 120);
       }).strength((d) => {
-        if (d.kind === 'inferred') return 0.16;
+        if (d.kind === 'inferred') {
+          const score = Math.min(Math.max(Number(d.score) || 0, 0), 1);
+          return 0.018 + (score * 0.03);
+        }
         if (d.relation_type === 'supports') return 0.5;
         if (d.relation_type === 'contradicts') return 0.35;
         if (d.relation_type === 'supersedes') return 0.55;
@@ -2448,7 +2516,7 @@ function viewerHtml(): string {
         if (d.relation_type === 'example_of') return 0.42;
         return 0.4;
       }))
-      .force('charge', d3.forceManyBody().strength(isMobile ? -220 : -300))
+      .force('charge', d3.forceManyBody().strength(isMobile ? (inferredHeavy ? -300 : -220) : (inferredHeavy ? -420 : -300)))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('x', d3.forceX((d) => {
         if (isMobile) return width / 2;
@@ -2456,7 +2524,7 @@ function viewerHtml(): string {
         return (width / 4) * lane;
       }).strength(isMobile ? 0.01 : 0.035))
       .force('y', d3.forceY(height / 2).strength(isMobile ? 0.01 : 0.03))
-      .force('collision', d3.forceCollide(isMobile ? 24 : 30));
+      .force('collision', d3.forceCollide(isMobile ? (inferredHeavy ? 27 : 24) : (inferredHeavy ? 34 : 30)));
 
     const svg = d3.select('#graph-svg');
     graphSvgSelection = svg;
@@ -2522,6 +2590,11 @@ function viewerHtml(): string {
         if (d.kind !== 'explicit') return null;
         const relationClass = String(d.relation_type || 'related').replace(/_/g, '-').replace(/[^a-z-]/g, '').toLowerCase();
         return \`url(#arrow-\${relationClass})\`;
+      })
+      .attr('stroke-width', (d) => {
+        if (d.kind !== 'inferred') return 1.5;
+        const score = Math.min(Math.max(Number(d.score) || 0, 0), 1);
+        return 0.8 + score * 0.7;
       })
       .attr('stroke-opacity', linkOpacity);
 
