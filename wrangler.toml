@@ -6,4 +6,4 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "ai-memory"
-database_id = "PLACEHOLDER"
+database_id = "f881cdf0-9109-45a8-863f-65942a81a7bf"
