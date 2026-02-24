@@ -957,7 +957,7 @@ async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
 
 async function handleApiGraph(env: Env): Promise<Response> {
   const memories = await env.DB.prepare(
-    'SELECT id, type, title, key, tags, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 1000'
+    'SELECT id, type, title, key, content, tags, source, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 1000'
   ).all();
   const links = await env.DB.prepare(
     'SELECT ml.id, ml.from_id, ml.to_id, ml.label, ml.relation_type FROM memory_links ml JOIN memories m1 ON m1.id = ml.from_id AND m1.archived_at IS NULL JOIN memories m2 ON m2.id = ml.to_id AND m2.archived_at IS NULL LIMIT 5000'
@@ -1454,17 +1454,41 @@ function viewerHtml(): string {
   }
   .card-footer {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     margin-top: 1rem;
     padding-top: 0.75rem;
     border-top: 1px solid var(--border);
+    gap: 0.6rem;
+  }
+  .card-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 0;
   }
   .card-tags {
     display: flex;
     flex-wrap: wrap;
     gap: 0.3rem;
   }
+  .card-quality {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .quality-chip {
+    font-size: 0.52rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    background: rgba(8, 12, 16, 0.7);
+    padding: 0.12rem 0.34rem;
+  }
+  .quality-chip.conf { border-color: #66a9ff; color: #66a9ff; }
+  .quality-chip.imp { border-color: var(--amber); color: var(--amber); }
+  .quality-chip.src { border-color: var(--teal); color: var(--teal); }
   .tag {
     font-size: 0.55rem;
     letter-spacing: 0.12em;
@@ -1618,6 +1642,30 @@ function viewerHtml(): string {
   .graph-link.explicit.relation-example-of { stroke: #66a9ff; }
   .graph-link.inferred { stroke: var(--teal); opacity: 0.4; stroke-dasharray: 4 4; }
   .graph-link-label { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); pointer-events: none; }
+  .graph-toolbar-row {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    width: 100%;
+  }
+  .graph-search-input {
+    min-width: 150px;
+    background: rgba(8, 12, 16, 0.9);
+    border: 1px solid var(--border-bright);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    padding: 0.35rem 0.5rem;
+    min-height: 30px;
+    outline: none;
+  }
+  .graph-search-input:focus { border-color: var(--teal); }
+  .graph-search-input::placeholder { color: var(--text-dim); }
+  .graph-btn.relation { border-color: var(--border); color: var(--text-dim); }
+  .graph-btn.relation.active { border-color: var(--amber); color: var(--amber); }
+  .graph-btn.relation.off { opacity: 0.55; }
   .graph-toolbar {
     position: absolute;
     top: 0.75rem;
@@ -1625,9 +1673,9 @@ function viewerHtml(): string {
     z-index: 8;
     display: flex;
     gap: 0.4rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-end;
     max-width: calc(100% - 1.5rem);
-    justify-content: flex-end;
   }
   .graph-btn {
     border: 1px solid var(--border-bright);
@@ -1738,9 +1786,11 @@ function viewerHtml(): string {
       left: 0.45rem;
       right: 0.45rem;
       max-width: none;
-      justify-content: flex-start;
-      gap: 0.3rem;
+      gap: 0.25rem;
+      align-items: stretch;
     }
+    .graph-toolbar-row { justify-content: flex-start; }
+    .graph-search-input { width: 100%; min-height: 28px; }
     .graph-btn { font-size: 0.52rem; letter-spacing: 0.08em; padding: 0.3rem 0.42rem; min-height: 28px; }
     .graph-legend {
       left: 0.45rem;
@@ -1861,9 +1911,22 @@ function viewerHtml(): string {
 
   <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--bg);min-height:600px">
     <div class="graph-toolbar">
-      <button class="graph-btn active" id="graph-toggle-inferred" onclick="toggleGraphInferred()">INFERRED ON</button>
-      <button class="graph-btn active" id="graph-toggle-labels" onclick="toggleGraphLabels()">LABELS ON</button>
-      <button class="graph-btn" onclick="resetGraphView()">RESET VIEW</button>
+      <div class="graph-toolbar-row">
+        <input type="text" class="graph-search-input" id="graph-search-input" placeholder="Search graph..." inputmode="search" oninput="onGraphSearch(this.value)">
+      </div>
+      <div class="graph-toolbar-row">
+        <button class="graph-btn active" id="graph-toggle-inferred" onclick="toggleGraphInferred()">INFERRED ON</button>
+        <button class="graph-btn active" id="graph-toggle-labels" onclick="toggleGraphLabels()">LABELS ON</button>
+        <button class="graph-btn" onclick="resetGraphView()">RESET VIEW</button>
+      </div>
+      <div class="graph-toolbar-row">
+        <button class="graph-btn relation active" id="graph-rel-related" onclick="toggleGraphRelation('related')">RELATED</button>
+        <button class="graph-btn relation active" id="graph-rel-supports" onclick="toggleGraphRelation('supports')">SUPPORTS</button>
+        <button class="graph-btn relation active" id="graph-rel-contradicts" onclick="toggleGraphRelation('contradicts')">CONTRA</button>
+        <button class="graph-btn relation active" id="graph-rel-supersedes" onclick="toggleGraphRelation('supersedes')">SUPER</button>
+        <button class="graph-btn relation active" id="graph-rel-causes" onclick="toggleGraphRelation('causes')">CAUSES</button>
+        <button class="graph-btn relation active" id="graph-rel-example_of" onclick="toggleGraphRelation('example_of')">EXAMPLE</button>
+      </div>
     </div>
     <div class="graph-legend" id="graph-legend"></div>
     <svg id="graph-svg" style="width:100%;height:100%;min-height:600px"></svg>
@@ -1892,6 +1955,15 @@ function viewerHtml(): string {
 
 <script>
   const BASE = location.origin;
+  const GRAPH_RELATION_TYPES = ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'];
+  const GRAPH_RELATION_COLOR = {
+    related: '#2a4060',
+    supports: '#2eca75',
+    contradicts: '#e05050',
+    supersedes: '#f0a500',
+    causes: '#ff9e4f',
+    example_of: '#66a9ff',
+  };
   let TOKEN = '';
   let activeFilter = '';
   let searchTimeout = null;
@@ -1905,6 +1977,8 @@ function viewerHtml(): string {
   let graphSvgSelection = null;
   let graphZoomBehavior = null;
   let graphAutoTunedLabels = false;
+  let graphSearchQuery = '';
+  let graphRelationFilter = new Set(GRAPH_RELATION_TYPES);
 
   function doLogin() {
     const val = document.getElementById('token-input').value.trim();
@@ -1956,7 +2030,7 @@ function viewerHtml(): string {
       if (!r.ok) { doLogout(); return; }
       const data = await r.json();
       allMemories = data.memories || [];
-      updateStats(data.stats || []);
+      updateStats(data.stats || [], allMemories);
       renderGrid(allMemories);
       if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
@@ -1964,7 +2038,7 @@ function viewerHtml(): string {
     }
   }
 
-  function updateStats(stats) {
+  function updateStats(stats, memories = []) {
     const counts = { note: 0, fact: 0, journal: 0 };
     let total = 0;
     stats.forEach(s => { counts[s.type] = s.count; total += s.count; });
@@ -1972,7 +2046,15 @@ function viewerHtml(): string {
     document.getElementById('count-note').textContent = counts.note;
     document.getElementById('count-fact').textContent = counts.fact;
     document.getElementById('count-journal').textContent = counts.journal;
-    document.getElementById('hdr-count').textContent = total + ' entries';
+    const confidenceValues = memories
+      .map((m) => Number(m.confidence))
+      .filter((v) => Number.isFinite(v));
+    const avgConfidence = confidenceValues.length
+      ? Math.round((confidenceValues.reduce((a, b) => a + b, 0) / confidenceValues.length) * 100)
+      : null;
+    document.getElementById('hdr-count').textContent = avgConfidence === null
+      ? (total + ' entries')
+      : (total + ' entries · avg conf ' + avgConfidence + '%');
   }
 
   function renderGrid(memories) {
@@ -1987,6 +2069,18 @@ function viewerHtml(): string {
       const linkBadge = m.link_count > 0 ? \`<span class="card-links-badge">⬡ \${m.link_count} connections</span>\` : '';
       const titleHtml = m.title ? \`<div class="card-title">\${esc(m.title)}</div>\` : '';
       const keyHtml = m.key ? \`<div class="card-key"><span>KEY /</span> \${esc(m.key)}</div>\` : '';
+      const confidenceNum = Number(m.confidence);
+      const importanceNum = Number(m.importance);
+      const confidencePct = Number.isFinite(confidenceNum) ? Math.round(Math.min(Math.max(confidenceNum, 0), 1) * 100) : null;
+      const importancePct = Number.isFinite(importanceNum) ? Math.round(Math.min(Math.max(importanceNum, 0), 1) * 100) : null;
+      const sourceLabel = m.source ? String(m.source).trim() : '';
+      const sourceDisplay = sourceLabel.length > 18 ? (sourceLabel.slice(0, 17) + '…') : sourceLabel;
+      const sourceChip = sourceDisplay ? \`<span class="quality-chip src">SRC \${esc(sourceDisplay)}</span>\` : '';
+      const confChip = confidencePct === null ? '' : \`<span class="quality-chip conf">CONF \${confidencePct}%</span>\`;
+      const impChip = importancePct === null ? '' : \`<span class="quality-chip imp">IMP \${importancePct}%</span>\`;
+      const qualityChips = sourceChip || confChip || impChip
+        ? \`<div class="card-quality">\${sourceChip}\${confChip}\${impChip}</div>\`
+        : '';
       return \`<div class="card" data-type="\${m.type}" data-idx="\${i}" onclick="expandCard(\${i})" style="animation-delay:\${Math.min(i*0.04,0.4)}s">
         <div class="card-type-stripe"></div>
         <div class="card-header">
@@ -1995,7 +2089,10 @@ function viewerHtml(): string {
         </div>
         <div class="card-content">\${esc(m.content)}</div>
         <div class="card-footer">
-          <div class="card-tags">\${tags}\${linkBadge}</div>
+          <div class="card-meta">
+            <div class="card-tags">\${tags}\${linkBadge}</div>
+            \${qualityChips}
+          </div>
           <div class="card-date">\${date}</div>
         </div>
         <div class="card-id">\${m.id}</div>
@@ -2149,9 +2246,33 @@ function viewerHtml(): string {
       labelsBtn.classList.toggle('active', graphShowLabels);
       labelsBtn.textContent = graphShowLabels ? 'LABELS ON' : 'LABELS OFF';
     }
+    GRAPH_RELATION_TYPES.forEach((relation) => {
+      const btn = document.getElementById('graph-rel-' + relation);
+      if (!btn) return;
+      const active = graphRelationFilter.has(relation);
+      btn.classList.toggle('active', active);
+      btn.classList.toggle('off', !active);
+    });
   }
 
-  function updateGraphLegend(nodesCount, explicitCount, inferredVisibleCount, inferredTotal, relationCounts = {}) {
+  function onGraphSearch(value) {
+    graphSearchQuery = String(value || '').trim().toLowerCase();
+    if (graphVisible) rerenderGraphFromCache();
+  }
+
+  function toggleGraphRelation(relation) {
+    if (!GRAPH_RELATION_TYPES.includes(relation)) return;
+    if (graphRelationFilter.has(relation)) {
+      if (graphRelationFilter.size === 1) return;
+      graphRelationFilter.delete(relation);
+    } else {
+      graphRelationFilter.add(relation);
+    }
+    syncGraphToolbarState();
+    if (graphVisible) rerenderGraphFromCache();
+  }
+
+  function updateGraphLegend(nodesCount, explicitCount, inferredVisibleCount, inferredTotal, relationCounts = {}, avgConfidence = null, avgImportance = null, matchCount = null) {
     const legend = document.getElementById('graph-legend');
     if (!legend) return;
     const inferredText = graphShowInferred
@@ -2163,11 +2284,17 @@ function viewerHtml(): string {
       .slice(0, 2)
       .map((key) => \`\${key.toUpperCase().replace('_', ' ')} \${relationCounts[key]}\`)
       .join(' · ');
+    const avgConfText = avgConfidence === null ? '' : \`<span class="graph-legend-item">AVG CONF \${Math.round(avgConfidence * 100)}%</span>\`;
+    const avgImpText = avgImportance === null ? '' : \`<span class="graph-legend-item">AVG IMP \${Math.round(avgImportance * 100)}%</span>\`;
+    const matchText = matchCount === null ? '' : \`<span class="graph-legend-item">MATCH \${matchCount}</span>\`;
     legend.innerHTML = \`
       <span class="graph-legend-item">NODES \${nodesCount}</span>
       <span class="graph-legend-item">LINKS \${explicitCount}</span>
       <span class="graph-legend-item">\${inferredText}</span>
       \${relationText ? \`<span class="graph-legend-item">\${relationText}</span>\` : ''}
+      \${avgConfText}
+      \${avgImpText}
+      \${matchText}
     \`;
   }
 
@@ -2199,6 +2326,12 @@ function viewerHtml(): string {
   function resetGraphView() {
     if (!graphSvgSelection || !graphZoomBehavior) return;
     graphSvgSelection.transition().duration(220).call(graphZoomBehavior.transform, d3.zoomIdentity);
+    graphRelationFilter = new Set(GRAPH_RELATION_TYPES);
+    graphSearchQuery = '';
+    const searchInput = document.getElementById('graph-search-input');
+    if (searchInput) searchInput.value = '';
+    syncGraphToolbarState();
+    rerenderGraphFromCache();
   }
 
   async function showGraph() {
@@ -2256,15 +2389,45 @@ function viewerHtml(): string {
     const height = svgEl.clientHeight || 600;
     const isMobile = window.matchMedia('(max-width: 640px)').matches;
     const typeColor = { note: '#00c8b4', fact: '#f0a500', journal: '#8888ff' };
+    const relationDistance = {
+      related: isMobile ? 88 : 112,
+      supports: isMobile ? 94 : 118,
+      contradicts: isMobile ? 106 : 132,
+      supersedes: isMobile ? 96 : 120,
+      causes: isMobile ? 100 : 126,
+      example_of: isMobile ? 90 : 114,
+    };
 
     const nodeMap = new Map(nodes.map(n => [n.id, n]));
-    const explicitLinks = edges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'explicit', relation_type: (e.relation_type || 'related') }))
-      .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target));
+    const explicitLinks = edges
+      .map((e) => {
+        const relation = String(e.relation_type || 'related').toLowerCase();
+        return { ...e, source: e.from_id, target: e.to_id, kind: 'explicit', relation_type: relation };
+      })
+      .filter((e) => nodeMap.has(e.source) && nodeMap.has(e.target))
+      .filter((e) => graphRelationFilter.has(e.relation_type));
     const inferredLinks = graphShowInferred
       ? inferredEdges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'inferred' }))
         .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target))
       : [];
     const links = [...explicitLinks, ...inferredLinks];
+
+    const normalizedSearch = graphSearchQuery.trim().toLowerCase();
+    const matchingNodeIds = new Set();
+    if (normalizedSearch) {
+      nodes.forEach((n) => {
+        const haystack = [
+          n.title || '',
+          n.key || '',
+          n.content || '',
+          n.tags || '',
+          n.source || '',
+        ].join(' ').toLowerCase();
+        if (haystack.includes(normalizedSearch)) matchingNodeIds.add(n.id);
+      });
+    }
+    const hasSearch = normalizedSearch.length > 0;
+    const isNodeVisible = (id) => !hasSearch || matchingNodeIds.has(id);
 
     const degreeById = new Map();
     links.forEach((l) => {
@@ -2273,19 +2436,65 @@ function viewerHtml(): string {
     });
 
     const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id(d => d.id).distance((d) => d.kind === 'inferred' ? (isMobile ? 74 : 90) : (isMobile ? 96 : 120)).strength((d) => d.kind === 'inferred' ? 0.15 : 0.45))
+      .force('link', d3.forceLink(links).id(d => d.id).distance((d) => {
+        if (d.kind === 'inferred') return isMobile ? 74 : 90;
+        return relationDistance[d.relation_type] ?? (isMobile ? 96 : 120);
+      }).strength((d) => {
+        if (d.kind === 'inferred') return 0.16;
+        if (d.relation_type === 'supports') return 0.5;
+        if (d.relation_type === 'contradicts') return 0.35;
+        if (d.relation_type === 'supersedes') return 0.55;
+        if (d.relation_type === 'causes') return 0.45;
+        if (d.relation_type === 'example_of') return 0.42;
+        return 0.4;
+      }))
       .force('charge', d3.forceManyBody().strength(isMobile ? -220 : -300))
       .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('x', d3.forceX((d) => {
+        if (isMobile) return width / 2;
+        const lane = d.type === 'note' ? 1 : (d.type === 'fact' ? 2 : 3);
+        return (width / 4) * lane;
+      }).strength(isMobile ? 0.01 : 0.035))
+      .force('y', d3.forceY(height / 2).strength(isMobile ? 0.01 : 0.03))
       .force('collision', d3.forceCollide(isMobile ? 24 : 30));
 
     const svg = d3.select('#graph-svg');
     graphSvgSelection = svg;
+    const defs = svg.append('defs');
+    Object.entries(GRAPH_RELATION_COLOR).forEach(([relation, color]) => {
+      const markerId = 'arrow-' + relation.replace(/_/g, '-');
+      defs.append('marker')
+        .attr('id', markerId)
+        .attr('viewBox', '0 0 10 10')
+        .attr('refX', 13)
+        .attr('refY', 5)
+        .attr('markerWidth', 7)
+        .attr('markerHeight', 7)
+        .attr('orient', 'auto-start-reverse')
+        .append('path')
+        .attr('d', 'M 0 0 L 10 5 L 0 10 z')
+        .attr('fill', color);
+    });
+
     const relationCounts = {};
     explicitLinks.forEach((edge) => {
       const key = String(edge.relation_type || 'related');
       relationCounts[key] = (relationCounts[key] || 0) + 1;
     });
-    updateGraphLegend(nodes.length, explicitLinks.length, inferredLinks.length, inferredEdges.length, relationCounts);
+    const confidenceVals = nodes.map((n) => Number(n.confidence)).filter((n) => Number.isFinite(n));
+    const importanceVals = nodes.map((n) => Number(n.importance)).filter((n) => Number.isFinite(n));
+    const avgConfidence = confidenceVals.length ? confidenceVals.reduce((a, b) => a + b, 0) / confidenceVals.length : null;
+    const avgImportance = importanceVals.length ? importanceVals.reduce((a, b) => a + b, 0) / importanceVals.length : null;
+    updateGraphLegend(
+      nodes.length,
+      explicitLinks.length,
+      inferredLinks.length,
+      inferredEdges.length,
+      relationCounts,
+      avgConfidence,
+      avgImportance,
+      hasSearch ? matchingNodeIds.size : null
+    );
     const g = svg.append('g');
 
     const zoom = d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
@@ -2294,16 +2503,32 @@ function viewerHtml(): string {
     graphZoomBehavior = zoom;
     svg.call(zoom);
 
+    const getEndpointId = (endpoint) => (typeof endpoint === 'string' ? endpoint : (endpoint && endpoint.id ? endpoint.id : ''));
+    const linkOpacity = (d) => {
+      if (!hasSearch) return d.kind === 'inferred' ? 0.4 : 0.9;
+      const sId = getEndpointId(d.source);
+      const tId = getEndpointId(d.target);
+      const match = matchingNodeIds.has(sId) || matchingNodeIds.has(tId);
+      return match ? (d.kind === 'inferred' ? 0.55 : 1) : 0.06;
+    };
+
     const link = g.append('g').selectAll('line')
       .data(links).join('line').attr('class', d => {
         if (d.kind !== 'explicit') return 'graph-link inferred';
         const relationClass = String(d.relation_type || 'related').replace(/_/g, '-').replace(/[^a-z-]/g, '').toLowerCase();
         return \`graph-link explicit relation-\${relationClass}\`;
-      });
+      })
+      .attr('marker-end', (d) => {
+        if (d.kind !== 'explicit') return null;
+        const relationClass = String(d.relation_type || 'related').replace(/_/g, '-').replace(/[^a-z-]/g, '').toLowerCase();
+        return \`url(#arrow-\${relationClass})\`;
+      })
+      .attr('stroke-opacity', linkOpacity);
 
     const linkLabel = g.append('g').selectAll('text')
       .data(links).join('text').attr('class', 'graph-link-label')
       .style('display', graphShowLabels ? null : 'none')
+      .style('opacity', (d) => linkOpacity(d) >= 0.5 ? 1 : 0)
       .text(d => {
         if (d.kind !== 'explicit') return '';
         if (d.label) return d.label;
@@ -2324,16 +2549,36 @@ function viewerHtml(): string {
       .attr('r', d => {
         const degree = degreeById.get(d.id) || 0;
         const base = isMobile ? 8 : 6;
-        const maxR = isMobile ? 14 : 12;
-        return Math.min(maxR, base + degree * 0.45);
+        const maxR = isMobile ? 17 : 15;
+        const importance = Math.min(Math.max(Number.isFinite(Number(d.importance)) ? Number(d.importance) : 0.5, 0), 1);
+        return Math.min(maxR, base + degree * 0.4 + importance * (isMobile ? 4.2 : 3.6));
       })
       .attr('fill', d => typeColor[d.type] || '#888')
-      .attr('fill-opacity', 0.85)
-      .attr('stroke', d => typeColor[d.type] || '#888');
+      .attr('fill-opacity', (d) => {
+        const confidence = Math.min(Math.max(Number.isFinite(Number(d.confidence)) ? Number(d.confidence) : 0.7, 0), 1);
+        const visible = isNodeVisible(d.id);
+        const baseOpacity = 0.42 + confidence * 0.5;
+        return visible ? baseOpacity : Math.max(0.08, baseOpacity * 0.25);
+      })
+      .attr('stroke', d => typeColor[d.type] || '#888')
+      .attr('stroke-opacity', (d) => isNodeVisible(d.id) ? 1 : 0.2)
+      .attr('stroke-width', (d) => {
+        const importance = Math.min(Math.max(Number.isFinite(Number(d.importance)) ? Number(d.importance) : 0.5, 0), 1);
+        return 1.4 + importance * 1.6;
+      });
 
     node.append('text')
       .attr('dx', 12).attr('dy', 4)
+      .style('opacity', (d) => isNodeVisible(d.id) ? 1 : 0.2)
       .text(d => (d.title || d.key || d.content || '').slice(0, isMobile ? 18 : 24));
+
+    node.append('title').text((d) => {
+      const label = d.title || d.key || (d.content || '').slice(0, 70) || d.id;
+      const confidence = Math.round(Math.min(Math.max(Number(d.confidence) || 0.7, 0), 1) * 100);
+      const importance = Math.round(Math.min(Math.max(Number(d.importance) || 0.5, 0), 1) * 100);
+      const source = d.source ? \`\\nsource: \${d.source}\` : '';
+      return \`\${label}\\nconfidence: \${confidence}%\\nimportance: \${importance}%\${source}\`;
+    });
 
     simulation.on('tick', () => {
       link
