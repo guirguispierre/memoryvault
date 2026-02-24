@@ -380,6 +380,798 @@ async function handleMcp(request: Request, env: Env, url: URL): Promise<Response
   return jsonResponse({ error: 'Method not allowed' }, 405);
 }
 
+async function handleApiMemories(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const type = url.searchParams.get('type') ?? '';
+  const search = url.searchParams.get('search') ?? '';
+  const limitParam = parseInt(url.searchParams.get('limit') ?? '100', 10);
+  const limit = Math.min(Math.max(Number.isNaN(limitParam) ? 100 : limitParam, 1), 500);
+
+  let query = 'SELECT * FROM memories WHERE 1=1';
+  const params: unknown[] = [];
+  if (type && VALID_TYPES.includes(type as MemoryType)) {
+    query += ' AND type = ?'; params.push(type);
+  }
+  if (search) {
+    const like = `%${search}%`;
+    query += ' AND (content LIKE ? OR title LIKE ? OR key LIKE ?)';
+    params.push(like, like, like);
+  }
+  query += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const results = await env.DB.prepare(query).bind(...params).all();
+  const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories GROUP BY type').all();
+  return new Response(JSON.stringify({ memories: results.results, stats: stats.results }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+function viewerHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MEMORY VAULT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --bg2: #0d1219;
+    --bg3: #111820;
+    --border: #1e2d3d;
+    --border-bright: #2a4060;
+    --amber: #f0a500;
+    --amber-dim: #7a5200;
+    --amber-glow: rgba(240,165,0,0.12);
+    --teal: #00c8b4;
+    --red: #e05050;
+    --text: #c8d8e8;
+    --text-dim: #4a6070;
+    --text-bright: #e8f4ff;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── LOGIN SCREEN ── */
+  #login-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 2rem;
+    animation: fadeIn 0.6s ease;
+  }
+  .login-box {
+    width: 100%;
+    max-width: 420px;
+    border: 1px solid var(--border-bright);
+    background: var(--bg2);
+    padding: 3rem 2.5rem;
+    position: relative;
+  }
+  .login-box::before {
+    content: 'CLASSIFIED';
+    position: absolute;
+    top: -1px; left: 2rem;
+    background: var(--amber);
+    color: var(--bg);
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    padding: 0.2rem 0.6rem;
+  }
+  .login-box::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--amber), transparent);
+  }
+  .vault-logo {
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 2.2rem;
+    letter-spacing: -0.02em;
+    color: var(--text-bright);
+    margin-bottom: 0.3rem;
+  }
+  .vault-logo span { color: var(--amber); }
+  .vault-sub {
+    font-size: 0.68rem;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 2.5rem;
+  }
+  .field-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.18em;
+    color: var(--amber);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+  .token-input {
+    width: 100%;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--teal);
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    padding: 0.75rem 1rem;
+    outline: none;
+    transition: border-color 0.2s;
+    letter-spacing: 0.05em;
+  }
+  .token-input:focus { border-color: var(--amber); }
+  .token-input::placeholder { color: var(--text-dim); }
+  .login-btn {
+    width: 100%;
+    margin-top: 1.5rem;
+    background: var(--amber);
+    color: var(--bg);
+    border: none;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 0.9rem;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .login-btn:hover { background: #ffbc20; }
+  .login-btn:active { transform: scale(0.99); }
+  .login-error {
+    margin-top: 1rem;
+    font-size: 0.7rem;
+    color: var(--red);
+    letter-spacing: 0.1em;
+    display: none;
+  }
+
+  /* ── MAIN APP ── */
+  #app { display: none; flex-direction: column; min-height: 100vh; animation: fadeIn 0.4s ease; }
+
+  /* Header */
+  .hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .hdr-brand {
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 1.2rem;
+    letter-spacing: -0.02em;
+    color: var(--text-bright);
+  }
+  .hdr-brand span { color: var(--amber); }
+  .hdr-meta {
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    text-align: right;
+  }
+  .hdr-meta strong { color: var(--amber); }
+  .logout-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    padding: 0.35rem 0.8rem;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+    margin-left: 1.5rem;
+    text-transform: uppercase;
+  }
+  .logout-btn:hover { border-color: var(--red); color: var(--red); }
+
+  /* Stats bar */
+  .stats-bar {
+    display: flex;
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-pill {
+    flex: 1;
+    padding: 0.6rem 1.5rem;
+    background: var(--bg2);
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.15s;
+    position: relative;
+  }
+  .stat-pill:hover, .stat-pill.active { background: var(--bg3); }
+  .stat-pill.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--amber);
+  }
+  .stat-num {
+    font-family: var(--sans);
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--amber);
+    line-height: 1;
+  }
+  .stat-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-top: 0.2rem;
+  }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 0.75rem;
+    padding: 1rem 2rem;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .search-wrap {
+    flex: 1;
+    min-width: 200px;
+    position: relative;
+  }
+  .search-wrap::before {
+    content: '//';
+    position: absolute;
+    left: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--amber);
+    font-size: 0.75rem;
+    pointer-events: none;
+  }
+  .search-input {
+    width: 100%;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    padding: 0.55rem 0.75rem 0.55rem 2.2rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .search-input:focus { border-color: var(--amber); }
+  .search-input::placeholder { color: var(--text-dim); }
+  .filter-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    padding: 0.55rem 1rem;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .filter-btn:hover { border-color: var(--amber-dim); color: var(--text); }
+  .filter-btn.active { border-color: var(--amber); color: var(--amber); background: var(--amber-glow); }
+  .refresh-btn {
+    background: none;
+    border: 1px solid var(--border-bright);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    padding: 0.55rem 0.9rem;
+    cursor: pointer;
+    letter-spacing: 0.1em;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+  .refresh-btn:hover { color: var(--teal); border-color: var(--teal); }
+
+  /* Memory grid */
+  .grid-wrap {
+    flex: 1;
+    padding: 1.5rem 2rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    align-content: start;
+  }
+  .empty-state {
+    grid-column: 1/-1;
+    padding: 5rem 2rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+  .empty-state .empty-icon { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.3; }
+
+  /* Memory card */
+  .card {
+    background: var(--bg2);
+    padding: 1.25rem 1.5rem;
+    position: relative;
+    transition: background 0.15s;
+    animation: slideUp 0.3s ease backwards;
+    cursor: default;
+  }
+  .card:hover { background: var(--bg3); }
+  .card-type-stripe {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+  }
+  .card[data-type="note"] .card-type-stripe { background: var(--teal); }
+  .card[data-type="fact"] .card-type-stripe { background: var(--amber); }
+  .card[data-type="journal"] .card-type-stripe { background: #8888ff; }
+
+  .card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .card-type-badge {
+    font-size: 0.55rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid;
+    flex-shrink: 0;
+  }
+  .card[data-type="note"] .card-type-badge { border-color: var(--teal); color: var(--teal); }
+  .card[data-type="fact"] .card-type-badge { border-color: var(--amber); color: var(--amber); }
+  .card[data-type="journal"] .card-type-badge { border-color: #8888ff; color: #8888ff; }
+
+  .card-title {
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+    word-break: break-word;
+  }
+  .card-key {
+    font-size: 0.7rem;
+    color: var(--amber);
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
+  }
+  .card-key span { color: var(--text-dim); }
+  .card-content {
+    font-size: 0.78rem;
+    color: var(--text);
+    line-height: 1.65;
+    word-break: break-word;
+    white-space: pre-wrap;
+    max-height: 120px;
+    overflow: hidden;
+    position: relative;
+  }
+  .card-content::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 40px;
+    background: linear-gradient(transparent, var(--bg2));
+    pointer-events: none;
+  }
+  .card:hover .card-content::after {
+    background: linear-gradient(transparent, var(--bg3));
+  }
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+  }
+  .card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .tag {
+    font-size: 0.55rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 0.15rem 0.4rem;
+  }
+  .card-date {
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .card-id {
+    font-size: 0.55rem;
+    color: var(--text-dim);
+    opacity: 0.5;
+    letter-spacing: 0.04em;
+    margin-top: 0.3rem;
+  }
+
+  /* Expand overlay */
+  .expand-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(4,8,14,0.92);
+    z-index: 200;
+    padding: 2rem;
+    overflow-y: auto;
+    animation: fadeIn 0.2s ease;
+  }
+  .expand-overlay.open { display: flex; align-items: flex-start; justify-content: center; }
+  .expand-box {
+    width: 100%;
+    max-width: 680px;
+    background: var(--bg2);
+    border: 1px solid var(--border-bright);
+    padding: 2rem;
+    position: relative;
+    margin-top: 3rem;
+    animation: slideUp 0.25s ease;
+  }
+  .expand-close {
+    position: absolute;
+    top: 1rem; right: 1rem;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.1em;
+  }
+  .expand-close:hover { border-color: var(--red); color: var(--red); }
+  .expand-content {
+    font-size: 0.82rem;
+    color: var(--text);
+    line-height: 1.75;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-top: 1rem;
+  }
+
+  /* Loading */
+  .loading {
+    grid-column: 1/-1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem;
+    gap: 0.5rem;
+    color: var(--amber);
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+  }
+  .loading-dot {
+    width: 4px; height: 4px;
+    background: var(--amber);
+    border-radius: 50%;
+    animation: blink 1s infinite;
+  }
+  .loading-dot:nth-child(2) { animation-delay: 0.2s; }
+  .loading-dot:nth-child(3) { animation-delay: 0.4s; }
+
+  /* Footer */
+  .footer {
+    padding: 0.75rem 2rem;
+    border-top: 1px solid var(--border);
+    background: var(--bg2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .footer-text { font-size: 0.6rem; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; }
+  .cursor-blink {
+    display: inline-block;
+    width: 7px; height: 13px;
+    background: var(--amber);
+    margin-left: 3px;
+    vertical-align: middle;
+    animation: blink 1s infinite;
+  }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="vault-logo">MEMORY<span>VAULT</span></div>
+    <div class="vault-sub">Secure Access Required</div>
+    <div class="field-label">Access Token</div>
+    <input type="password" class="token-input" id="token-input" placeholder="Enter bearer token..." autocomplete="off" spellcheck="false">
+    <button class="login-btn" onclick="doLogin()">AUTHENTICATE →</button>
+    <div class="login-error" id="login-error">⚠ ACCESS DENIED — invalid token</div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header class="hdr">
+    <div class="hdr-brand">MEMORY<span>VAULT</span></div>
+    <div style="display:flex;align-items:center;gap:1rem">
+      <div class="hdr-meta">
+        <div id="hdr-count">— entries</div>
+        <div id="hdr-time"></div>
+      </div>
+      <button class="logout-btn" onclick="doLogout()">LOCK</button>
+    </div>
+  </header>
+
+  <div class="stats-bar">
+    <div class="stat-pill active" id="stat-all" onclick="setFilter('')">
+      <div class="stat-num" id="count-all">0</div>
+      <div class="stat-label">All</div>
+    </div>
+    <div class="stat-pill" id="stat-note" onclick="setFilter('note')">
+      <div class="stat-num" id="count-note">0</div>
+      <div class="stat-label">Notes</div>
+    </div>
+    <div class="stat-pill" id="stat-fact" onclick="setFilter('fact')">
+      <div class="stat-num" id="count-fact">0</div>
+      <div class="stat-label">Facts</div>
+    </div>
+    <div class="stat-pill" id="stat-journal" onclick="setFilter('journal')">
+      <div class="stat-num" id="count-journal">0</div>
+      <div class="stat-label">Journal</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="search-wrap">
+      <input type="text" class="search-input" id="search-input" placeholder="Search memories..." oninput="onSearch(this.value)">
+    </div>
+    <button class="refresh-btn" onclick="loadMemories()">↻ REFRESH</button>
+  </div>
+
+  <div class="grid-wrap" id="grid">
+    <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>
+  </div>
+
+  <footer class="footer">
+    <div class="footer-text">AI MEMORY MCP · CLOUDFLARE D1</div>
+    <div class="footer-text">SECURE SESSION<span class="cursor-blink"></span></div>
+  </footer>
+</div>
+
+<!-- EXPAND OVERLAY -->
+<div class="expand-overlay" id="expand-overlay" onclick="closeExpand(event)">
+  <div class="expand-box">
+    <button class="expand-close" onclick="closeExpandBtn()">✕ CLOSE</button>
+    <div id="expand-header"></div>
+    <div class="expand-content" id="expand-content"></div>
+    <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border);font-size:0.6rem;color:var(--text-dim);letter-spacing:0.08em" id="expand-meta"></div>
+  </div>
+</div>
+
+<script>
+  const BASE = location.origin;
+  let TOKEN = '';
+  let activeFilter = '';
+  let searchTimeout = null;
+  let allMemories = [];
+
+  function getToken() {
+    return sessionStorage.getItem('mv_token') || '';
+  }
+
+  function doLogin() {
+    const val = document.getElementById('token-input').value.trim();
+    if (!val) return;
+    // Test the token by calling the API
+    fetch(BASE + '/api/memories', {
+      headers: { 'Authorization': 'Bearer ' + val }
+    }).then(r => {
+      if (r.ok) {
+        TOKEN = val;
+        sessionStorage.setItem('mv_token', val);
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app').style.display = 'flex';
+        document.getElementById('app').style.flexDirection = 'column';
+        updateTime();
+        loadMemories();
+      } else {
+        document.getElementById('login-error').style.display = 'block';
+        document.getElementById('token-input').style.borderColor = 'var(--red)';
+      }
+    }).catch(() => {
+      document.getElementById('login-error').style.display = 'block';
+    });
+  }
+
+  function doLogout() {
+    sessionStorage.removeItem('mv_token');
+    TOKEN = '';
+    location.reload();
+  }
+
+  function updateTime() {
+    const el = document.getElementById('hdr-time');
+    if (el) el.textContent = new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
+    setTimeout(updateTime, 1000);
+  }
+
+  async function loadMemories() {
+    TOKEN = getToken();
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '<div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>';
+    const search = document.getElementById('search-input').value;
+    let url = BASE + '/api/memories?limit=500';
+    if (activeFilter) url += '&type=' + encodeURIComponent(activeFilter);
+    if (search) url += '&search=' + encodeURIComponent(search);
+    try {
+      const r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      if (!r.ok) { doLogout(); return; }
+      const data = await r.json();
+      allMemories = data.memories || [];
+      updateStats(data.stats || []);
+      renderGrid(allMemories);
+    } catch(e) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div>CONNECTION ERROR</div>';
+    }
+  }
+
+  function updateStats(stats) {
+    const counts = { note: 0, fact: 0, journal: 0 };
+    let total = 0;
+    stats.forEach(s => { counts[s.type] = s.count; total += s.count; });
+    document.getElementById('count-all').textContent = total;
+    document.getElementById('count-note').textContent = counts.note;
+    document.getElementById('count-fact').textContent = counts.fact;
+    document.getElementById('count-journal').textContent = counts.journal;
+    document.getElementById('hdr-count').textContent = total + ' entries';
+  }
+
+  function renderGrid(memories) {
+    const grid = document.getElementById('grid');
+    if (!memories.length) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">◈</div>NO MEMORIES FOUND</div>';
+      return;
+    }
+    grid.innerHTML = memories.map((m, i) => {
+      const date = new Date(m.created_at * 1000).toISOString().slice(0,10);
+      const tags = m.tags ? m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('') : '';
+      const titleHtml = m.title ? \`<div class="card-title">\${esc(m.title)}</div>\` : '';
+      const keyHtml = m.key ? \`<div class="card-key"><span>KEY /</span> \${esc(m.key)}</div>\` : '';
+      return \`<div class="card" data-type="\${m.type}" data-idx="\${i}" onclick="expandCard(\${i})" style="animation-delay:\${Math.min(i*0.04,0.4)}s">
+        <div class="card-type-stripe"></div>
+        <div class="card-header">
+          <div>\${titleHtml}\${keyHtml}\${!m.title && !m.key ? '<div class="card-title" style="opacity:0.4">untitled</div>' : ''}</div>
+          <span class="card-type-badge">\${m.type}</span>
+        </div>
+        <div class="card-content">\${esc(m.content)}</div>
+        <div class="card-footer">
+          <div class="card-tags">\${tags}</div>
+          <div class="card-date">\${date}</div>
+        </div>
+        <div class="card-id">\${m.id}</div>
+      </div>\`;
+    }).join('');
+  }
+
+  function expandCard(idx) {
+    const m = allMemories[idx];
+    if (!m) return;
+    const date = new Date(m.created_at * 1000).toLocaleString();
+    const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';
+    const typeColors = { note: 'var(--teal)', fact: 'var(--amber)', journal: '#8888ff' };
+    document.getElementById('expand-header').innerHTML =
+      \`<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
+        <span style="font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;border:1px solid \${typeColors[m.type]||'#fff'};color:\${typeColors[m.type]||'#fff'};padding:0.2rem 0.5rem">\${m.type}</span>
+        \${m.title ? \`<span style="font-family:var(--sans);font-weight:700;font-size:1.1rem;color:var(--text-bright)">\${esc(m.title)}</span>\` : ''}
+        \${m.key ? \`<span style="font-size:0.75rem;color:var(--amber)">KEY: \${esc(m.key)}</span>\` : ''}
+      </div>
+      \${m.tags ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('')}</div>\` : ''}\`;
+    document.getElementById('expand-content').textContent = m.content;
+    document.getElementById('expand-meta').textContent = 'ID: ' + m.id + '  ·  Created ' + date + updated;
+    document.getElementById('expand-overlay').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeExpand(e) {
+    if (e.target === document.getElementById('expand-overlay')) closeExpandBtn();
+  }
+  function closeExpandBtn() {
+    document.getElementById('expand-overlay').classList.remove('open');
+    document.body.style.overflow = '';
+  }
+
+  function setFilter(type) {
+    activeFilter = type;
+    ['all','note','fact','journal'].forEach(t => {
+      document.getElementById('stat-' + t).classList.toggle('active', (type === '' ? 'all' : type) === t);
+    });
+    loadMemories();
+  }
+
+  function onSearch(val) {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(loadMemories, 300);
+  }
+
+  function esc(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Enter key on login
+  document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+  // Auto-login if token in sessionStorage
+  const saved = sessionStorage.getItem('mv_token');
+  if (saved) {
+    TOKEN = saved;
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    document.getElementById('app').style.flexDirection = 'column';
+    updateTime();
+    loadMemories();
+  }
+</script>
+</body>
+</html>`;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -390,6 +1182,17 @@ export default {
 
     if (url.pathname === '/') {
       return jsonResponse({ name: 'ai-memory-mcp', version: '1.0.0', status: 'ok', tools: TOOLS.length });
+    }
+
+    if (url.pathname === '/view') {
+      return new Response(viewerHtml(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    }
+
+    if (url.pathname === '/api/memories') {
+      if (!checkAuth(request, env)) return unauthorized();
+      return handleApiMemories(request, env);
     }
 
     if (url.pathname === '/mcp') {
