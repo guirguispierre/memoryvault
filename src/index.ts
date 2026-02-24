@@ -614,6 +614,7 @@ function viewerHtml(): string {
 <title>MEMORY VAULT</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <style>
   :root {
     --bg: #080c10;
@@ -1145,6 +1146,10 @@ function viewerHtml(): string {
   .connection-chip:hover { border-color: var(--amber); color: var(--amber); }
   .connection-chip .chip-type { font-size: 0.55rem; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.6; }
   .connection-chip .chip-label { font-size: 0.6rem; color: var(--text-dim); font-style: italic; }
+  .graph-node circle { stroke-width: 2px; cursor: pointer; }
+  .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; }
+  .graph-link { stroke: var(--border-bright); stroke-width: 1.5px; }
+  .graph-link-label { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); pointer-events: none; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
@@ -1197,6 +1202,10 @@ function viewerHtml(): string {
       <div class="stat-num" id="count-journal">0</div>
       <div class="stat-label">Journal</div>
     </div>
+    <div class="stat-pill" id="stat-graph" onclick="showGraph()">
+      <div class="stat-num">⬡</div>
+      <div class="stat-label">Graph</div>
+    </div>
   </div>
 
   <div class="controls">
@@ -1206,6 +1215,10 @@ function viewerHtml(): string {
     <button class="refresh-btn" onclick="loadMemories()">↻ REFRESH</button>
   </div>
 
+  <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--bg);min-height:600px">
+    <svg id="graph-svg" style="width:100%;height:100%;min-height:600px"></svg>
+    <div id="graph-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--text-dim);font-size:0.75rem;letter-spacing:0.15em">NO CONNECTIONS YET</div>
+  </div>
   <div class="grid-wrap" id="grid">
     <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>
   </div>
@@ -1394,8 +1407,10 @@ function viewerHtml(): string {
   }
 
   function setFilter(type) {
+    document.getElementById('graph-view').style.display = 'none';
+    document.querySelector('.grid-wrap').style.display = 'grid';
     activeFilter = type;
-    ['all','note','fact','journal'].forEach(t => {
+    ['all','note','fact','journal','graph'].forEach(t => {
       document.getElementById('stat-' + t).classList.toggle('active', (type === '' ? 'all' : type) === t);
     });
     loadMemories();
@@ -1451,6 +1466,96 @@ function viewerHtml(): string {
         lastPollSig = sig;
       } catch {}
     }, 10000);
+  }
+
+  async function showGraph() {
+    ['all','note','fact','journal'].forEach(t => {
+      document.getElementById('stat-' + t).classList.remove('active');
+    });
+    document.getElementById('stat-graph').classList.add('active');
+    document.querySelector('.grid-wrap').style.display = 'none';
+    document.getElementById('graph-view').style.display = 'block';
+
+    const svg = document.getElementById('graph-svg');
+    svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--amber);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">LOADING GRAPH...</text>';
+
+    try {
+      const r = await fetch(BASE + '/api/graph', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      if (r.status === 401) { doLogout(); return; }
+      if (!r.ok) throw new Error('failed');
+      const data = await r.json();
+      renderGraph(data.nodes || [], data.edges || []);
+    } catch(e) {
+      document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--red);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">ERROR LOADING GRAPH</text>';
+    }
+  }
+
+  function renderGraph(nodes, edges) {
+    const svgEl = document.getElementById('graph-svg');
+    svgEl.innerHTML = '';
+
+    if (!nodes.length) {
+      const emptyEl = document.getElementById('graph-empty');
+      if (emptyEl) { emptyEl.style.display = 'flex'; }
+      return;
+    }
+
+    const width = svgEl.clientWidth || 800;
+    const height = svgEl.clientHeight || 600;
+    const typeColor = { note: '#00c8b4', fact: '#f0a500', journal: '#8888ff' };
+
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    const links = edges.map(e => ({ ...e, source: e.from_id, target: e.to_id }))
+      .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target));
+
+    const simulation = d3.forceSimulation(nodes)
+      .force('link', d3.forceLink(links).id(d => d.id).distance(120))
+      .force('charge', d3.forceManyBody().strength(-300))
+      .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('collision', d3.forceCollide(30));
+
+    const svg = d3.select('#graph-svg');
+    const g = svg.append('g');
+
+    svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
+      g.attr('transform', event.transform);
+    }));
+
+    const link = g.append('g').selectAll('line')
+      .data(links).join('line').attr('class', 'graph-link');
+
+    const linkLabel = g.append('g').selectAll('text')
+      .data(links).join('text').attr('class', 'graph-link-label')
+      .text(d => d.label || '');
+
+    const node = g.append('g').selectAll('g')
+      .data(nodes).join('g').attr('class', 'graph-node')
+      .call(d3.drag()
+        .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+        .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+      )
+      .on('click', (event, d) => { expandById(d.id); });
+
+    node.append('circle')
+      .attr('r', 8)
+      .attr('fill', d => typeColor[d.type] || '#888')
+      .attr('fill-opacity', 0.85)
+      .attr('stroke', d => typeColor[d.type] || '#888');
+
+    node.append('text')
+      .attr('dx', 12).attr('dy', 4)
+      .text(d => (d.title || d.key || d.content || '').slice(0, 24));
+
+    simulation.on('tick', () => {
+      link
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      linkLabel
+        .attr('x', d => (d.source.x + d.target.x) / 2)
+        .attr('y', d => (d.source.y + d.target.y) / 2);
+      node.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
+    });
   }
 
   // Enter key on login
