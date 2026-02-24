@@ -33,10 +33,20 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function unauthorized(): Response {
+function protectedResourceMetadataUrl(url: URL): string {
+  return `${url.origin}/.well-known/oauth-protected-resource`;
+}
+
+function oauthChallengeHeader(url: URL): string {
+  return `Bearer realm="mcp", resource_metadata="${protectedResourceMetadataUrl(url)}"`;
+}
+
+function unauthorized(url?: URL): Response {
+  const headers: Record<string, string> = { ...CORS_HEADERS, 'Content-Type': 'application/json' };
+  if (url) headers['WWW-Authenticate'] = oauthChallengeHeader(url);
   return new Response(JSON.stringify({ error: 'Unauthorized' }), {
     status: 401,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    headers,
   });
 }
 
@@ -420,6 +430,41 @@ async function ensureSchema(env: Env): Promise<void> {
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at DESC)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_brain ON auth_sessions(brain_id, expires_at DESC)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS oauth_clients (
+          id TEXT PRIMARY KEY,
+          client_id TEXT NOT NULL UNIQUE,
+          client_name TEXT,
+          redirect_uris TEXT NOT NULL,
+          grant_types TEXT NOT NULL,
+          response_types TEXT NOT NULL,
+          token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
+          client_secret_hash TEXT,
+          client_secret_expires_at INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_oauth_clients_client_id ON oauth_clients(client_id)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+          id TEXT PRIMARY KEY,
+          code TEXT NOT NULL UNIQUE,
+          client_id TEXT NOT NULL,
+          redirect_uri TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          brain_id TEXT NOT NULL,
+          code_challenge TEXT NOT NULL,
+          code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+          scope TEXT,
+          resource TEXT,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          used_at INTEGER
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_oauth_codes_code ON oauth_authorization_codes(code)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_authorization_codes(expires_at)");
 
       const ts = now();
       await env.DB.prepare(
@@ -2953,6 +2998,596 @@ async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
   });
 }
 
+type OAuthClientRow = {
+  id: string;
+  client_id: string;
+  client_name: string | null;
+  redirect_uris: string[];
+  grant_types: string[];
+  response_types: string[];
+  token_endpoint_auth_method: string;
+  client_secret_hash: string | null;
+  client_secret_expires_at: number;
+  created_at: number;
+  updated_at: number;
+};
+
+type OAuthCodeRow = {
+  id: string;
+  code: string;
+  client_id: string;
+  redirect_uri: string;
+  user_id: string;
+  brain_id: string;
+  code_challenge: string;
+  code_challenge_method: string;
+  scope: string | null;
+  resource: string | null;
+  created_at: number;
+  expires_at: number;
+  used_at: number | null;
+};
+
+const OAUTH_CODE_TTL_SECONDS = 10 * 60;
+
+function noStoreJsonHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    ...CORS_HEADERS,
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    'Pragma': 'no-cache',
+    ...extra,
+  };
+}
+
+function oauthError(error: string, errorDescription: string, status = 400): Response {
+  return new Response(JSON.stringify({
+    error,
+    error_description: errorDescription,
+  }), {
+    status,
+    headers: noStoreJsonHeaders(),
+  });
+}
+
+function parseJsonStringArray(raw: string, fallback: string[] = []): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return fallback;
+    return parsed.filter((v): v is string => typeof v === 'string');
+  } catch {
+    return fallback;
+  }
+}
+
+function isValidRedirectUri(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    if (url.hash) return false;
+    if (url.protocol === 'https:') return true;
+    if (url.protocol !== 'http:') return false;
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function readFormBody(request: Request): Promise<URLSearchParams | null> {
+  const contentType = (request.headers.get('content-type') ?? '').toLowerCase();
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    try {
+      const text = await request.text();
+      return new URLSearchParams(text);
+    } catch {
+      return null;
+    }
+  }
+  if (contentType.includes('application/json')) {
+    const body = await readJsonBody(request);
+    if (!body) return null;
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(body)) {
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+        params.set(k, String(v));
+      }
+    }
+    return params;
+  }
+  return null;
+}
+
+async function getOAuthClient(clientId: string, env: Env): Promise<OAuthClientRow | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, client_id, client_name, redirect_uris, grant_types, response_types,
+            token_endpoint_auth_method, client_secret_hash, client_secret_expires_at, created_at, updated_at
+     FROM oauth_clients
+     WHERE client_id = ?
+     LIMIT 1`
+  ).bind(clientId).first<{
+    id: string;
+    client_id: string;
+    client_name: string | null;
+    redirect_uris: string;
+    grant_types: string;
+    response_types: string;
+    token_endpoint_auth_method: string;
+    client_secret_hash: string | null;
+    client_secret_expires_at: number;
+    created_at: number;
+    updated_at: number;
+  }>();
+  if (!row) return null;
+  return {
+    ...row,
+    redirect_uris: parseJsonStringArray(row.redirect_uris),
+    grant_types: parseJsonStringArray(row.grant_types, ['authorization_code', 'refresh_token']),
+    response_types: parseJsonStringArray(row.response_types, ['code']),
+  };
+}
+
+function isAllowedRedirectForClient(client: OAuthClientRow | null, redirectUri: string): boolean {
+  if (!isValidRedirectUri(redirectUri)) return false;
+  if (!client) return true;
+  return client.redirect_uris.includes(redirectUri);
+}
+
+async function ensureOAuthClient(clientId: string, redirectUri: string, env: Env): Promise<OAuthClientRow> {
+  const existing = await getOAuthClient(clientId, env);
+  if (existing) return existing;
+  const ts = now();
+  const id = generateId();
+  const redirectUris = [redirectUri];
+  const grantTypes = ['authorization_code', 'refresh_token'];
+  const responseTypes = ['code'];
+  await env.DB.prepare(
+    `INSERT INTO oauth_clients
+      (id, client_id, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, client_secret_hash, client_secret_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'none', NULL, 0, ?, ?)`
+  ).bind(
+    id,
+    clientId,
+    null,
+    JSON.stringify(redirectUris),
+    JSON.stringify(grantTypes),
+    JSON.stringify(responseTypes),
+    ts,
+    ts
+  ).run();
+  return {
+    id,
+    client_id: clientId,
+    client_name: null,
+    redirect_uris: redirectUris,
+    grant_types: grantTypes,
+    response_types: responseTypes,
+    token_endpoint_auth_method: 'none',
+    client_secret_hash: null,
+    client_secret_expires_at: 0,
+    created_at: ts,
+    updated_at: ts,
+  };
+}
+
+function validateAuthorizeParams(params: URLSearchParams): { ok: true; data: Record<string, string> } | { ok: false; message: string } {
+  const responseType = params.get('response_type') ?? '';
+  const clientId = params.get('client_id') ?? '';
+  const redirectUri = params.get('redirect_uri') ?? '';
+  const codeChallenge = params.get('code_challenge') ?? '';
+  const codeChallengeMethod = (params.get('code_challenge_method') ?? 'S256').toUpperCase();
+  if (responseType !== 'code') return { ok: false, message: 'response_type must be "code".' };
+  if (!clientId.trim()) return { ok: false, message: 'client_id is required.' };
+  if (!redirectUri.trim()) return { ok: false, message: 'redirect_uri is required.' };
+  if (!isValidRedirectUri(redirectUri)) return { ok: false, message: 'redirect_uri is invalid.' };
+  if (!codeChallenge.trim()) return { ok: false, message: 'code_challenge is required.' };
+  if (codeChallengeMethod !== 'S256' && codeChallengeMethod !== 'PLAIN') {
+    return { ok: false, message: 'code_challenge_method must be S256 or plain.' };
+  }
+  return {
+    ok: true,
+    data: {
+      response_type: responseType,
+      client_id: clientId.trim(),
+      redirect_uri: redirectUri.trim(),
+      state: params.get('state') ?? '',
+      scope: params.get('scope') ?? '',
+      resource: params.get('resource') ?? '',
+      code_challenge: codeChallenge.trim(),
+      code_challenge_method: codeChallengeMethod,
+    },
+  };
+}
+
+function renderAuthorizePage(requestData: Record<string, string>, errorMessage: string | null): string {
+  const hidden = [
+    'response_type',
+    'client_id',
+    'redirect_uri',
+    'state',
+    'scope',
+    'resource',
+    'code_challenge',
+    'code_challenge_method',
+  ].map((k) => `<input type="hidden" name="${k}" value="${escapeHtml(requestData[k] ?? '')}">`).join('');
+  const errorBlock = errorMessage
+    ? `<div style="margin:0 0 12px;color:#ef4444;font-size:13px;">${escapeHtml(errorMessage)}</div>`
+    : '';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Connect Second Brain</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0b1220;color:#e6edf5;display:flex;min-height:100vh;align-items:center;justify-content:center}
+    .card{width:min(440px,92vw);background:#111a2c;border:1px solid #24364f;border-radius:16px;padding:20px}
+    h1{font-size:20px;margin:0 0 8px}
+    p{margin:0 0 16px;color:#9fb2c8;font-size:14px}
+    label{display:block;font-size:12px;color:#9fb2c8;margin:10px 0 6px}
+    input{width:100%;box-sizing:border-box;background:#0b1220;border:1px solid #2b3f59;color:#e6edf5;border-radius:10px;padding:10px 12px}
+    .row{display:flex;gap:8px;margin-top:14px}
+    button{flex:1;border:none;border-radius:10px;padding:11px 12px;font-weight:600;cursor:pointer}
+    .primary{background:#22c55e;color:#04110a}
+    .secondary{background:#1d4ed8;color:#e8f0ff}
+    .meta{margin-top:14px;font-size:11px;color:#7f92a8}
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/authorize">
+    <h1>Connect Your Second Brain</h1>
+    <p>Sign in or create an account to authorize this MCP integration.</p>
+    ${errorBlock}
+    ${hidden}
+    <label>Email</label>
+    <input type="email" name="email" required autocomplete="username" />
+    <label>Password</label>
+    <input type="password" name="password" required autocomplete="current-password" />
+    <label>Brain Name (used when signing up)</label>
+    <input type="text" name="brain_name" placeholder="My Second Brain" />
+    <div class="row">
+      <button class="primary" type="submit" name="auth_mode" value="login">Sign In</button>
+      <button class="secondary" type="submit" name="auth_mode" value="signup">Sign Up</button>
+    </div>
+    <div class="meta">Client: ${escapeHtml(requestData.client_id ?? '')}</div>
+  </form>
+</body>
+</html>`;
+}
+
+async function issueAuthorizationCode(
+  clientId: string,
+  redirectUri: string,
+  userId: string,
+  brainId: string,
+  codeChallenge: string,
+  codeChallengeMethod: string,
+  scope: string,
+  resource: string,
+  env: Env
+): Promise<string> {
+  const code = randomToken(24);
+  const ts = now();
+  await env.DB.prepare(
+    `INSERT INTO oauth_authorization_codes
+      (id, code, client_id, redirect_uri, user_id, brain_id, code_challenge, code_challenge_method, scope, resource, created_at, expires_at, used_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+  ).bind(
+    generateId(),
+    code,
+    clientId,
+    redirectUri,
+    userId,
+    brainId,
+    codeChallenge,
+    codeChallengeMethod,
+    scope || null,
+    resource || null,
+    ts,
+    ts + OAUTH_CODE_TTL_SECONDS
+  ).run();
+  return code;
+}
+
+async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promise<Response> {
+  if (request.method === 'GET') {
+    const parsed = validateAuthorizeParams(url.searchParams);
+    if (!parsed.ok) return oauthError('invalid_request', parsed.message, 400);
+    const client = await getOAuthClient(parsed.data.client_id, env);
+    if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri)) {
+      return oauthError('invalid_request', 'redirect_uri is not allowed for this client.', 400);
+    }
+    return new Response(renderAuthorizePage(parsed.data, null), {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
+  if (request.method !== 'POST') return oauthError('invalid_request', 'Method not allowed.', 405);
+  const form = await readFormBody(request);
+  if (!form) return oauthError('invalid_request', 'Unable to read authorization form.', 400);
+  const parsed = validateAuthorizeParams(form);
+  if (!parsed.ok) return oauthError('invalid_request', parsed.message, 400);
+
+  const authMode = (form.get('auth_mode') ?? 'login').toLowerCase();
+  const emailRaw = form.get('email') ?? '';
+  const passwordRaw = form.get('password') ?? '';
+  const brainNameRaw = form.get('brain_name') ?? '';
+  if (!isValidEmail(emailRaw)) {
+    return new Response(renderAuthorizePage(parsed.data, 'Please enter a valid email.'), {
+      status: 400,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+  if (typeof passwordRaw !== 'string' || passwordRaw.length === 0) {
+    return new Response(renderAuthorizePage(parsed.data, 'Please enter your password.'), {
+      status: 400,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
+  const email = normalizeEmail(emailRaw);
+  let userId = '';
+  let brainId = '';
+
+  if (authMode === 'signup') {
+    if (!isStrongEnoughPassword(passwordRaw)) {
+      return new Response(renderAuthorizePage(parsed.data, 'Password must be at least 10 characters.'), {
+        status: 400,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    }
+    const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: string }>();
+    if (existing?.id) {
+      return new Response(renderAuthorizePage(parsed.data, 'Account already exists. Use Sign In.'), {
+        status: 409,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    }
+
+    const ts = now();
+    userId = generateId();
+    const passwordHash = await hashPassword(passwordRaw);
+    const displayName = sanitizeDisplayName(undefined, email);
+    await env.DB.prepare(
+      'INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(userId, email, passwordHash, displayName, ts, ts).run();
+    brainId = generateId();
+    const brainName = sanitizeBrainName(brainNameRaw, email);
+    await env.DB.prepare(
+      'INSERT INTO brains (id, name, slug, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(brainId, brainName, `${slugify(brainName)}-${brainId.slice(0, 8)}`, userId, ts, ts).run();
+    await env.DB.prepare(
+      "INSERT INTO brain_memberships (brain_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)"
+    ).bind(brainId, userId, ts).run();
+  } else {
+    const user = await env.DB.prepare(
+      'SELECT id, email, password_hash FROM users WHERE email = ? LIMIT 1'
+    ).bind(email).first<{ id: string; email: string; password_hash: string }>();
+    if (!user || !(await verifyPassword(passwordRaw, user.password_hash))) {
+      return new Response(renderAuthorizePage(parsed.data, 'Invalid email or password.'), {
+        status: 401,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    }
+    userId = user.id;
+    const brains = await listBrainsForUser(userId, env);
+    const activeBrain = findActiveBrain(brains, '');
+    if (!activeBrain) {
+      return new Response(renderAuthorizePage(parsed.data, 'No brain found for this account.'), {
+        status: 403,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    }
+    brainId = activeBrain.id;
+  }
+
+  const client = await ensureOAuthClient(parsed.data.client_id, parsed.data.redirect_uri, env);
+  if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri)) {
+    return new Response(renderAuthorizePage(parsed.data, 'redirect_uri is not allowed for this client.'), {
+      status: 400,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
+  const code = await issueAuthorizationCode(
+    parsed.data.client_id,
+    parsed.data.redirect_uri,
+    userId,
+    brainId,
+    parsed.data.code_challenge,
+    parsed.data.code_challenge_method,
+    parsed.data.scope,
+    parsed.data.resource,
+    env
+  );
+  const redirectUrl = new URL(parsed.data.redirect_uri);
+  redirectUrl.searchParams.set('code', code);
+  if (parsed.data.state) redirectUrl.searchParams.set('state', parsed.data.state);
+  return new Response(null, {
+    status: 302,
+    headers: { Location: redirectUrl.toString() },
+  });
+}
+
+async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') return oauthError('invalid_request', 'Method not allowed.', 405);
+  const params = await readFormBody(request);
+  if (!params) return oauthError('invalid_request', 'Invalid token request body.', 400);
+
+  const grantType = (params.get('grant_type') ?? '').trim();
+  if (grantType === 'authorization_code') {
+    const code = (params.get('code') ?? '').trim();
+    const redirectUri = (params.get('redirect_uri') ?? '').trim();
+    const clientId = (params.get('client_id') ?? '').trim();
+    const codeVerifier = (params.get('code_verifier') ?? '').trim();
+    if (!code || !redirectUri || !clientId || !codeVerifier) {
+      return oauthError('invalid_request', 'grant_type=authorization_code requires code, redirect_uri, client_id, and code_verifier.');
+    }
+
+    const authCode = await env.DB.prepare(
+      `SELECT id, code, client_id, redirect_uri, user_id, brain_id, code_challenge, code_challenge_method, scope, resource, created_at, expires_at, used_at
+       FROM oauth_authorization_codes
+       WHERE code = ?
+       LIMIT 1`
+    ).bind(code).first<OAuthCodeRow>();
+    if (!authCode || authCode.used_at !== null || authCode.expires_at <= now()) {
+      return oauthError('invalid_grant', 'Authorization code is invalid or expired.');
+    }
+    if (authCode.client_id !== clientId || authCode.redirect_uri !== redirectUri) {
+      return oauthError('invalid_grant', 'Authorization code does not match client_id/redirect_uri.');
+    }
+
+    const method = (authCode.code_challenge_method || 'S256').toUpperCase();
+    if (method === 'S256') {
+      const verifierDigest = await sha256DigestBase64Url(codeVerifier);
+      if (verifierDigest !== authCode.code_challenge) {
+        return oauthError('invalid_grant', 'code_verifier validation failed.');
+      }
+    } else if (method === 'PLAIN') {
+      if (codeVerifier !== authCode.code_challenge) {
+        return oauthError('invalid_grant', 'code_verifier validation failed.');
+      }
+    } else {
+      return oauthError('invalid_grant', 'Unsupported code challenge method.');
+    }
+
+    await env.DB.prepare(
+      'UPDATE oauth_authorization_codes SET used_at = ? WHERE id = ?'
+    ).bind(now(), authCode.id).run();
+
+    const tokens = await createSessionTokens(authCode.user_id, authCode.brain_id, env);
+    return new Response(JSON.stringify({
+      access_token: tokens.access_token,
+      token_type: 'Bearer',
+      expires_in: tokens.expires_in,
+      refresh_token: tokens.refresh_token,
+      scope: authCode.scope ?? 'mcp:full',
+    }), {
+      headers: noStoreJsonHeaders(),
+    });
+  }
+
+  if (grantType === 'refresh_token') {
+    const refreshToken = (params.get('refresh_token') ?? '').trim();
+    if (!refreshToken) return oauthError('invalid_request', 'refresh_token is required.');
+    const rotated = await rotateSession(refreshToken, env);
+    if (!rotated) return oauthError('invalid_grant', 'Refresh token is invalid or expired.');
+    return new Response(JSON.stringify({
+      access_token: rotated.tokens.access_token,
+      token_type: 'Bearer',
+      expires_in: rotated.tokens.expires_in,
+      refresh_token: rotated.tokens.refresh_token,
+      scope: 'mcp:full',
+    }), {
+      headers: noStoreJsonHeaders(),
+    });
+  }
+
+  return oauthError('unsupported_grant_type', 'Supported grant types are authorization_code and refresh_token.');
+}
+
+async function handleOAuthRegister(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') return oauthError('invalid_request', 'Method not allowed.', 405);
+  const body = await readJsonBody(request);
+  if (!body) return oauthError('invalid_request', 'Invalid JSON body.', 400);
+
+  const redirectUrisRaw = body.redirect_uris;
+  if (!Array.isArray(redirectUrisRaw) || redirectUrisRaw.length === 0) {
+    return oauthError('invalid_client_metadata', 'redirect_uris must be a non-empty array.');
+  }
+  const redirectUris = redirectUrisRaw
+    .filter((v): v is string => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (!redirectUris.length || redirectUris.some((uri) => !isValidRedirectUri(uri))) {
+    return oauthError('invalid_client_metadata', 'All redirect_uris must be valid HTTPS URIs (or localhost HTTP).');
+  }
+
+  const authMethodRaw = typeof body.token_endpoint_auth_method === 'string'
+    ? body.token_endpoint_auth_method.trim()
+    : 'none';
+  const authMethod = authMethodRaw === 'none' || authMethodRaw === 'client_secret_post' || authMethodRaw === 'client_secret_basic'
+    ? authMethodRaw
+    : 'none';
+  const clientName = typeof body.client_name === 'string' ? body.client_name.trim().slice(0, 160) : null;
+  const grantTypes = Array.isArray(body.grant_types)
+    ? body.grant_types.filter((v): v is string => typeof v === 'string')
+    : ['authorization_code', 'refresh_token'];
+  const responseTypes = Array.isArray(body.response_types)
+    ? body.response_types.filter((v): v is string => typeof v === 'string')
+    : ['code'];
+
+  const ts = now();
+  const clientId = `mcp_${randomToken(12)}`;
+  const clientSecret = authMethod === 'none' ? null : randomToken(24);
+  const clientSecretHash = clientSecret ? await sha256DigestBase64Url(clientSecret) : null;
+  await env.DB.prepare(
+    `INSERT INTO oauth_clients
+      (id, client_id, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, client_secret_hash, client_secret_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+  ).bind(
+    generateId(),
+    clientId,
+    clientName,
+    JSON.stringify(redirectUris),
+    JSON.stringify(grantTypes),
+    JSON.stringify(responseTypes),
+    authMethod,
+    clientSecretHash,
+    ts,
+    ts
+  ).run();
+
+  return new Response(JSON.stringify({
+    client_id: clientId,
+    client_id_issued_at: ts,
+    client_secret: clientSecret,
+    client_secret_expires_at: 0,
+    redirect_uris: redirectUris,
+    token_endpoint_auth_method: authMethod,
+    grant_types: grantTypes,
+    response_types: responseTypes,
+    client_name: clientName,
+  }), {
+    status: 201,
+    headers: noStoreJsonHeaders(),
+  });
+}
+
+function handleProtectedResourceMetadata(url: URL): Response {
+  const prefix = '/.well-known/oauth-protected-resource';
+  const suffix = url.pathname.slice(prefix.length);
+  const resourcePath = suffix && suffix.startsWith('/') ? suffix : '/mcp';
+  return corsJsonResponse({
+    resource: `${url.origin}${resourcePath}`,
+    authorization_servers: [url.origin],
+    bearer_methods_supported: ['header'],
+    scopes_supported: ['mcp:full'],
+  });
+}
+
+function handleAuthorizationServerMetadata(url: URL): Response {
+  return corsJsonResponse({
+    issuer: url.origin,
+    authorization_endpoint: `${url.origin}/authorize`,
+    token_endpoint: `${url.origin}/token`,
+    registration_endpoint: `${url.origin}/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+    scopes_supported: ['mcp:full'],
+  });
+}
+
 function viewerHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -4709,6 +5344,26 @@ export default {
       });
     }
 
+    if (url.pathname === '/.well-known/oauth-authorization-server' || url.pathname === '/.well-known/openid-configuration') {
+      return handleAuthorizationServerMetadata(url);
+    }
+
+    if (url.pathname === '/.well-known/oauth-protected-resource' || url.pathname.startsWith('/.well-known/oauth-protected-resource/')) {
+      return handleProtectedResourceMetadata(url);
+    }
+
+    if (url.pathname === '/register') {
+      return handleOAuthRegister(request, env);
+    }
+
+    if (url.pathname === '/authorize') {
+      return handleOAuthAuthorize(request, url, env);
+    }
+
+    if (url.pathname === '/token') {
+      return handleOAuthToken(request, env);
+    }
+
     if (url.pathname === '/auth/signup') {
       if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
       const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
@@ -4753,7 +5408,7 @@ export default {
     if (url.pathname === '/auth/me') {
       if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
       const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) return unauthorized();
+      if (!authCtx) return unauthorized(url);
       return handleAuthMe(authCtx, env);
     }
 
@@ -4768,7 +5423,7 @@ export default {
       const authCtx = await authenticateRequest(request, env);
       if (!authCtx) {
         await recordFailedAttempt(ip, env);
-        return unauthorized();
+        return unauthorized(url);
       }
       await clearRateLimit(ip, env);
       return handleApiMemories(request, env, authCtx.brainId);
@@ -4785,7 +5440,7 @@ export default {
       const authCtx = await authenticateRequest(request, env);
       if (!authCtx) {
         await recordFailedAttempt(ip, env);
-        return unauthorized();
+        return unauthorized(url);
       }
       await clearRateLimit(ip, env);
       return handleApiTools();
@@ -4802,7 +5457,7 @@ export default {
       const authCtx = await authenticateRequest(request, env);
       if (!authCtx) {
         await recordFailedAttempt(ip, env);
-        return unauthorized();
+        return unauthorized(url);
       }
       await clearRateLimit(ip, env);
       return handleMcp(request, env, url, authCtx);
@@ -4817,7 +5472,7 @@ export default {
         });
       }
       const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(); }
+      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
       await clearRateLimit(ip, env);
       const memoryId = url.pathname.slice('/api/links/'.length);
       if (!memoryId) return corsJsonResponse({ error: 'Memory ID required' }, 400);
@@ -4833,7 +5488,7 @@ export default {
         });
       }
       const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(); }
+      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
       await clearRateLimit(ip, env);
       return handleApiGraph(env, authCtx.brainId);
     }

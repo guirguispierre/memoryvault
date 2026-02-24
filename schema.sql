@@ -46,6 +46,39 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expi
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_brain ON auth_sessions(brain_id, expires_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL UNIQUE,
+  client_name TEXT,
+  redirect_uris TEXT NOT NULL,
+  grant_types TEXT NOT NULL,
+  response_types TEXT NOT NULL,
+  token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
+  client_secret_hash TEXT,
+  client_secret_expires_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_clients_client_id ON oauth_clients(client_id);
+
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  brain_id TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+  scope TEXT,
+  resource TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_codes_code ON oauth_authorization_codes(code);
+CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_authorization_codes(expires_at);
+
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
   brain_id TEXT NOT NULL DEFAULT 'legacy-default-brain',
