@@ -3,6 +3,9 @@ export interface Env {
   AUTH_SECRET: string;
 }
 
+const SERVER_NAME = 'ai-memory-mcp';
+const SERVER_VERSION = '1.1.0';
+
 function generateId(): string {
   return crypto.randomUUID();
 }
@@ -429,7 +432,7 @@ async function processMcpBody(
       result: {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'ai-memory', version: '1.0.0' },
+        serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       },
     };
   }
@@ -600,7 +603,87 @@ async function handleApiGraph(env: Env): Promise<Response> {
     'SELECT id, from_id, to_id, label FROM memory_links LIMIT 5000'
   ).all();
 
-  return new Response(JSON.stringify({ nodes: memories.results, edges: links.results }), {
+  const nodes = memories.results as Array<Record<string, unknown>>;
+  const explicitEdges = links.results as Array<Record<string, unknown>>;
+
+  // Build inferred (non-persisted) graph edges from shared tags.
+  // This helps visualization when explicit links are sparse.
+  const tagToIds = new Map<string, string[]>();
+  for (const n of nodes) {
+    const id = typeof n.id === 'string' ? n.id : '';
+    if (!id) continue;
+    const tags = typeof n.tags === 'string' ? n.tags : '';
+    if (!tags) continue;
+    for (const rawTag of tags.split(',')) {
+      const tag = rawTag.trim().toLowerCase();
+      if (!tag) continue;
+      const ids = tagToIds.get(tag);
+      if (ids) ids.push(id);
+      else tagToIds.set(tag, [id]);
+    }
+  }
+
+  const inferredByPair = new Map<string, { from_id: string; to_id: string; tags: Set<string> }>();
+  for (const [tag, idsRaw] of tagToIds) {
+    const ids = Array.from(new Set(idsRaw));
+    if (ids.length < 2) continue;
+    // Guard against explosive pair counts for broad tags.
+    const limited = ids.slice(0, 40);
+    for (let i = 0; i < limited.length; i++) {
+      for (let j = i + 1; j < limited.length; j++) {
+        const a = limited[i];
+        const b = limited[j];
+        const from_id = a < b ? a : b;
+        const to_id = a < b ? b : a;
+        const key = `${from_id}|${to_id}`;
+        const existing = inferredByPair.get(key);
+        if (existing) {
+          existing.tags.add(tag);
+        } else {
+          inferredByPair.set(key, { from_id, to_id, tags: new Set([tag]) });
+        }
+      }
+    }
+  }
+
+  const explicitPairs = new Set(
+    explicitEdges.map((e) => {
+      const a = String(e.from_id ?? '');
+      const b = String(e.to_id ?? '');
+      return a < b ? `${a}|${b}` : `${b}|${a}`;
+    })
+  );
+
+  const inferredEdges = Array.from(inferredByPair.entries())
+    .filter(([pair]) => !explicitPairs.has(pair))
+    .map(([pair, v]) => {
+      const tags = Array.from(v.tags).sort();
+      const preview = tags.slice(0, 3);
+      const suffix = tags.length > 3 ? ` +${tags.length - 3}` : '';
+      return {
+        id: `inf-${pair.replace('|', '-')}`,
+        from_id: v.from_id,
+        to_id: v.to_id,
+        label: `shared: ${preview.join(', ')}${suffix}`,
+        tags,
+        strength: tags.length,
+        inferred: true,
+      };
+    })
+    .sort((a, b) => b.strength - a.strength)
+    .slice(0, 600);
+
+  return new Response(JSON.stringify({ nodes, edges: explicitEdges, inferred_edges: inferredEdges }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+function handleApiTools(): Response {
+  return new Response(JSON.stringify({
+    server: { name: SERVER_NAME, version: SERVER_VERSION },
+    tool_count: TOOLS.length,
+    tool_names: TOOLS.map((t) => t.name),
+  }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }
@@ -1153,8 +1236,54 @@ function viewerHtml(): string {
   .graph-node circle { stroke-width: 2px; cursor: pointer; transition: r 0.15s; }
   .graph-node circle:hover { r: 10; }
   .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; }
-  .graph-link { stroke: var(--border-bright); stroke-width: 1.5px; }
+  .graph-link { stroke-width: 1.5px; }
+  .graph-link.explicit { stroke: var(--border-bright); opacity: 0.9; }
+  .graph-link.inferred { stroke: var(--teal); opacity: 0.4; stroke-dasharray: 4 4; }
   .graph-link-label { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); pointer-events: none; }
+  .graph-toolbar {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 8;
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    max-width: calc(100% - 1.5rem);
+    justify-content: flex-end;
+  }
+  .graph-btn {
+    border: 1px solid var(--border-bright);
+    background: rgba(8, 12, 16, 0.9);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.35rem 0.5rem;
+    cursor: pointer;
+    min-height: 30px;
+  }
+  .graph-btn:hover { border-color: var(--amber); color: var(--amber); }
+  .graph-btn.active { color: var(--teal); border-color: var(--teal); }
+  .graph-legend {
+    position: absolute;
+    left: 0.75rem;
+    bottom: 0.75rem;
+    z-index: 8;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    max-width: calc(100% - 1.5rem);
+  }
+  .graph-legend-item {
+    font-size: 0.55rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    background: rgba(8, 12, 16, 0.9);
+    color: var(--text-dim);
+    padding: 0.2rem 0.45rem;
+  }
 
   @media (max-width: 900px) {
     .hdr { padding: 0.85rem 1rem; }
@@ -1226,6 +1355,23 @@ function viewerHtml(): string {
     #graph-view { min-height: 54vh !important; }
     #graph-svg { min-height: 54vh !important; height: 54vh !important; }
     .graph-link-label { display: none; }
+    .graph-toolbar {
+      top: 0.45rem;
+      left: 0.45rem;
+      right: 0.45rem;
+      max-width: none;
+      justify-content: flex-start;
+      gap: 0.3rem;
+    }
+    .graph-btn { font-size: 0.52rem; letter-spacing: 0.08em; padding: 0.3rem 0.42rem; min-height: 28px; }
+    .graph-legend {
+      left: 0.45rem;
+      right: 0.45rem;
+      bottom: 0.45rem;
+      max-width: none;
+      gap: 0.35rem;
+    }
+    .graph-legend-item { font-size: 0.5rem; letter-spacing: 0.08em; padding: 0.2rem 0.36rem; }
 
     .grid-wrap {
       padding: 0.5rem;
@@ -1336,8 +1482,14 @@ function viewerHtml(): string {
   </div>
 
   <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--bg);min-height:600px">
+    <div class="graph-toolbar">
+      <button class="graph-btn active" id="graph-toggle-inferred" onclick="toggleGraphInferred()">INFERRED ON</button>
+      <button class="graph-btn active" id="graph-toggle-labels" onclick="toggleGraphLabels()">LABELS ON</button>
+      <button class="graph-btn" onclick="resetGraphView()">RESET VIEW</button>
+    </div>
+    <div class="graph-legend" id="graph-legend"></div>
     <svg id="graph-svg" style="width:100%;height:100%;min-height:600px"></svg>
-    <div id="graph-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--text-dim);font-size:0.75rem;letter-spacing:0.15em">NO CONNECTIONS YET</div>
+    <div id="graph-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;color:var(--text-dim);font-size:0.72rem;letter-spacing:0.12em;padding:1rem">NO MEMORIES YET</div>
   </div>
   <div class="grid-wrap" id="grid">
     <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>
@@ -1368,8 +1520,13 @@ function viewerHtml(): string {
   let allMemories = [];
   let expandGen = 0;
   let graphVisible = false;
-  let lastGraphData = { nodes: [], edges: [] };
+  let lastGraphData = { nodes: [], edges: [], inferred_edges: [] };
   let graphResizeTimer = null;
+  let graphShowInferred = true;
+  let graphShowLabels = !window.matchMedia('(max-width: 640px)').matches;
+  let graphSvgSelection = null;
+  let graphZoomBehavior = null;
+  let graphAutoTunedLabels = false;
 
   function doLogin() {
     const val = document.getElementById('token-input').value.trim();
@@ -1592,8 +1749,65 @@ function viewerHtml(): string {
     }, 10000);
   }
 
+  function syncGraphToolbarState() {
+    const inferredBtn = document.getElementById('graph-toggle-inferred');
+    const labelsBtn = document.getElementById('graph-toggle-labels');
+    if (inferredBtn) {
+      inferredBtn.classList.toggle('active', graphShowInferred);
+      inferredBtn.textContent = graphShowInferred ? 'INFERRED ON' : 'INFERRED OFF';
+    }
+    if (labelsBtn) {
+      labelsBtn.classList.toggle('active', graphShowLabels);
+      labelsBtn.textContent = graphShowLabels ? 'LABELS ON' : 'LABELS OFF';
+    }
+  }
+
+  function updateGraphLegend(nodesCount, explicitCount, inferredVisibleCount, inferredTotal) {
+    const legend = document.getElementById('graph-legend');
+    if (!legend) return;
+    const inferredText = graphShowInferred
+      ? \`INFERRED \${inferredVisibleCount}/\${inferredTotal}\`
+      : \`INFERRED OFF (\${inferredTotal} AVAIL)\`;
+    legend.innerHTML = \`
+      <span class="graph-legend-item">NODES \${nodesCount}</span>
+      <span class="graph-legend-item">LINKS \${explicitCount}</span>
+      <span class="graph-legend-item">\${inferredText}</span>
+    \`;
+  }
+
+  function cloneGraphData() {
+    return {
+      nodes: (lastGraphData.nodes || []).map(n => ({ ...n })),
+      edges: (lastGraphData.edges || []).map(e => ({ ...e })),
+      inferred_edges: (lastGraphData.inferred_edges || []).map(e => ({ ...e })),
+    };
+  }
+
+  function rerenderGraphFromCache() {
+    const data = cloneGraphData();
+    renderGraph(data.nodes, data.edges, data.inferred_edges);
+  }
+
+  function toggleGraphInferred() {
+    graphShowInferred = !graphShowInferred;
+    syncGraphToolbarState();
+    if (graphVisible) rerenderGraphFromCache();
+  }
+
+  function toggleGraphLabels() {
+    graphShowLabels = !graphShowLabels;
+    syncGraphToolbarState();
+    if (graphVisible) rerenderGraphFromCache();
+  }
+
+  function resetGraphView() {
+    if (!graphSvgSelection || !graphZoomBehavior) return;
+    graphSvgSelection.transition().duration(220).call(graphZoomBehavior.transform, d3.zoomIdentity);
+  }
+
   async function showGraph() {
     graphVisible = true;
+    syncGraphToolbarState();
     ['all','note','fact','journal'].forEach(t => {
       document.getElementById('stat-' + t).classList.remove('active');
     });
@@ -1602,6 +1816,8 @@ function viewerHtml(): string {
     document.getElementById('graph-view').style.display = 'block';
     const emptyEl = document.getElementById('graph-empty');
     if (emptyEl) emptyEl.style.display = 'none';
+    const legendEl = document.getElementById('graph-legend');
+    if (legendEl) legendEl.innerHTML = '';
 
     const svg = document.getElementById('graph-svg');
     svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--amber);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">LOADING GRAPH...</text>';
@@ -1614,20 +1830,28 @@ function viewerHtml(): string {
       lastGraphData = {
         nodes: (data.nodes || []).map(n => ({ ...n })),
         edges: (data.edges || []).map(e => ({ ...e })),
+        inferred_edges: (data.inferred_edges || []).map(e => ({ ...e })),
       };
-      renderGraph(lastGraphData.nodes.map(n => ({ ...n })), lastGraphData.edges.map(e => ({ ...e })));
+      if (!graphAutoTunedLabels && (lastGraphData.edges.length + lastGraphData.inferred_edges.length) > 80) {
+        graphShowLabels = false;
+        graphAutoTunedLabels = true;
+      }
+      syncGraphToolbarState();
+      rerenderGraphFromCache();
     } catch(e) {
       document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--red);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">ERROR LOADING GRAPH</text>';
     }
   }
 
-  function renderGraph(nodes, edges) {
+  function renderGraph(nodes, edges, inferredEdges = []) {
     const svgEl = document.getElementById('graph-svg');
     const emptyEl = document.getElementById('graph-empty');
     svgEl.innerHTML = '';
     if (emptyEl) emptyEl.style.display = 'none';
 
     if (!nodes.length) {
+      const legendEl = document.getElementById('graph-legend');
+      if (legendEl) legendEl.innerHTML = '';
       if (emptyEl) { emptyEl.style.display = 'flex'; }
       return;
     }
@@ -1638,28 +1862,44 @@ function viewerHtml(): string {
     const typeColor = { note: '#00c8b4', fact: '#f0a500', journal: '#8888ff' };
 
     const nodeMap = new Map(nodes.map(n => [n.id, n]));
-    const links = edges.map(e => ({ ...e, source: e.from_id, target: e.to_id }))
+    const explicitLinks = edges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'explicit' }))
       .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target));
+    const inferredLinks = graphShowInferred
+      ? inferredEdges.map(e => ({ ...e, source: e.from_id, target: e.to_id, kind: 'inferred' }))
+        .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target))
+      : [];
+    const links = [...explicitLinks, ...inferredLinks];
+
+    const degreeById = new Map();
+    links.forEach((l) => {
+      degreeById.set(l.source, (degreeById.get(l.source) || 0) + 1);
+      degreeById.set(l.target, (degreeById.get(l.target) || 0) + 1);
+    });
 
     const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id(d => d.id).distance(isMobile ? 96 : 120))
+      .force('link', d3.forceLink(links).id(d => d.id).distance((d) => d.kind === 'inferred' ? (isMobile ? 74 : 90) : (isMobile ? 96 : 120)).strength((d) => d.kind === 'inferred' ? 0.15 : 0.45))
       .force('charge', d3.forceManyBody().strength(isMobile ? -220 : -300))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collision', d3.forceCollide(isMobile ? 24 : 30));
 
     const svg = d3.select('#graph-svg');
+    graphSvgSelection = svg;
+    updateGraphLegend(nodes.length, explicitLinks.length, inferredLinks.length, inferredEdges.length);
     const g = svg.append('g');
 
-    svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
+    const zoom = d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
       g.attr('transform', event.transform);
-    }));
+    });
+    graphZoomBehavior = zoom;
+    svg.call(zoom);
 
     const link = g.append('g').selectAll('line')
-      .data(links).join('line').attr('class', 'graph-link');
+      .data(links).join('line').attr('class', d => \`graph-link \${d.kind}\`);
 
     const linkLabel = g.append('g').selectAll('text')
       .data(links).join('text').attr('class', 'graph-link-label')
-      .text(d => d.label || '');
+      .style('display', graphShowLabels ? null : 'none')
+      .text(d => d.kind === 'explicit' ? (d.label || '') : '');
 
     const node = g.append('g').selectAll('g')
       .data(nodes).join('g').attr('class', 'graph-node')
@@ -1671,7 +1911,12 @@ function viewerHtml(): string {
       .on('click', (event, d) => { expandById(d.id); });
 
     node.append('circle')
-      .attr('r', isMobile ? 10 : 8)
+      .attr('r', d => {
+        const degree = degreeById.get(d.id) || 0;
+        const base = isMobile ? 8 : 6;
+        const maxR = isMobile ? 14 : 12;
+        return Math.min(maxR, base + degree * 0.45);
+      })
       .attr('fill', d => typeColor[d.type] || '#888')
       .attr('fill-opacity', 0.85)
       .attr('stroke', d => typeColor[d.type] || '#888');
@@ -1695,9 +1940,11 @@ function viewerHtml(): string {
     clearTimeout(graphResizeTimer);
     graphResizeTimer = setTimeout(() => {
       if (!graphVisible) return;
-      renderGraph(lastGraphData.nodes.map(n => ({ ...n })), lastGraphData.edges.map(e => ({ ...e })));
+      rerenderGraphFromCache();
     }, 120);
   });
+
+  syncGraphToolbarState();
 
   // Enter key on login
   document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
@@ -1715,7 +1962,7 @@ export default {
     }
 
     if (url.pathname === '/') {
-      return jsonResponse({ name: 'ai-memory-mcp', version: '1.0.0', status: 'ok', tools: TOOLS.length });
+      return jsonResponse({ name: SERVER_NAME, version: SERVER_VERSION, status: 'ok', tools: TOOLS.length });
     }
 
     if (url.pathname === '/view') {
@@ -1738,6 +1985,22 @@ export default {
       }
       await clearRateLimit(ip, env);
       return handleApiMemories(request, env);
+    }
+
+    if (url.pathname === '/api/tools') {
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+          status: 429,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+        });
+      }
+      if (!checkAuth(request, env)) {
+        await recordFailedAttempt(ip, env);
+        return unauthorized();
+      }
+      await clearRateLimit(ip, env);
+      return handleApiTools();
     }
 
     if (url.pathname === '/mcp') {
