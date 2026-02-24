@@ -1,16 +1,31 @@
 {
   "name": "ai-memory-mcp",
-  "version": "1.0.0",
-  "description": "",
+  "version": "1.5.0",
+  "description": "MemoryVault MCP server on Cloudflare Workers + D1 with OAuth and graph-based memory tools.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run type-check",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "type-check": "tsc"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "memory",
+    "cloudflare-workers",
+    "d1",
+    "oauth",
+    "second-brain"
+  ],
+  "author": "MemoryVault",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/guirguispierre/ai-memory-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guirguispierre/ai-memory-mcp/issues"
+  },
+  "homepage": "https://ai-memory-mcp.guirguispierre.workers.dev",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",
