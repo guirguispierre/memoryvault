@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.2.3';
+const SERVER_VERSION = '1.2.4';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -143,6 +143,14 @@ function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
+function countKeywordHits(haystack: string, terms: string[]): number {
+  let count = 0;
+  for (const term of terms) {
+    if (haystack.includes(term)) count++;
+  }
+  return count;
+}
+
 function normalizeLinkStats(raw?: Partial<LinkStats>): LinkStats {
   return {
     link_count: toFiniteNumber(raw?.link_count, 0),
@@ -199,8 +207,34 @@ function computeDynamicScores(
   const createdAt = toFiniteNumber(memory.created_at, tsNow);
   const updatedAt = toFiniteNumber(memory.updated_at, createdAt);
   const ageDays = Math.max(0, (tsNow - updatedAt) / 86400);
+  const memoryType = typeof memory.type === 'string' ? memory.type.toLowerCase() : '';
+  const sourceText = typeof memory.source === 'string' ? memory.source.trim().toLowerCase() : '';
+  const textBlob = [
+    typeof memory.title === 'string' ? memory.title : '',
+    typeof memory.key === 'string' ? memory.key : '',
+    typeof memory.content === 'string' ? memory.content : '',
+    typeof memory.tags === 'string' ? memory.tags : '',
+  ].join(' ').toLowerCase();
 
-  const sourceBonus = (typeof memory.source === 'string' && memory.source.trim()) ? 0.05 : 0;
+  const certaintyHits = countKeywordHits(textBlob, ['verified', 'confirmed', 'exact', 'measured', 'token', 'id', 'official', 'passed']);
+  const hedgeHits = countKeywordHits(textBlob, ['maybe', 'might', 'perhaps', 'guess', 'probably', 'vague', 'unsure', 'i think']);
+  const importanceHits = countKeywordHits(textBlob, ['goal', 'strategy', 'deadline', 'todo', 'must', 'critical', 'priority', 'plan', 'task', 'decision', 'launch', 'ship']);
+  const highSignalSource = sourceText && countKeywordHits(sourceText, ['api', 'system', 'log', 'metric', 'official', 'doc', 'test', 'monitor']);
+  const lowSignalSource = sourceText && countKeywordHits(sourceText, ['rumor', 'guess', 'hearsay', 'vibe', 'idea']);
+  const contentLength = textBlob.replace(/\s+/g, '').length;
+
+  const sourceBonus = highSignalSource
+    ? 0.09
+    : sourceText
+      ? 0.04
+      : 0;
+  const sourcePenalty = lowSignalSource ? 0.07 : 0;
+  const certaintySignal = Math.min(0.2, certaintyHits * 0.04);
+  const hedgePenalty = Math.min(0.2, hedgeHits * 0.055);
+  const importanceKeywordSignal = Math.min(0.24, importanceHits * 0.045);
+  const contentDepthSignal = Math.min(0.08, Math.max(0, (contentLength - 80) / 420) * 0.08);
+  const typeConfidenceBias = memoryType === 'fact' ? 0.08 : memoryType === 'journal' ? -0.06 : 0;
+  const typeImportanceBias = memoryType === 'note' ? 0.04 : memoryType === 'fact' ? 0.02 : 0.01;
   const linkSignal = Math.min(0.18, Math.log1p(stats.link_count) * 0.06);
   const supportSignal = Math.min(0.22, stats.supports_count * 0.05);
   const contradictionPenalty = Math.min(0.28, stats.contradicts_count * 0.09);
@@ -219,15 +253,22 @@ function computeDynamicScores(
   const dynamicConfidence = round3(clamp01(
     baseConfidence
       + sourceBonus
+      + certaintySignal
+      + typeConfidenceBias
       + supportSignal
       + (linkSignal * 0.35)
       + (exampleSignal * 0.25)
       - contradictionPenalty
+      - hedgePenalty
+      - sourcePenalty
       - stalePenalty
   ));
 
   const dynamicImportance = round3(clamp01(
     baseImportance
+      + importanceKeywordSignal
+      + contentDepthSignal
+      + typeImportanceBias
       + linkSignal
       + causeSignal
       + exampleSignal
@@ -256,6 +297,32 @@ function enrichMemoryRowsWithDynamics(
       ...computeDynamicScores(row, stats, tsNow),
     };
   });
+}
+
+function projectMemoryForClient(row: Record<string, unknown>): Record<string, unknown> {
+  const baseConfidence = clamp01(toFiniteNumber(row.confidence, 0.7));
+  const baseImportance = clamp01(toFiniteNumber(row.importance, 0.5));
+  const dynConfidence = clamp01(toFiniteNumber(row.dynamic_confidence, baseConfidence));
+  const dynImportance = clamp01(toFiniteNumber(row.dynamic_importance, baseImportance));
+  return {
+    ...row,
+    base_confidence: round3(baseConfidence),
+    base_importance: round3(baseImportance),
+    confidence: round3(dynConfidence),
+    importance: round3(dynImportance),
+    dynamic_confidence: round3(dynConfidence),
+    dynamic_importance: round3(dynImportance),
+  };
+}
+
+async function enrichAndProjectRows(
+  env: Env,
+  rows: Array<Record<string, unknown>>,
+  tsNow = now()
+): Promise<Array<Record<string, unknown>>> {
+  if (!rows.length) return [];
+  const linkStatsMap = await loadLinkStatsMap(env);
+  return enrichMemoryRowsWithDynamics(rows, linkStatsMap, tsNow).map(projectMemoryForClient);
 }
 
 const TOOLS = [
@@ -474,11 +541,33 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         }
       }
 
+      const insertedRow: Record<string, unknown> = {
+        id,
+        type,
+        title: typeof title === 'string' ? title : null,
+        key: typeof key === 'string' ? key : null,
+        content: content.trim(),
+        tags: typeof tags === 'string' ? tags : null,
+        source: typeof source === 'string' ? source : null,
+        confidence: confidenceVal,
+        importance: importanceVal,
+        created_at: ts,
+        updated_at: ts,
+      };
+      const scoredMemory = projectMemoryForClient({
+        ...insertedRow,
+        ...computeDynamicScores(insertedRow, EMPTY_LINK_STATS, ts),
+      });
+
       const saveResult: Record<string, unknown> = {
         id,
         message: `Saved memory with id: ${id}`,
-        confidence: confidenceVal,
-        importance: importanceVal,
+        confidence: scoredMemory.confidence,
+        importance: scoredMemory.importance,
+        dynamic_confidence: scoredMemory.dynamic_confidence,
+        dynamic_importance: scoredMemory.dynamic_importance,
+        base_confidence: scoredMemory.base_confidence,
+        base_importance: scoredMemory.base_importance,
       };
       if (suggestedLinks.length > 0) saveResult.suggested_links = suggestedLinks;
       return { content: [{ type: 'text', text: JSON.stringify(saveResult) }] };
@@ -487,9 +576,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
     case 'memory_get': {
       const { id } = args as { id: unknown };
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
-      const row = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first();
+      const row = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<Record<string, unknown>>();
       if (!row) return { content: [{ type: 'text', text: 'Memory not found.' }] };
-      return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+      const [scored] = await enrichAndProjectRows(env, [row]);
+      return { content: [{ type: 'text', text: JSON.stringify(scored ?? row, null, 2) }] };
     }
 
     case 'memory_get_fact': {
@@ -497,9 +587,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (typeof key !== 'string' || !key) return { content: [{ type: 'text', text: 'key must be a non-empty string.' }] };
       const row = await env.DB.prepare(
         'SELECT * FROM memories WHERE type = ? AND key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
-      ).bind('fact', key).first();
+      ).bind('fact', key).first<Record<string, unknown>>();
       if (!row) return { content: [{ type: 'text', text: `No fact found with key: ${key}` }] };
-      return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+      const [scored] = await enrichAndProjectRows(env, [row]);
+      return { content: [{ type: 'text', text: JSON.stringify(scored ?? row, null, 2) }] };
     }
 
     case 'memory_search': {
@@ -517,9 +608,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
           'SELECT * FROM memories WHERE archived_at IS NULL AND (content LIKE ? OR title LIKE ? OR key LIKE ?) ORDER BY created_at DESC LIMIT 20'
         ).bind(like, like, like);
       }
-      const results = await stmt.all();
+      const results = await stmt.all<Record<string, unknown>>();
       if (!results.results.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
-      return { content: [{ type: 'text', text: JSON.stringify(results.results, null, 2) }] };
+      const scored = await enrichAndProjectRows(env, results.results);
+      return { content: [{ type: 'text', text: JSON.stringify(scored, null, 2) }] };
     }
 
     case 'memory_list': {
@@ -532,9 +624,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (typeof tag === 'string' && tag) { query += ' AND tags LIKE ?'; params.push(`%${tag}%`); }
       query += ' ORDER BY created_at DESC LIMIT ?';
       params.push(limit);
-      const results = await env.DB.prepare(query).bind(...params).all();
+      const results = await env.DB.prepare(query).bind(...params).all<Record<string, unknown>>();
       if (!results.results.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
-      return { content: [{ type: 'text', text: JSON.stringify(results.results, null, 2) }] };
+      const scored = await enrichAndProjectRows(env, results.results);
+      return { content: [{ type: 'text', text: JSON.stringify(scored, null, 2) }] };
     }
 
     case 'memory_update': {
@@ -577,7 +670,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         now(),
         id
       ).run();
-      return { content: [{ type: 'text', text: `Memory ${id} updated.` }] };
+      const updated = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<Record<string, unknown>>();
+      if (!updated) return { content: [{ type: 'text', text: `Memory ${id} updated.` }] };
+      const [scored] = await enrichAndProjectRows(env, [updated]);
+      return { content: [{ type: 'text', text: JSON.stringify({ message: `Memory ${id} updated.`, memory: scored ?? updated }) }] };
     }
 
     case 'memory_delete': {
@@ -594,8 +690,15 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const byType = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE archived_at IS NULL GROUP BY type').all();
       const relationStats = await env.DB.prepare('SELECT relation_type, COUNT(*) as count FROM memory_links GROUP BY relation_type').all();
       const recent = await env.DB.prepare(
-        'SELECT id, type, title, key, created_at, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 5'
-      ).all();
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 5'
+      ).all<Record<string, unknown>>();
+      const recentScored = await enrichAndProjectRows(env, recent.results);
+      const avgDynamicConfidence = recentScored.length
+        ? round3(recentScored.reduce((sum, m) => sum + toFiniteNumber(m.dynamic_confidence, 0.7), 0) / recentScored.length)
+        : null;
+      const avgDynamicImportance = recentScored.length
+        ? round3(recentScored.reduce((sum, m) => sum + toFiniteNumber(m.dynamic_importance, 0.5), 0) / recentScored.length)
+        : null;
       return {
         content: [{
           type: 'text',
@@ -604,7 +707,9 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
             archived: archived?.count ?? 0,
             by_type: byType.results,
             by_relation: relationStats.results,
-            recent_5: recent.results,
+            avg_recent_dynamic_confidence: avgDynamicConfidence,
+            avg_recent_dynamic_importance: avgDynamicImportance,
+            recent_5: recentScored,
           }, null, 2),
         }],
       };
@@ -685,44 +790,40 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         'SELECT ml.id as link_id, ml.label, ml.relation_type, ml.from_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ? AND m.archived_at IS NULL'
       ).bind(id).all();
 
+      const tsNow = now();
+      const linkStatsMap = await loadLinkStatsMap(env);
+      const toScoredMemory = (r: Record<string, unknown>): Record<string, unknown> => {
+        const base = {
+          id: r.id,
+          type: r.type,
+          title: r.title,
+          key: r.key,
+          content: r.content,
+          tags: r.tags,
+          source: r.source,
+          confidence: r.confidence,
+          importance: r.importance,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        } as Record<string, unknown>;
+        const scored = computeDynamicScores(base, linkStatsMap.get(String(r.id ?? '')), tsNow);
+        return projectMemoryForClient({ ...base, ...scored });
+      };
+
       const results = [
         ...fromLinks.results.map((r: Record<string, unknown>) => ({
           link_id: r.link_id,
           relation_type: r.relation_type,
           label: r.label,
           direction: 'from',
-          memory: {
-            id: r.id,
-            type: r.type,
-            title: r.title,
-            key: r.key,
-            content: r.content,
-            tags: r.tags,
-            source: r.source,
-            confidence: r.confidence,
-            importance: r.importance,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-          },
+          memory: toScoredMemory(r),
         })),
         ...toLinks.results.map((r: Record<string, unknown>) => ({
           link_id: r.link_id,
           relation_type: r.relation_type,
           label: r.label,
           direction: 'to',
-          memory: {
-            id: r.id,
-            type: r.type,
-            title: r.title,
-            key: r.key,
-            content: r.content,
-            tags: r.tags,
-            source: r.source,
-            confidence: r.confidence,
-            importance: r.importance,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-          },
+          memory: toScoredMemory(r),
         })),
       ];
 
@@ -1065,7 +1166,8 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
     linkStatsMap,
     tsNow
   );
-  const sortedMemories = [...enrichedMemories].sort((a, b) => {
+  const projectedMemories = enrichedMemories.map(projectMemoryForClient);
+  const sortedMemories = [...projectedMemories].sort((a, b) => {
     const impA = toFiniteNumber(a.dynamic_importance ?? a.importance, 0.5);
     const impB = toFiniteNumber(b.dynamic_importance ?? b.importance, 0.5);
     if (impB !== impA) return impB - impA;
@@ -1094,6 +1196,25 @@ async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
 
   const tsNow = now();
   const linkStatsMap = await loadLinkStatsMap(env);
+  const toScoredMemory = (r: Record<string, unknown>): Record<string, unknown> => {
+    const base = {
+      id: r.id,
+      type: r.type,
+      title: r.title,
+      key: r.key,
+      content: r.content,
+      tags: r.tags,
+      source: r.source,
+      confidence: r.confidence,
+      importance: r.importance,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    } as Record<string, unknown>;
+    return projectMemoryForClient({
+      ...base,
+      ...computeDynamicScores(base, linkStatsMap.get(String(r.id ?? '')), tsNow),
+    });
+  };
 
   const results = [
     ...fromLinks.results.map((r: Record<string, unknown>) => ({
@@ -1101,62 +1222,14 @@ async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
       relation_type: r.relation_type,
       label: r.label,
       direction: 'from',
-      memory: {
-        id: r.id,
-        type: r.type,
-        title: r.title,
-        key: r.key,
-        content: r.content,
-        tags: r.tags,
-        source: r.source,
-        confidence: r.confidence,
-        importance: r.importance,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-        ...computeDynamicScores(
-          {
-            id: r.id,
-            source: r.source,
-            confidence: r.confidence,
-            importance: r.importance,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-          },
-          linkStatsMap.get(String(r.id ?? '')),
-          tsNow
-        ),
-      },
+      memory: toScoredMemory(r),
     })),
     ...toLinks.results.map((r: Record<string, unknown>) => ({
       link_id: r.link_id,
       relation_type: r.relation_type,
       label: r.label,
       direction: 'to',
-      memory: {
-        id: r.id,
-        type: r.type,
-        title: r.title,
-        key: r.key,
-        content: r.content,
-        tags: r.tags,
-        source: r.source,
-        confidence: r.confidence,
-        importance: r.importance,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-        ...computeDynamicScores(
-          {
-            id: r.id,
-            source: r.source,
-            confidence: r.confidence,
-            importance: r.importance,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-          },
-          linkStatsMap.get(String(r.id ?? '')),
-          tsNow
-        ),
-      },
+      memory: toScoredMemory(r),
     })),
   ];
 
@@ -1179,7 +1252,7 @@ async function handleApiGraph(env: Env): Promise<Response> {
     memories.results as Array<Record<string, unknown>>,
     linkStatsMap,
     tsNow
-  );
+  ).map(projectMemoryForClient);
   const explicitEdges = links.results as Array<Record<string, unknown>>;
 
   // Build inferred (non-persisted) graph edges from shared tags.
