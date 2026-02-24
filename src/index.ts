@@ -643,6 +643,10 @@ function viewerHtml(): string {
     overflow-x: hidden;
   }
 
+  .stat-pill, .refresh-btn, .logout-btn, .login-btn, .card, .connection-chip, .expand-close {
+    touch-action: manipulation;
+  }
+
   /* Scanline overlay */
   body::before {
     content: '';
@@ -1151,6 +1155,121 @@ function viewerHtml(): string {
   .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; }
   .graph-link { stroke: var(--border-bright); stroke-width: 1.5px; }
   .graph-link-label { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); pointer-events: none; }
+
+  @media (max-width: 900px) {
+    .hdr { padding: 0.85rem 1rem; }
+    .controls { padding: 0.75rem 1rem; }
+    .grid-wrap { padding: 1rem; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+    .footer { padding: 0.65rem 1rem; flex-wrap: wrap; gap: 0.45rem; }
+  }
+
+  @media (max-width: 640px) {
+    body::before { display: none; }
+    #login-screen { padding: 1rem; }
+    .login-box { padding: 2rem 1rem 1.5rem; }
+    .login-box::before { left: 1rem; }
+    .vault-logo { font-size: 1.65rem; }
+    .vault-sub { margin-bottom: 1.5rem; font-size: 0.62rem; }
+    .token-input, .search-input { font-size: 16px; }
+
+    .hdr {
+      position: static;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.65rem;
+      padding: 0.75rem 0.75rem 0.6rem;
+    }
+    .hdr-brand { font-size: 1.05rem; }
+    .hdr-right {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.6rem;
+    }
+    .hdr-meta { text-align: left; font-size: 0.58rem; letter-spacing: 0.08em; }
+    #live-indicator { font-size: 0.54rem !important; letter-spacing: 0.12em !important; }
+    .logout-btn {
+      margin-left: 0;
+      min-height: 38px;
+      padding: 0.45rem 0.72rem;
+      font-size: 0.62rem;
+    }
+
+    .stats-bar {
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .stats-bar::-webkit-scrollbar { display: none; }
+    .stat-pill {
+      flex: 0 0 88px;
+      padding: 0.55rem 0.4rem;
+    }
+    .stat-num { font-size: 1.1rem; }
+    .stat-label { font-size: 0.55rem; letter-spacing: 0.14em; }
+
+    .controls {
+      flex-direction: column;
+      align-items: stretch;
+      padding: 0.65rem 0.75rem;
+      gap: 0.55rem;
+    }
+    .search-wrap { min-width: 0; width: 100%; }
+    .refresh-btn {
+      width: 100%;
+      min-height: 42px;
+      font-size: 0.62rem;
+    }
+
+    #graph-view { min-height: 54vh !important; }
+    #graph-svg { min-height: 54vh !important; height: 54vh !important; }
+    .graph-link-label { display: none; }
+
+    .grid-wrap {
+      padding: 0.5rem;
+      grid-template-columns: 1fr;
+      gap: 1px;
+    }
+    .card { padding: 1rem 1rem 0.95rem; }
+    .card-content { max-height: 96px; }
+    .card-footer {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.45rem;
+    }
+    .card-date { align-self: flex-end; font-size: 0.58rem; }
+
+    .expand-overlay {
+      padding: 0;
+      align-items: stretch;
+    }
+    .expand-box {
+      margin-top: 0;
+      max-width: none;
+      min-height: 100vh;
+      border: none;
+      border-top: 1px solid var(--border-bright);
+      padding: 3.25rem 1rem 1.25rem;
+    }
+    .expand-close {
+      top: 0.65rem;
+      right: 0.65rem;
+      padding: 0.45rem 0.7rem;
+      font-size: 0.62rem;
+    }
+    .expand-content { font-size: 0.8rem; line-height: 1.7; }
+    .connection-chip {
+      display: flex;
+      width: 100%;
+      margin-right: 0;
+    }
+
+    .footer { padding: 0.55rem 0.75rem; }
+    .footer-text { font-size: 0.52rem; letter-spacing: 0.08em; }
+    .footer .footer-text:last-child { display: none; }
+  }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
@@ -1164,7 +1283,7 @@ function viewerHtml(): string {
     <div class="vault-logo">MEMORY<span>VAULT</span></div>
     <div class="vault-sub">Secure Access Required</div>
     <div class="field-label">Access Token</div>
-    <input type="password" class="token-input" id="token-input" placeholder="Enter bearer token..." autocomplete="off" spellcheck="false">
+    <input type="password" class="token-input" id="token-input" placeholder="Enter bearer token..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <button class="login-btn" onclick="doLogin()">AUTHENTICATE →</button>
     <div class="login-error" id="login-error">⚠ ACCESS DENIED — invalid token</div>
   </div>
@@ -1174,7 +1293,7 @@ function viewerHtml(): string {
 <div id="app">
   <header class="hdr">
     <div class="hdr-brand">MEMORY<span>VAULT</span></div>
-    <div style="display:flex;align-items:center;gap:1rem">
+    <div class="hdr-right">
       <div class="hdr-meta">
         <div id="hdr-count">— entries</div>
         <div id="hdr-time"></div>
@@ -1211,7 +1330,7 @@ function viewerHtml(): string {
 
   <div class="controls">
     <div class="search-wrap">
-      <input type="text" class="search-input" id="search-input" placeholder="Search memories..." oninput="onSearch(this.value)">
+      <input type="text" class="search-input" id="search-input" placeholder="Search memories..." inputmode="search" oninput="onSearch(this.value)">
     </div>
     <button class="refresh-btn" onclick="loadMemories()">↻ REFRESH</button>
   </div>
@@ -1248,6 +1367,9 @@ function viewerHtml(): string {
   let searchTimeout = null;
   let allMemories = [];
   let expandGen = 0;
+  let graphVisible = false;
+  let lastGraphData = { nodes: [], edges: [] };
+  let graphResizeTimer = null;
 
   function doLogin() {
     const val = document.getElementById('token-input').value.trim();
@@ -1353,7 +1475,7 @@ function viewerHtml(): string {
     const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';
     const typeColors = { note: 'var(--teal)', fact: 'var(--amber)', journal: '#8888ff' };
     document.getElementById('expand-header').innerHTML =
-      \`<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
+      \`<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;flex-wrap:wrap">
         <span style="font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;border:1px solid \${typeColors[m.type]||'#fff'};color:\${typeColors[m.type]||'#fff'};padding:0.2rem 0.5rem">\${m.type}</span>
         \${m.title ? \`<span style="font-family:var(--sans);font-weight:700;font-size:1.1rem;color:var(--text-bright)">\${esc(m.title)}</span>\` : ''}
         \${m.key ? \`<span style="font-size:0.75rem;color:var(--amber)">KEY: \${esc(m.key)}</span>\` : ''}
@@ -1408,6 +1530,7 @@ function viewerHtml(): string {
   }
 
   function setFilter(type) {
+    graphVisible = false;
     document.getElementById('graph-view').style.display = 'none';
     document.querySelector('.grid-wrap').style.display = 'grid';
     activeFilter = type;
@@ -1470,6 +1593,7 @@ function viewerHtml(): string {
   }
 
   async function showGraph() {
+    graphVisible = true;
     ['all','note','fact','journal'].forEach(t => {
       document.getElementById('stat-' + t).classList.remove('active');
     });
@@ -1487,7 +1611,11 @@ function viewerHtml(): string {
       if (r.status === 401) { doLogout(); return; }
       if (!r.ok) throw new Error('failed');
       const data = await r.json();
-      renderGraph(data.nodes || [], data.edges || []);
+      lastGraphData = {
+        nodes: (data.nodes || []).map(n => ({ ...n })),
+        edges: (data.edges || []).map(e => ({ ...e })),
+      };
+      renderGraph(lastGraphData.nodes.map(n => ({ ...n })), lastGraphData.edges.map(e => ({ ...e })));
     } catch(e) {
       document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--red);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">ERROR LOADING GRAPH</text>';
     }
@@ -1506,6 +1634,7 @@ function viewerHtml(): string {
 
     const width = svgEl.clientWidth || 800;
     const height = svgEl.clientHeight || 600;
+    const isMobile = window.matchMedia('(max-width: 640px)').matches;
     const typeColor = { note: '#00c8b4', fact: '#f0a500', journal: '#8888ff' };
 
     const nodeMap = new Map(nodes.map(n => [n.id, n]));
@@ -1513,10 +1642,10 @@ function viewerHtml(): string {
       .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target));
 
     const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id(d => d.id).distance(120))
-      .force('charge', d3.forceManyBody().strength(-300))
+      .force('link', d3.forceLink(links).id(d => d.id).distance(isMobile ? 96 : 120))
+      .force('charge', d3.forceManyBody().strength(isMobile ? -220 : -300))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide(30));
+      .force('collision', d3.forceCollide(isMobile ? 24 : 30));
 
     const svg = d3.select('#graph-svg');
     const g = svg.append('g');
@@ -1542,14 +1671,14 @@ function viewerHtml(): string {
       .on('click', (event, d) => { expandById(d.id); });
 
     node.append('circle')
-      .attr('r', 8)
+      .attr('r', isMobile ? 10 : 8)
       .attr('fill', d => typeColor[d.type] || '#888')
       .attr('fill-opacity', 0.85)
       .attr('stroke', d => typeColor[d.type] || '#888');
 
     node.append('text')
       .attr('dx', 12).attr('dy', 4)
-      .text(d => (d.title || d.key || d.content || '').slice(0, 24));
+      .text(d => (d.title || d.key || d.content || '').slice(0, isMobile ? 18 : 24));
 
     simulation.on('tick', () => {
       link
@@ -1561,6 +1690,14 @@ function viewerHtml(): string {
       node.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
     });
   }
+
+  window.addEventListener('resize', () => {
+    clearTimeout(graphResizeTimer);
+    graphResizeTimer = setTimeout(() => {
+      if (!graphVisible) return;
+      renderGraph(lastGraphData.nodes.map(n => ({ ...n })), lastGraphData.edges.map(e => ({ ...e })));
+    }, 120);
+  });
 
   // Enter key on login
   document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
