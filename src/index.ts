@@ -1233,6 +1233,7 @@ function viewerHtml(): string {
   let activeFilter = '';
   let searchTimeout = null;
   let allMemories = [];
+  let expandGen = 0;
 
   function doLogin() {
     const val = document.getElementById('token-input').value.trim();
@@ -1352,9 +1353,16 @@ function viewerHtml(): string {
     // Lazy-load connections
     const connEl = document.getElementById('expand-connections');
     connEl.innerHTML = '<div style="font-size:0.65rem;color:var(--text-dim);letter-spacing:0.1em;margin-top:1rem">LOADING CONNECTIONS...</div>';
+    const myGen = ++expandGen;
     fetch(BASE + '/api/links/' + m.id, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
-      .then(r => r.json())
+      .then(r => {
+        if (r.status === 401) { doLogout(); return null; }
+        if (!r.ok) throw new Error('fetch failed');
+        return r.json();
+      })
       .then(links => {
+        if (!links) return;
+        if (myGen !== expandGen) return; // card changed, discard stale result
         if (!links || !links.length) { connEl.innerHTML = ''; return; }
         connEl.innerHTML = \`<div class="connections-section">
           <div class="connections-title">⬡ Connections (\${links.length})</div>
@@ -1362,16 +1370,19 @@ function viewerHtml(): string {
             const cm = l.memory;
             const label = l.label ? \`<span class="chip-label">"\${esc(l.label)}"</span>\` : '';
             const name = cm.title || cm.key || (cm.content || '').slice(0, 40) + '…';
-            return \`<span class="connection-chip" onclick="expandById('\${cm.id}')">
-              <span class="chip-type">[\${cm.type}]</span>
+            return \`<span class="connection-chip" data-conn-id="\${esc(cm.id)}">
+              <span class="chip-type">[\${esc(cm.type)}]</span>
               \${esc(name)}
               \${label}
               <span style="opacity:0.4">→</span>
             </span>\`;
           }).join('')}
         </div>\`;
+        connEl.querySelectorAll('.connection-chip').forEach(chip => {
+          chip.addEventListener('click', () => expandById(chip.dataset.connId));
+        });
       })
-      .catch(() => { connEl.innerHTML = ''; });
+      .catch(() => { if (myGen === expandGen) connEl.innerHTML = ''; });
   }
 
   function closeExpand(e) {
@@ -1401,15 +1412,29 @@ function viewerHtml(): string {
 
   function expandById(id) {
     const idx = allMemories.findIndex(m => m.id === id);
-    if (idx !== -1) expandCard(idx);
+    if (idx !== -1) {
+      expandCard(idx);
+    } else {
+      // Memory not found in current view (may be filtered out or not yet loaded)
+      const connEl = document.getElementById('expand-connections');
+      if (connEl) {
+        const note = document.createElement('div');
+        note.style.cssText = 'font-size:0.65rem;color:var(--text-dim);letter-spacing:0.1em;margin-top:0.5rem';
+        note.textContent = '⚠ Linked memory not visible in current filter.';
+        const existing = connEl.querySelector('.connections-section');
+        if (existing) existing.appendChild(note);
+      }
+    }
   }
 
   let lastPollSig = '';
+  let pollIntervalId = null;
 
   function startLivePolling() {
+    if (pollIntervalId) return;
     const liveEl = document.getElementById('live-indicator');
     if (liveEl) liveEl.style.display = 'flex';
-    setInterval(async () => {
+    pollIntervalId = setInterval(async () => {
       if (!TOKEN) return;
       try {
         const r = await fetch(BASE + '/api/memories?limit=1', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
