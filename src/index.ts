@@ -4,7 +4,19 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.4.0';
+const SERVER_VERSION = '1.5.0';
+const LEGACY_BRAIN_ID = 'legacy-default-brain';
+const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
+const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+const PBKDF2_ITERATIONS = 180_000;
+
+type SessionTokens = {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  refresh_expires_in: number;
+  session_id: string;
+};
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -22,14 +34,239 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function unauthorized(): Response {
-  return jsonResponse({ error: 'Unauthorized' }, 401);
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401,
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
 }
 
-function checkAuth(request: Request, env: Env): boolean {
+type AuthContext = {
+  kind: 'legacy' | 'user';
+  brainId: string;
+  userId: string | null;
+  sessionId: string | null;
+};
+
+type AccessTokenPayload = {
+  typ: 'access';
+  sub: string;
+  bid: string;
+  sid: string;
+  iat: number;
+  exp: number;
+};
+
+function parseBearerToken(request: Request): string | null {
   const auth = request.headers.get('Authorization');
-  if (!auth) return false;
+  if (!auth) return null;
   const parts = auth.split(' ');
-  return parts.length === 2 && parts[0] === 'Bearer' && parts[1] === env.AUTH_SECRET;
+  if (parts.length !== 2 || parts[0] !== 'Bearer') return null;
+  return parts[1] || null;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let bin = '';
+  for (const byte of bytes) bin += String.fromCharCode(byte);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlToBytes(input: string): Uint8Array {
+  const base64 = input.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(input.length / 4) * 4, '=');
+  const bin = atob(base64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function hmacSha256(secret: string, data: string): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
+  return new Uint8Array(sig);
+}
+
+async function sha256DigestBase64Url(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return bytesToBase64Url(new Uint8Array(digest));
+}
+
+async function derivePasswordHash(password: string, salt: Uint8Array, iterations = PBKDF2_ITERATIONS): Promise<string> {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', iterations, salt },
+    keyMaterial,
+    256
+  );
+  return bytesToBase64Url(new Uint8Array(bits));
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await derivePasswordHash(password, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2_sha256$${PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${hash}`;
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [algo, iterRaw, saltRaw, hashRaw] = stored.split('$');
+  if (algo !== 'pbkdf2_sha256' || !iterRaw || !saltRaw || !hashRaw) return false;
+  const iterations = Number(iterRaw);
+  if (!Number.isFinite(iterations) || iterations < 10_000) return false;
+  const recomputed = await derivePasswordHash(password, base64UrlToBytes(saltRaw), iterations);
+  return recomputed === hashRaw;
+}
+
+function randomToken(size = 32): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(size));
+  return bytesToBase64Url(bytes);
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function isValidEmail(email: string): boolean {
+  const v = normalizeEmail(email);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) && v.length <= 254;
+}
+
+function isStrongEnoughPassword(password: string): boolean {
+  return password.length >= 10;
+}
+
+async function signAccessToken(payload: AccessTokenPayload, secret: string): Promise<string> {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const headerPart = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(header)));
+  const payloadPart = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  const body = `${headerPart}.${payloadPart}`;
+  const sig = await hmacSha256(secret, body);
+  return `${body}.${bytesToBase64Url(sig)}`;
+}
+
+async function verifyAccessToken(token: string, secret: string): Promise<AccessTokenPayload | null> {
+  const [headerPart, payloadPart, sigPart] = token.split('.');
+  if (!headerPart || !payloadPart || !sigPart) return null;
+  try {
+    const payloadJson = new TextDecoder().decode(base64UrlToBytes(payloadPart));
+    const payload = JSON.parse(payloadJson) as Partial<AccessTokenPayload>;
+    if (payload.typ !== 'access' || typeof payload.sub !== 'string' || typeof payload.bid !== 'string' || typeof payload.sid !== 'string') {
+      return null;
+    }
+    if (typeof payload.iat !== 'number' || typeof payload.exp !== 'number') return null;
+    if (payload.exp < now()) return null;
+    const expectedSig = await hmacSha256(secret, `${headerPart}.${payloadPart}`);
+    const givenSig = base64UrlToBytes(sigPart);
+    if (expectedSig.length !== givenSig.length) return null;
+    for (let i = 0; i < expectedSig.length; i++) {
+      if (expectedSig[i] !== givenSig[i]) return null;
+    }
+    return payload as AccessTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+async function createSessionTokens(userId: string, brainId: string, env: Env): Promise<{
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  refresh_expires_in: number;
+  session_id: string;
+}> {
+  const ts = now();
+  const sessionId = generateId();
+  const refreshToken = randomToken(32);
+  const refreshHash = await sha256DigestBase64Url(refreshToken);
+  const refreshExpiresAt = ts + REFRESH_TOKEN_TTL_SECONDS;
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions
+      (id, user_id, brain_id, refresh_hash, expires_at, created_at, used_at, revoked_at, replaced_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
+  ).bind(sessionId, userId, brainId, refreshHash, refreshExpiresAt, ts, ts).run();
+
+  const accessPayload: AccessTokenPayload = {
+    typ: 'access',
+    sub: userId,
+    bid: brainId,
+    sid: sessionId,
+    iat: ts,
+    exp: ts + ACCESS_TOKEN_TTL_SECONDS,
+  };
+  const accessToken = await signAccessToken(accessPayload, env.AUTH_SECRET);
+  return {
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expires_in: ACCESS_TOKEN_TTL_SECONDS,
+    refresh_expires_in: REFRESH_TOKEN_TTL_SECONDS,
+    session_id: sessionId,
+  };
+}
+
+async function rotateSession(refreshToken: string, env: Env): Promise<{
+  userId: string;
+  brainId: string;
+  tokens: SessionTokens;
+} | null> {
+  const refreshHash = await sha256DigestBase64Url(refreshToken);
+  const ts = now();
+  const session = await env.DB.prepare(
+    `SELECT id, user_id, brain_id, expires_at, revoked_at
+     FROM auth_sessions
+     WHERE refresh_hash = ?
+     LIMIT 1`
+  ).bind(refreshHash).first<{ id: string; user_id: string; brain_id: string; expires_at: number; revoked_at: number | null }>();
+  if (!session) return null;
+  if (session.revoked_at !== null || session.expires_at <= ts) return null;
+  const tokens = await createSessionTokens(session.user_id, session.brain_id, env);
+  await env.DB.prepare(
+    'UPDATE auth_sessions SET revoked_at = ?, replaced_by = ? WHERE id = ?'
+  ).bind(ts, tokens.session_id, session.id).run();
+  return { userId: session.user_id, brainId: session.brain_id, tokens };
+}
+
+async function revokeSession(refreshToken: string, env: Env): Promise<boolean> {
+  const refreshHash = await sha256DigestBase64Url(refreshToken);
+  const ts = now();
+  const result = await env.DB.prepare(
+    'UPDATE auth_sessions SET revoked_at = ? WHERE refresh_hash = ? AND revoked_at IS NULL'
+  ).bind(ts, refreshHash).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+async function authenticateRequest(request: Request, env: Env): Promise<AuthContext | null> {
+  const token = parseBearerToken(request);
+  if (!token) return null;
+  if (token === env.AUTH_SECRET) {
+    return { kind: 'legacy', brainId: LEGACY_BRAIN_ID, userId: null, sessionId: null };
+  }
+
+  const payload = await verifyAccessToken(token, env.AUTH_SECRET);
+  if (!payload) return null;
+  const ts = now();
+  const row = await env.DB.prepare(
+    `SELECT s.id, s.user_id, s.brain_id
+     FROM auth_sessions s
+     JOIN brain_memberships bm ON bm.user_id = s.user_id AND bm.brain_id = s.brain_id
+     WHERE s.id = ?
+       AND s.user_id = ?
+       AND s.brain_id = ?
+       AND s.expires_at > ?
+       AND s.revoked_at IS NULL
+     LIMIT 1`
+  ).bind(payload.sid, payload.sub, payload.bid, ts).first<{ id: string; user_id: string; brain_id: string }>();
+  if (!row) return null;
+  await env.DB.prepare('UPDATE auth_sessions SET used_at = ? WHERE id = ?').bind(ts, row.id).run();
+  return { kind: 'user', brainId: row.brain_id, userId: row.user_id, sessionId: row.id };
 }
 
 async function isRateLimited(ip: string, env: Env): Promise<boolean> {
@@ -96,17 +333,26 @@ async function ensureSchema(env: Env): Promise<void> {
       await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7");
       await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.5");
       await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN archived_at INTEGER");
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN brain_id TEXT");
       await runMigrationStatement(env, "ALTER TABLE memory_links ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'related'");
+      await runMigrationStatement(env, "ALTER TABLE memory_links ADD COLUMN brain_id TEXT");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_archived ON memories(archived_at)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance DESC)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_confidence ON memories(confidence DESC)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_links_relation_type ON memory_links(relation_type)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_memories_brain_created ON memories(brain_id, created_at DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_memories_brain_key ON memories(brain_id, key)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_links_brain_from ON memory_links(brain_id, from_id)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_links_brain_to ON memory_links(brain_id, to_id)");
       await runMigrationStatement(env, "UPDATE memories SET confidence = 0.7 WHERE confidence IS NULL");
       await runMigrationStatement(env, "UPDATE memories SET importance = 0.5 WHERE importance IS NULL");
       await runMigrationStatement(env, "UPDATE memory_links SET relation_type = 'related' WHERE relation_type IS NULL");
+      await runMigrationStatement(env, `UPDATE memories SET brain_id = '${LEGACY_BRAIN_ID}' WHERE brain_id IS NULL OR brain_id = ''`);
+      await runMigrationStatement(env, `UPDATE memory_links SET brain_id = '${LEGACY_BRAIN_ID}' WHERE brain_id IS NULL OR brain_id = ''`);
       await runMigrationStatement(env,
         `CREATE TABLE IF NOT EXISTS memory_changelog (
           id TEXT PRIMARY KEY,
+          brain_id TEXT NOT NULL DEFAULT '${LEGACY_BRAIN_ID}',
           event_type TEXT NOT NULL,
           entity_type TEXT NOT NULL,
           entity_id TEXT NOT NULL,
@@ -115,8 +361,70 @@ async function ensureSchema(env: Env): Promise<void> {
           created_at INTEGER NOT NULL
         )`
       );
+      await runMigrationStatement(env, `ALTER TABLE memory_changelog ADD COLUMN brain_id TEXT NOT NULL DEFAULT '${LEGACY_BRAIN_ID}'`);
+      await runMigrationStatement(env, `UPDATE memory_changelog SET brain_id = '${LEGACY_BRAIN_ID}' WHERE brain_id IS NULL OR brain_id = ''`);
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_changelog_created ON memory_changelog(created_at DESC)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_changelog_entity ON memory_changelog(entity_type, entity_id, created_at DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_changelog_brain_created ON memory_changelog(brain_id, created_at DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_changelog_brain_entity ON memory_changelog(brain_id, entity_type, entity_id, created_at DESC)");
+
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          email TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          display_name TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )`
+      );
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS brains (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          slug TEXT UNIQUE,
+          owner_user_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )`
+      );
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS brain_memberships (
+          brain_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          role TEXT NOT NULL DEFAULT 'member',
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (brain_id, user_id),
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_brain_memberships_user ON brain_memberships(user_id, brain_id)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_brains_owner ON brains(owner_user_id)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS auth_sessions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          brain_id TEXT NOT NULL,
+          refresh_hash TEXT NOT NULL UNIQUE,
+          expires_at INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          used_at INTEGER NOT NULL,
+          revoked_at INTEGER,
+          replaced_by TEXT,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_brain ON auth_sessions(brain_id, expires_at DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)");
+
+      const ts = now();
+      await env.DB.prepare(
+        'INSERT OR IGNORE INTO brains (id, name, slug, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?)'
+      ).bind(LEGACY_BRAIN_ID, 'Legacy Shared Brain', 'legacy-shared-brain', ts, ts).run();
     })().catch((err) => {
       schemaReady = null;
       throw err;
@@ -175,7 +483,7 @@ function normalizeLinkStats(raw?: Partial<LinkStats>): LinkStats {
   };
 }
 
-async function loadLinkStatsMap(env: Env): Promise<Map<string, LinkStats>> {
+async function loadLinkStatsMap(env: Env, brainId: string): Promise<Map<string, LinkStats>> {
   const rows = await env.DB.prepare(
     `SELECT
       rel.memory_id,
@@ -186,12 +494,12 @@ async function loadLinkStatsMap(env: Env): Promise<Map<string, LinkStats>> {
       SUM(CASE WHEN rel.relation_type = 'causes' THEN 1 ELSE 0 END) AS causes_count,
       SUM(CASE WHEN rel.relation_type = 'example_of' THEN 1 ELSE 0 END) AS example_of_count
     FROM (
-      SELECT from_id AS memory_id, relation_type FROM memory_links
+      SELECT from_id AS memory_id, relation_type FROM memory_links WHERE brain_id = ?
       UNION ALL
-      SELECT to_id AS memory_id, relation_type FROM memory_links
+      SELECT to_id AS memory_id, relation_type FROM memory_links WHERE brain_id = ?
     ) AS rel
     GROUP BY rel.memory_id`
-  ).all<Record<string, unknown>>();
+  ).bind(brainId, brainId).all<Record<string, unknown>>();
 
   const statsMap = new Map<string, LinkStats>();
   for (const row of rows.results) {
@@ -330,11 +638,12 @@ function projectMemoryForClient(row: Record<string, unknown>): Record<string, un
 
 async function enrichAndProjectRows(
   env: Env,
+  brainId: string,
   rows: Array<Record<string, unknown>>,
   tsNow = now()
 ): Promise<Array<Record<string, unknown>>> {
   if (!rows.length) return [];
-  const linkStatsMap = await loadLinkStatsMap(env);
+  const linkStatsMap = await loadLinkStatsMap(env, brainId);
   return enrichMemoryRowsWithDynamics(rows, linkStatsMap, tsNow).map(projectMemoryForClient);
 }
 
@@ -403,6 +712,7 @@ function stableJson(value: unknown): string {
 
 async function logChangelog(
   env: Env,
+  brainId: string,
   eventType: string,
   entityType: string,
   entityId: string,
@@ -410,9 +720,10 @@ async function logChangelog(
   payload?: unknown
 ): Promise<void> {
   await env.DB.prepare(
-    'INSERT INTO memory_changelog (id, event_type, entity_type, entity_id, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO memory_changelog (id, brain_id, event_type, entity_type, entity_id, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     generateId(),
+    brainId,
     eventType,
     entityType,
     entityId,
@@ -422,19 +733,20 @@ async function logChangelog(
   ).run();
 }
 
-async function ensureObjectiveRoot(env: Env): Promise<string> {
+async function ensureObjectiveRoot(env: Env, brainId: string): Promise<string> {
   const key = 'autonomous_objectives_root';
   const existing = await env.DB.prepare(
-    'SELECT id FROM memories WHERE key = ? AND archived_at IS NULL ORDER BY created_at ASC LIMIT 1'
-  ).bind(key).first<{ id: string }>();
+    'SELECT id FROM memories WHERE brain_id = ? AND key = ? AND archived_at IS NULL ORDER BY created_at ASC LIMIT 1'
+  ).bind(brainId, key).first<{ id: string }>();
   if (existing?.id) return existing.id;
 
   const ts = now();
   const id = generateId();
   await env.DB.prepare(
-    'INSERT INTO memories (id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
+    'INSERT INTO memories (id, brain_id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
   ).bind(
     id,
+    brainId,
     'note',
     'Autonomous Objectives Network',
     key,
@@ -446,7 +758,7 @@ async function ensureObjectiveRoot(env: Env): Promise<string> {
     ts,
     ts
   ).run();
-  await logChangelog(env, 'objective_root_created', 'memory', id, 'Created autonomous objectives root');
+  await logChangelog(env, brainId, 'objective_root_created', 'memory', id, 'Created autonomous objectives root');
   return id;
 }
 
@@ -719,7 +1031,7 @@ const TOOLS = [
 type ToolArgs = Record<string, unknown>;
 type McpResult = { content: Array<{ type: string; text: string }> };
 
-async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResult> {
+async function callTool(name: string, args: ToolArgs, env: Env, brainId: string): Promise<McpResult> {
   switch (name) {
     case 'memory_save': {
       const { type, content, title, key, tags, source, confidence, importance } = args as {
@@ -740,9 +1052,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const confidenceVal = clampToRange(confidence, 0.7);
       const importanceVal = clampToRange(importance, 0.5);
       await env.DB.prepare(
-        'INSERT INTO memories (id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
+        'INSERT INTO memories (id, brain_id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
       ).bind(
         id,
+        brainId,
         type,
         typeof title === 'string' ? title : null,
         typeof key === 'string' ? key : null,
@@ -762,8 +1075,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
           const conditions = tagList.map(() => 'tags LIKE ?').join(' OR ');
           const bindings = tagList.map((t: string) => `%${t}%`);
           const suggestions = await env.DB.prepare(
-            `SELECT id, type, title, key, tags FROM memories WHERE archived_at IS NULL AND id != ? AND (${conditions}) LIMIT 5`
-          ).bind(id, ...bindings).all();
+            `SELECT id, type, title, key, tags FROM memories WHERE brain_id = ? AND archived_at IS NULL AND id != ? AND (${conditions}) LIMIT 5`
+          ).bind(brainId, id, ...bindings).all();
           suggestedLinks = suggestions.results;
         }
       }
@@ -797,7 +1110,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         base_importance: scoredMemory.base_importance,
       };
       if (suggestedLinks.length > 0) saveResult.suggested_links = suggestedLinks;
-      await logChangelog(env, 'memory_created', 'memory', id, 'Created memory', {
+      await logChangelog(env, brainId, 'memory_created', 'memory', id, 'Created memory', {
         type,
         title: typeof title === 'string' ? title : null,
         key: typeof key === 'string' ? key : null,
@@ -808,9 +1121,9 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
     case 'memory_get': {
       const { id } = args as { id: unknown };
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
-      const row = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<Record<string, unknown>>();
+      const row = await env.DB.prepare('SELECT * FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).first<Record<string, unknown>>();
       if (!row) return { content: [{ type: 'text', text: 'Memory not found.' }] };
-      const [scored] = await enrichAndProjectRows(env, [row]);
+      const [scored] = await enrichAndProjectRows(env, brainId, [row]);
       return { content: [{ type: 'text', text: JSON.stringify(scored ?? row, null, 2) }] };
     }
 
@@ -818,10 +1131,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const { key } = args as { key: unknown };
       if (typeof key !== 'string' || !key) return { content: [{ type: 'text', text: 'key must be a non-empty string.' }] };
       const row = await env.DB.prepare(
-        'SELECT * FROM memories WHERE type = ? AND key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
-      ).bind('fact', key).first<Record<string, unknown>>();
+        'SELECT * FROM memories WHERE brain_id = ? AND type = ? AND key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
+      ).bind(brainId, 'fact', key).first<Record<string, unknown>>();
       if (!row) return { content: [{ type: 'text', text: `No fact found with key: ${key}` }] };
-      const [scored] = await enrichAndProjectRows(env, [row]);
+      const [scored] = await enrichAndProjectRows(env, brainId, [row]);
       return { content: [{ type: 'text', text: JSON.stringify(scored ?? row, null, 2) }] };
     }
 
@@ -833,16 +1146,16 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       let stmt;
       if (type) {
         stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE archived_at IS NULL AND type = ? AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
-        ).bind(type, like, like, like, like, like);
+          'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
+        ).bind(brainId, type, like, like, like, like, like);
       } else {
         stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE archived_at IS NULL AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
-        ).bind(like, like, like, like, like);
+          'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
+        ).bind(brainId, like, like, like, like, like);
       }
       const results = await stmt.all<Record<string, unknown>>();
       if (!results.results.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
-      const scored = await enrichAndProjectRows(env, results.results);
+      const scored = await enrichAndProjectRows(env, brainId, results.results);
       return { content: [{ type: 'text', text: JSON.stringify(scored, null, 2) }] };
     }
 
@@ -850,15 +1163,15 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const { type, tag, limit: rawLimit } = args as { type?: unknown; tag?: unknown; limit?: unknown };
       if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 20, 1), 100);
-      let query = 'SELECT * FROM memories WHERE archived_at IS NULL';
-      const params: unknown[] = [];
+      let query = 'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL';
+      const params: unknown[] = [brainId];
       if (type) { query += ' AND type = ?'; params.push(type); }
       if (typeof tag === 'string' && tag) { query += ' AND tags LIKE ?'; params.push(`%${tag}%`); }
       query += ' ORDER BY created_at DESC LIMIT ?';
       params.push(limit);
       const results = await env.DB.prepare(query).bind(...params).all<Record<string, unknown>>();
       if (!results.results.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
-      const scored = await enrichAndProjectRows(env, results.results);
+      const scored = await enrichAndProjectRows(env, brainId, results.results);
       return { content: [{ type: 'text', text: JSON.stringify(scored, null, 2) }] };
     }
 
@@ -876,7 +1189,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
       if (source !== undefined && typeof source !== 'string') return { content: [{ type: 'text', text: 'source must be a string when provided.' }] };
       if (archived !== undefined && typeof archived !== 'boolean') return { content: [{ type: 'text', text: 'archived must be a boolean when provided.' }] };
-      const existing = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<{
+      const existing = await env.DB.prepare('SELECT * FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).first<{
         content: string;
         title: string | null;
         tags: string | null;
@@ -890,7 +1203,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         ? (archived ? now() : null)
         : (existing.archived_at ?? null);
       await env.DB.prepare(
-        'UPDATE memories SET content = ?, title = ?, tags = ?, source = ?, confidence = ?, importance = ?, archived_at = ?, updated_at = ? WHERE id = ?'
+        'UPDATE memories SET content = ?, title = ?, tags = ?, source = ?, confidence = ?, importance = ?, archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
       ).bind(
         typeof content === 'string' && content.trim() ? content.trim() : existing.content,
         typeof title === 'string' ? title : existing.title,
@@ -900,12 +1213,13 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         importance === undefined ? clampToRange(existing.importance, 0.5) : clampToRange(importance, 0.5),
         nextArchivedAt,
         now(),
+        brainId,
         id
       ).run();
-      const updated = await env.DB.prepare('SELECT * FROM memories WHERE id = ?').bind(id).first<Record<string, unknown>>();
+      const updated = await env.DB.prepare('SELECT * FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).first<Record<string, unknown>>();
       if (!updated) return { content: [{ type: 'text', text: `Memory ${id} updated.` }] };
-      const [scored] = await enrichAndProjectRows(env, [updated]);
-      await logChangelog(env, 'memory_updated', 'memory', id, 'Updated memory', {
+      const [scored] = await enrichAndProjectRows(env, brainId, [updated]);
+      await logChangelog(env, brainId, 'memory_updated', 'memory', id, 'Updated memory', {
         updated_fields: {
           content: content !== undefined,
           title: title !== undefined,
@@ -922,21 +1236,21 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
     case 'memory_delete': {
       const { id } = args as { id: unknown };
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
-      const result = await env.DB.prepare('DELETE FROM memories WHERE id = ?').bind(id).run();
+      const result = await env.DB.prepare('DELETE FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).run();
       if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found.' }] };
-      await logChangelog(env, 'memory_deleted', 'memory', id, 'Deleted memory');
+      await logChangelog(env, brainId, 'memory_deleted', 'memory', id, 'Deleted memory');
       return { content: [{ type: 'text', text: `Memory ${id} deleted.` }] };
     }
 
     case 'memory_stats': {
-      const total = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NULL').first<{ count: number }>();
-      const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NOT NULL').first<{ count: number }>();
-      const byType = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE archived_at IS NULL GROUP BY type').all();
-      const relationStats = await env.DB.prepare('SELECT relation_type, COUNT(*) as count FROM memory_links GROUP BY relation_type').all();
+      const total = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NULL').bind(brainId).first<{ count: number }>();
+      const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NOT NULL').bind(brainId).first<{ count: number }>();
+      const byType = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NULL GROUP BY type').bind(brainId).all();
+      const relationStats = await env.DB.prepare('SELECT relation_type, COUNT(*) as count FROM memory_links WHERE brain_id = ? GROUP BY relation_type').bind(brainId).all();
       const recent = await env.DB.prepare(
-        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 5'
-      ).all<Record<string, unknown>>();
-      const recentScored = await enrichAndProjectRows(env, recent.results);
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 5'
+      ).bind(brainId).all<Record<string, unknown>>();
+      const recentScored = await enrichAndProjectRows(env, brainId, recent.results);
       const avgDynamicConfidence = recentScored.length
         ? round3(recentScored.reduce((sum, m) => sum + toFiniteNumber(m.dynamic_confidence, 0.7), 0) / recentScored.length)
         : null;
@@ -973,22 +1287,22 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const relationType = isValidRelationType(relation_type) ? relation_type : 'related';
 
       // Verify both memories exist
-      const fromMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(from_id).first();
+      const fromMem = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL').bind(brainId, from_id).first();
       if (!fromMem) return { content: [{ type: 'text', text: `Memory not found: ${from_id}` }] };
-      const toMem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(to_id).first();
+      const toMem = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL').bind(brainId, to_id).first();
       if (!toMem) return { content: [{ type: 'text', text: `Memory not found: ${to_id}` }] };
 
       // De-duplicate links (treating pair as undirected)
       const existing = await env.DB.prepare(
-        'SELECT id FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)'
-      ).bind(from_id, to_id, to_id, from_id).first<{ id: string }>();
+        'SELECT id FROM memory_links WHERE brain_id = ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))'
+      ).bind(brainId, from_id, to_id, to_id, from_id).first<{ id: string }>();
 
       const labelVal = typeof label === 'string' && label.trim() ? label.trim() : null;
       if (existing?.id) {
         await env.DB.prepare(
-          'UPDATE memory_links SET relation_type = ?, label = ? WHERE id = ?'
-        ).bind(relationType, labelVal, existing.id).run();
-        await logChangelog(env, 'memory_link_updated', 'memory_link', existing.id, 'Updated link relation', {
+          'UPDATE memory_links SET relation_type = ?, label = ? WHERE brain_id = ? AND id = ?'
+        ).bind(relationType, labelVal, brainId, existing.id).run();
+        await logChangelog(env, brainId, 'memory_link_updated', 'memory_link', existing.id, 'Updated link relation', {
           from_id,
           to_id,
           relation_type: relationType,
@@ -998,9 +1312,9 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
 
       const link_id = generateId();
       await env.DB.prepare(
-        'INSERT INTO memory_links (id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).bind(link_id, from_id, to_id, relationType, labelVal, now()).run();
-      await logChangelog(env, 'memory_link_created', 'memory_link', link_id, 'Created memory link', {
+        'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).bind(link_id, brainId, from_id, to_id, relationType, labelVal, now()).run();
+      await logChangelog(env, brainId, 'memory_link_created', 'memory_link', link_id, 'Created memory link', {
         from_id,
         to_id,
         relation_type: relationType,
@@ -1015,8 +1329,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (typeof to_id !== 'string' || !to_id) return { content: [{ type: 'text', text: 'to_id must be a non-empty string.' }] };
       if (relation_type !== undefined && !isValidRelationType(relation_type)) return { content: [{ type: 'text', text: 'Invalid relation_type.' }] };
 
-      let sql = 'DELETE FROM memory_links WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))';
-      const params: unknown[] = [from_id, to_id, to_id, from_id];
+      let sql = 'DELETE FROM memory_links WHERE brain_id = ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))';
+      const params: unknown[] = [brainId, from_id, to_id, to_id, from_id];
       if (relation_type) {
         sql += ' AND relation_type = ?';
         params.push(relation_type);
@@ -1024,7 +1338,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const result = await env.DB.prepare(sql).bind(...params).run();
 
       if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'No link found between these memories.' }] };
-      await logChangelog(env, 'memory_link_removed', 'memory_link', `${from_id}::${to_id}`, 'Removed memory link', {
+      await logChangelog(env, brainId, 'memory_link_removed', 'memory_link', `${from_id}::${to_id}`, 'Removed memory link', {
         from_id,
         to_id,
         relation_type: relation_type ?? null,
@@ -1037,20 +1351,20 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
 
       // Verify memory exists
-      const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(id).first();
+      const mem = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL').bind(brainId, id).first();
       if (!mem) return { content: [{ type: 'text', text: 'Memory not found.' }] };
 
       // Fetch links in both directions with full memory data
       const fromLinks = await env.DB.prepare(
-        'SELECT ml.id as link_id, ml.label, ml.relation_type, ml.to_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ? AND m.archived_at IS NULL'
-      ).bind(id).all();
+        'SELECT ml.id as link_id, ml.label, ml.relation_type, ml.to_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.brain_id = ? AND m.brain_id = ? AND ml.from_id = ? AND m.archived_at IS NULL'
+      ).bind(brainId, brainId, id).all();
 
       const toLinks = await env.DB.prepare(
-        'SELECT ml.id as link_id, ml.label, ml.relation_type, ml.from_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ? AND m.archived_at IS NULL'
-      ).bind(id).all();
+        'SELECT ml.id as link_id, ml.label, ml.relation_type, ml.from_id as connected_id, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.brain_id = ? AND m.brain_id = ? AND ml.to_id = ? AND m.archived_at IS NULL'
+      ).bind(brainId, brainId, id).all();
 
       const tsNow = now();
-      const linkStatsMap = await loadLinkStatsMap(env);
+      const linkStatsMap = await loadLinkStatsMap(env, brainId);
       const toScoredMemory = (r: Record<string, unknown>): Record<string, unknown> => {
         const base = {
           id: r.id,
@@ -1099,8 +1413,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       };
       if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 300, 1), 1000);
-      const params: unknown[] = [];
-      let query = 'SELECT id, type, title, key, content, tags, importance, created_at FROM memories WHERE archived_at IS NULL';
+      const params: unknown[] = [brainId];
+      let query = 'SELECT id, type, title, key, content, tags, importance, created_at FROM memories WHERE brain_id = ? AND archived_at IS NULL';
       if (type) {
         query += ' AND type = ?';
         params.push(type);
@@ -1164,21 +1478,21 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
           if (!dupId) continue;
           archivedIds.push(dupId);
           await env.DB.prepare(
-            'UPDATE memories SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL'
-          ).bind(ts, ts, dupId).run();
+            'UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ? AND archived_at IS NULL'
+          ).bind(ts, ts, brainId, dupId).run();
           archivedCount++;
 
           const existingLink = await env.DB.prepare(
-            'SELECT id FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)'
-          ).bind(canonicalId, dupId, dupId, canonicalId).first<{ id: string }>();
+            'SELECT id FROM memory_links WHERE brain_id = ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))'
+          ).bind(brainId, canonicalId, dupId, dupId, canonicalId).first<{ id: string }>();
           if (existingLink?.id) {
             await env.DB.prepare(
-              'UPDATE memory_links SET relation_type = ?, label = ? WHERE id = ?'
-            ).bind('supersedes', 'consolidated duplicate', existingLink.id).run();
+              'UPDATE memory_links SET relation_type = ?, label = ? WHERE brain_id = ? AND id = ?'
+            ).bind('supersedes', 'consolidated duplicate', brainId, existingLink.id).run();
           } else {
             await env.DB.prepare(
-              'INSERT INTO memory_links (id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-            ).bind(generateId(), canonicalId, dupId, 'supersedes', 'consolidated duplicate', ts).run();
+              'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ).bind(generateId(), brainId, canonicalId, dupId, 'supersedes', 'consolidated duplicate', ts).run();
           }
           linkedCount++;
         }
@@ -1189,7 +1503,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       }
 
       if (groups.length > 0) {
-        await logChangelog(env, 'memory_consolidated', 'memory', groups[0].canonical_id, 'Consolidated duplicate memories', {
+        await logChangelog(env, brainId, 'memory_consolidated', 'memory', groups[0].canonical_id, 'Consolidated duplicate memories', {
           groups_consolidated: groups.length,
           archived_count: archivedCount,
         });
@@ -1223,20 +1537,20 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
 
       if (typeof id === 'string' && id.trim()) {
         if (mode === 'hard') {
-          const result = await env.DB.prepare('DELETE FROM memories WHERE id = ?').bind(id).run();
+          const result = await env.DB.prepare('DELETE FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).run();
           if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found.' }] };
           return { content: [{ type: 'text', text: JSON.stringify({ mode, deleted: 1, ids: [id] }) }] };
         }
         const ts = now();
         const result = await env.DB.prepare(
-          'UPDATE memories SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL'
-        ).bind(ts, ts, id).run();
+          'UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ? AND archived_at IS NULL'
+        ).bind(ts, ts, brainId, id).run();
         if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found or already archived.' }] };
         return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: 1, ids: [id] }) }] };
       }
 
-      const where: string[] = ['archived_at IS NULL'];
-      const params: unknown[] = [];
+      const where: string[] = ['brain_id = ?', 'archived_at IS NULL'];
+      const params: unknown[] = [brainId];
       if (typeof tag === 'string' && tag.trim()) {
         where.push('tags LIKE ?');
         params.push(`%${tag.trim()}%`);
@@ -1264,16 +1578,16 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
 
       const placeholders = ids.map(() => '?').join(', ');
       if (mode === 'hard') {
-        await env.DB.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).bind(...ids).run();
-        await logChangelog(env, 'memory_forget_hard', 'memory', ids[0], 'Hard-forgot memories', { count: ids.length, ids });
+        await env.DB.prepare(`DELETE FROM memories WHERE brain_id = ? AND id IN (${placeholders})`).bind(brainId, ...ids).run();
+        await logChangelog(env, brainId, 'memory_forget_hard', 'memory', ids[0], 'Hard-forgot memories', { count: ids.length, ids });
         return { content: [{ type: 'text', text: JSON.stringify({ mode, deleted: ids.length, ids }, null, 2) }] };
       }
 
       const ts = now();
       await env.DB.prepare(
-        `UPDATE memories SET archived_at = ?, updated_at = ? WHERE id IN (${placeholders})`
-      ).bind(ts, ts, ...ids).run();
-      await logChangelog(env, 'memory_forget_soft', 'memory', ids[0], 'Soft-forgot memories', { count: ids.length, ids });
+        `UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id IN (${placeholders})`
+      ).bind(ts, ts, brainId, ...ids).run();
+      await logChangelog(env, brainId, 'memory_forget_soft', 'memory', ids[0], 'Soft-forgot memories', { count: ids.length, ids });
       return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: ids.length, ids }, null, 2) }] };
     }
 
@@ -1292,8 +1606,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const includeInferred = include_inferred === undefined ? true : Boolean(include_inferred);
 
       const memoriesResult = await env.DB.prepare(
-        'SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 2000'
-      ).all<Record<string, unknown>>();
+        'SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 2000'
+      ).bind(brainId).all<Record<string, unknown>>();
       const memories = memoriesResult.results;
       if (!memories.length) return { content: [{ type: 'text', text: 'No active memories found.' }] };
 
@@ -1342,8 +1656,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (!seedIds.size) return { content: [{ type: 'text', text: 'Provide seed_id or query that matches at least one memory.' }] };
 
       const linksResult = await env.DB.prepare(
-        'SELECT from_id, to_id, relation_type FROM memory_links LIMIT 12000'
-      ).all<Record<string, unknown>>();
+        'SELECT from_id, to_id, relation_type FROM memory_links WHERE brain_id = ? LIMIT 12000'
+      ).bind(brainId).all<Record<string, unknown>>();
       const edges: GraphEdge[] = [];
       for (const row of linksResult.results) {
         const from = typeof row.from_id === 'string' ? row.from_id : '';
@@ -1435,7 +1749,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         }
       }
 
-      const scoredMemories = await enrichAndProjectRows(env, memories);
+      const scoredMemories = await enrichAndProjectRows(env, brainId, memories);
       const scoredMap = new Map<string, Record<string, unknown>>();
       for (const memory of scoredMemories) {
         const id = typeof memory.id === 'string' ? memory.id : '';
@@ -1497,8 +1811,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const spreadHops = Math.min(Math.max(Number.isInteger(hops) ? (hops as number) : 1, 0), 3);
 
       const memoriesResult = await env.DB.prepare(
-        'SELECT id, confidence, importance FROM memories WHERE archived_at IS NULL'
-      ).all<Record<string, unknown>>();
+        'SELECT id, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL'
+      ).bind(brainId).all<Record<string, unknown>>();
       const memoryMap = new Map<string, { confidence: number; importance: number }>();
       for (const row of memoriesResult.results) {
         const memoryId = typeof row.id === 'string' ? row.id : '';
@@ -1511,8 +1825,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       if (!memoryMap.has(id)) return { content: [{ type: 'text', text: `Memory not found: ${id}` }] };
 
       const linksResult = await env.DB.prepare(
-        'SELECT from_id, to_id, relation_type FROM memory_links LIMIT 12000'
-      ).all<Record<string, unknown>>();
+        'SELECT from_id, to_id, relation_type FROM memory_links WHERE brain_id = ? LIMIT 12000'
+      ).bind(brainId).all<Record<string, unknown>>();
       const edges: GraphEdge[] = [];
       for (const row of linksResult.results) {
         const from = typeof row.from_id === 'string' ? row.from_id : '';
@@ -1570,8 +1884,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         const newImportance = round3(clamp01(current.importance + update.delta_importance));
         if (newConfidence === current.confidence && newImportance === current.importance) continue;
         await env.DB.prepare(
-          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE id = ?'
-        ).bind(newConfidence, newImportance, ts, memoryId).run();
+          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+        ).bind(newConfidence, newImportance, ts, brainId, memoryId).run();
         changedIds.push(memoryId);
         changeSummary.push({
           id: memoryId,
@@ -1586,14 +1900,15 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const scoredChanged = changedIds.length
         ? await enrichAndProjectRows(
           env,
+          brainId,
           (await env.DB.prepare(
-            `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE id IN (${changedIds.map(() => '?').join(',')})`
-          ).bind(...changedIds).all<Record<string, unknown>>()).results
+            `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND id IN (${changedIds.map(() => '?').join(',')})`
+          ).bind(brainId, ...changedIds).all<Record<string, unknown>>()).results
         )
         : [];
 
       if (changedIds.length > 0) {
-        await logChangelog(env, 'memory_reinforced', 'memory', id, 'Reinforced memory graph', {
+        await logChangelog(env, brainId, 'memory_reinforced', 'memory', id, 'Reinforced memory graph', {
           updated_count: changedIds.length,
           spread_hops: spreadHops,
           spread: spreadFactor,
@@ -1636,14 +1951,15 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
           m.confidence,
           m.importance,
           m.updated_at,
-          (SELECT COUNT(*) FROM memory_links ml WHERE ml.from_id = m.id OR ml.to_id = m.id) AS link_count
+          (SELECT COUNT(*) FROM memory_links ml WHERE ml.brain_id = ? AND (ml.from_id = m.id OR ml.to_id = m.id)) AS link_count
         FROM memories m
-        WHERE m.archived_at IS NULL
+        WHERE m.brain_id = ?
+          AND m.archived_at IS NULL
           AND m.updated_at <= ?
-          AND (SELECT COUNT(*) FROM memory_links ml2 WHERE ml2.from_id = m.id OR ml2.to_id = m.id) <= ?
+          AND (SELECT COUNT(*) FROM memory_links ml2 WHERE ml2.brain_id = ? AND (ml2.from_id = m.id OR ml2.to_id = m.id)) <= ?
         ORDER BY m.updated_at ASC
         LIMIT ?`
-      ).bind(cutoffTs, maxLinkCount, limit).all<Record<string, unknown>>();
+      ).bind(brainId, brainId, cutoffTs, brainId, maxLinkCount, limit).all<Record<string, unknown>>();
 
       const ts = now();
       const decayedIds: string[] = [];
@@ -1657,8 +1973,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         const newImp = round3(clamp01(currentImp - decayImp));
         if (newConf === currentConf && newImp === currentImp) continue;
         await env.DB.prepare(
-          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE id = ?'
-        ).bind(newConf, newImp, ts, memoryId).run();
+          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+        ).bind(newConf, newImp, ts, brainId, memoryId).run();
         decayedIds.push(memoryId);
         updates.push({
           id: memoryId,
@@ -1671,7 +1987,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       }
 
       if (decayedIds.length > 0) {
-        await logChangelog(env, 'memory_decayed', 'memory', decayedIds[0], 'Applied memory decay', {
+        await logChangelog(env, brainId, 'memory_decayed', 'memory', decayedIds[0], 'Applied memory decay', {
           decayed_count: decayedIds.length,
           older_than_days: olderThanDays,
           max_link_count: maxLinkCount,
@@ -1702,8 +2018,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         entity_id?: unknown;
       };
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 25, 1), 200);
-      const where: string[] = ['1=1'];
-      const params: unknown[] = [];
+      const where: string[] = ['brain_id = ?'];
+      const params: unknown[] = [brainId];
       if (since !== undefined) {
         const sinceVal = Number(since);
         if (!Number.isFinite(sinceVal) || sinceVal < 0) return { content: [{ type: 'text', text: 'since must be a non-negative unix timestamp.' }] };
@@ -1764,9 +2080,9 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 40, 1), 200);
 
       const factsResult = await env.DB.prepare(
-        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE archived_at IS NULL AND type = ? LIMIT 3000'
-      ).bind('fact').all<Record<string, unknown>>();
-      const scoredFacts = await enrichAndProjectRows(env, factsResult.results);
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? LIMIT 3000'
+      ).bind(brainId, 'fact').all<Record<string, unknown>>();
+      const scoredFacts = await enrichAndProjectRows(env, brainId, factsResult.results);
       const factMap = new Map<string, Record<string, unknown>>();
       for (const fact of scoredFacts) {
         const id = typeof fact.id === 'string' ? fact.id : '';
@@ -1782,11 +2098,12 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const contradictionLinks = await env.DB.prepare(
         `SELECT ml.id as link_id, ml.label, ml.from_id, ml.to_id
          FROM memory_links ml
-         JOIN memories m1 ON m1.id = ml.from_id AND m1.type = 'fact' AND m1.archived_at IS NULL
-         JOIN memories m2 ON m2.id = ml.to_id AND m2.type = 'fact' AND m2.archived_at IS NULL
-         WHERE ml.relation_type = 'contradicts'
+         JOIN memories m1 ON m1.id = ml.from_id AND m1.brain_id = ? AND m1.type = 'fact' AND m1.archived_at IS NULL
+         JOIN memories m2 ON m2.id = ml.to_id AND m2.brain_id = ? AND m2.type = 'fact' AND m2.archived_at IS NULL
+         WHERE ml.brain_id = ?
+           AND ml.relation_type = 'contradicts'
          LIMIT 2000`
-      ).all<Record<string, unknown>>();
+      ).bind(brainId, brainId, brainId).all<Record<string, unknown>>();
       for (const row of contradictionLinks.results) {
         const aId = String(row.from_id ?? '');
         const bId = String(row.to_id ?? '');
@@ -1890,7 +2207,7 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const status = rawStatus === 'paused' || rawStatus === 'done' ? rawStatus : 'active';
       const priorityVal = clampToRange(priority, kind === 'goal' ? 0.82 : 0.74);
 
-      const rootId = await ensureObjectiveRoot(env);
+      const rootId = await ensureObjectiveRoot(env, brainId);
       const ts = now();
       const extraTags = typeof tags === 'string'
         ? tags.split(',').map((t) => t.trim()).filter(Boolean)
@@ -1912,28 +2229,29 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       let objectiveId = typeof rawId === 'string' && rawId.trim() ? rawId.trim() : '';
       if (objectiveId) {
         const exists = await env.DB.prepare(
-          'SELECT id FROM memories WHERE id = ? AND archived_at IS NULL'
-        ).bind(objectiveId).first<{ id: string }>();
+          'SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL'
+        ).bind(brainId, objectiveId).first<{ id: string }>();
         if (!exists?.id) return { content: [{ type: 'text', text: `Objective memory not found: ${objectiveId}` }] };
         await env.DB.prepare(
-          'UPDATE memories SET type = ?, title = ?, content = ?, tags = ?, source = ?, importance = ?, updated_at = ? WHERE id = ?'
-        ).bind('note', title.trim(), objectiveContent, objectiveTags, 'autonomous_objective', priorityVal, ts, objectiveId).run();
+          'UPDATE memories SET type = ?, title = ?, content = ?, tags = ?, source = ?, importance = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+        ).bind('note', title.trim(), objectiveContent, objectiveTags, 'autonomous_objective', priorityVal, ts, brainId, objectiveId).run();
       } else {
         const key = `objective:${kind}:${slugify(title.trim())}`;
         const existing = await env.DB.prepare(
-          'SELECT id FROM memories WHERE key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
-        ).bind(key).first<{ id: string }>();
+          'SELECT id FROM memories WHERE brain_id = ? AND key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
+        ).bind(brainId, key).first<{ id: string }>();
         if (existing?.id) {
           objectiveId = existing.id;
           await env.DB.prepare(
-            'UPDATE memories SET title = ?, content = ?, tags = ?, source = ?, importance = ?, updated_at = ? WHERE id = ?'
-          ).bind(title.trim(), objectiveContent, objectiveTags, 'autonomous_objective', priorityVal, ts, objectiveId).run();
+            'UPDATE memories SET title = ?, content = ?, tags = ?, source = ?, importance = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+          ).bind(title.trim(), objectiveContent, objectiveTags, 'autonomous_objective', priorityVal, ts, brainId, objectiveId).run();
         } else {
           objectiveId = generateId();
           await env.DB.prepare(
-            'INSERT INTO memories (id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
+            'INSERT INTO memories (id, brain_id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)'
           ).bind(
             objectiveId,
+            brainId,
             'note',
             title.trim(),
             key,
@@ -1953,23 +2271,23 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         ? `objective (${horizon})`
         : `curiosity (${horizon})`;
       const existingLink = await env.DB.prepare(
-        'SELECT id FROM memory_links WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) LIMIT 1'
-      ).bind(rootId, objectiveId, objectiveId, rootId).first<{ id: string }>();
+        'SELECT id FROM memory_links WHERE brain_id = ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) LIMIT 1'
+      ).bind(brainId, rootId, objectiveId, objectiveId, rootId).first<{ id: string }>();
       if (existingLink?.id) {
         await env.DB.prepare(
-          'UPDATE memory_links SET relation_type = ?, label = ? WHERE id = ?'
-        ).bind(linkRelation, linkLabel, existingLink.id).run();
+          'UPDATE memory_links SET relation_type = ?, label = ? WHERE brain_id = ? AND id = ?'
+        ).bind(linkRelation, linkLabel, brainId, existingLink.id).run();
       } else {
         await env.DB.prepare(
-          'INSERT INTO memory_links (id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(generateId(), rootId, objectiveId, linkRelation, linkLabel, ts).run();
+          'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).bind(generateId(), brainId, rootId, objectiveId, linkRelation, linkLabel, ts).run();
       }
 
       const objectiveRow = await env.DB.prepare(
-        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE id = ? LIMIT 1'
-      ).bind(objectiveId).first<Record<string, unknown>>();
-      const [objectiveMemory] = objectiveRow ? await enrichAndProjectRows(env, [objectiveRow]) : [];
-      await logChangelog(env, 'objective_upserted', 'memory', objectiveId, 'Upserted autonomous objective node', {
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND id = ? LIMIT 1'
+      ).bind(brainId, objectiveId).first<Record<string, unknown>>();
+      const [objectiveMemory] = objectiveRow ? await enrichAndProjectRows(env, brainId, [objectiveRow]) : [];
+      await logChangelog(env, brainId, 'objective_upserted', 'memory', objectiveId, 'Upserted autonomous objective node', {
         kind,
         horizon,
         status,
@@ -2001,8 +2319,8 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       const status = rawStatus === 'active' || rawStatus === 'paused' || rawStatus === 'done' ? rawStatus : null;
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 50, 1), 200);
 
-      let query = 'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE archived_at IS NULL AND tags LIKE ?';
-      const params: unknown[] = ['%objective_node%'];
+      let query = 'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL AND tags LIKE ?';
+      const params: unknown[] = [brainId, '%objective_node%'];
       if (kind) {
         query += ' AND tags LIKE ?';
         params.push(`%kind_${kind}%`);
@@ -2015,10 +2333,10 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
       params.push(limit);
 
       const rows = await env.DB.prepare(query).bind(...params).all<Record<string, unknown>>();
-      const objectives = await enrichAndProjectRows(env, rows.results);
+      const objectives = await enrichAndProjectRows(env, brainId, rows.results);
       const root = await env.DB.prepare(
-        'SELECT id FROM memories WHERE key = ? AND archived_at IS NULL LIMIT 1'
-      ).bind('autonomous_objectives_root').first<{ id: string }>();
+        'SELECT id FROM memories WHERE brain_id = ? AND key = ? AND archived_at IS NULL LIMIT 1'
+      ).bind(brainId, 'autonomous_objectives_root').first<{ id: string }>();
 
       return {
         content: [{
@@ -2043,9 +2361,27 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
 };
 
+function corsJsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await request.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+    return body as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 async function processMcpBody(
   body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
-  env: Env
+  env: Env,
+  authCtx: AuthContext
 ): Promise<unknown> {
   const { id, method, params = {} } = body;
 
@@ -2066,7 +2402,7 @@ async function processMcpBody(
 
   if (method === 'tools/call') {
     const { name, arguments: toolArgs = {} } = params as { name: string; arguments?: ToolArgs };
-    const result = await callTool(name, toolArgs, env);
+    const result = await callTool(name, toolArgs, env, authCtx.brainId);
     return { jsonrpc: '2.0', id, result };
   }
 
@@ -2080,7 +2416,7 @@ async function processMcpBody(
   };
 }
 
-async function handleMcp(request: Request, env: Env, url: URL): Promise<Response> {
+async function handleMcp(request: Request, env: Env, url: URL, authCtx: AuthContext): Promise<Response> {
   const acceptsSse = (request.headers.get('Accept') ?? '').includes('text/event-stream');
 
   // SSE transport: GET /mcp opens the event stream
@@ -2125,7 +2461,7 @@ async function handleMcp(request: Request, env: Env, url: URL): Promise<Response
 
     let responseObj: unknown;
     try {
-      responseObj = await processMcpBody(body, env);
+      responseObj = await processMcpBody(body, env, authCtx);
     } catch (err) {
       const code = (err instanceof Error && 'code' in err && typeof (err as { code?: unknown }).code === 'number')
         ? (err as { code: number }).code
@@ -2161,15 +2497,15 @@ async function handleMcp(request: Request, env: Env, url: URL): Promise<Response
   return jsonResponse({ error: 'Method not allowed' }, 405);
 }
 
-async function handleApiMemories(request: Request, env: Env): Promise<Response> {
+async function handleApiMemories(request: Request, env: Env, brainId: string): Promise<Response> {
   const url = new URL(request.url);
   const type = url.searchParams.get('type') ?? '';
   const search = url.searchParams.get('search') ?? '';
   const limitParam = parseInt(url.searchParams.get('limit') ?? '100', 10);
   const limit = Math.min(Math.max(Number.isNaN(limitParam) ? 100 : limitParam, 1), 500);
 
-  let query = 'SELECT m.*, (SELECT COUNT(*) FROM memory_links ml WHERE ml.from_id = m.id OR ml.to_id = m.id) as link_count FROM memories m WHERE m.archived_at IS NULL';
-  const params: unknown[] = [];
+  let query = 'SELECT m.*, (SELECT COUNT(*) FROM memory_links ml WHERE ml.brain_id = ? AND (ml.from_id = m.id OR ml.to_id = m.id)) as link_count FROM memories m WHERE m.brain_id = ? AND m.archived_at IS NULL';
+  const params: unknown[] = [brainId, brainId];
   if (type && VALID_TYPES.includes(type as MemoryType)) {
     query += ' AND type = ?'; params.push(type);
   }
@@ -2183,7 +2519,7 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
 
   const results = await env.DB.prepare(query).bind(...params).all();
   const tsNow = now();
-  const linkStatsMap = await loadLinkStatsMap(env);
+  const linkStatsMap = await loadLinkStatsMap(env, brainId);
   const enrichedMemories = enrichMemoryRowsWithDynamics(
     results.results as Array<Record<string, unknown>>,
     linkStatsMap,
@@ -2193,29 +2529,29 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
   const sortedMemories = [...projectedMemories].sort(
     (a, b) => toFiniteNumber(b.created_at, 0) - toFiniteNumber(a.created_at, 0)
   );
-  const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE archived_at IS NULL GROUP BY type').all();
-  const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE archived_at IS NOT NULL').first<{ count: number }>();
+  const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NULL GROUP BY type').bind(brainId).all();
+  const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NOT NULL').bind(brainId).first<{ count: number }>();
   return new Response(JSON.stringify({ memories: sortedMemories, stats: stats.results, archived_count: archived?.count ?? 0 }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }
 
-async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
-  const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ? AND archived_at IS NULL').bind(memoryId).first();
+async function handleApiLinks(memoryId: string, env: Env, brainId: string): Promise<Response> {
+  const mem = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL').bind(brainId, memoryId).first();
   if (!mem) return new Response(JSON.stringify({ error: 'Memory not found.' }), {
     status: 404, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 
   const fromLinks = await env.DB.prepare(
-    'SELECT ml.id as link_id, ml.relation_type, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.source, m.confidence, m.importance, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ? AND m.archived_at IS NULL'
-  ).bind(memoryId).all();
+    'SELECT ml.id as link_id, ml.relation_type, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.source, m.confidence, m.importance, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.brain_id = ? AND m.brain_id = ? AND ml.from_id = ? AND m.archived_at IS NULL'
+  ).bind(brainId, brainId, memoryId).all();
 
   const toLinks = await env.DB.prepare(
-    'SELECT ml.id as link_id, ml.relation_type, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.source, m.confidence, m.importance, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ? AND m.archived_at IS NULL'
-  ).bind(memoryId).all();
+    'SELECT ml.id as link_id, ml.relation_type, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.source, m.confidence, m.importance, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.brain_id = ? AND m.brain_id = ? AND ml.to_id = ? AND m.archived_at IS NULL'
+  ).bind(brainId, brainId, memoryId).all();
 
   const tsNow = now();
-  const linkStatsMap = await loadLinkStatsMap(env);
+  const linkStatsMap = await loadLinkStatsMap(env, brainId);
   const toScoredMemory = (r: Record<string, unknown>): Record<string, unknown> => {
     const base = {
       id: r.id,
@@ -2258,16 +2594,16 @@ async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
   });
 }
 
-async function handleApiGraph(env: Env): Promise<Response> {
+async function handleApiGraph(env: Env, brainId: string): Promise<Response> {
   const memories = await env.DB.prepare(
-    'SELECT id, type, title, key, content, tags, source, confidence, importance FROM memories WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT 1000'
-  ).all();
+    'SELECT id, type, title, key, content, tags, source, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1000'
+  ).bind(brainId).all();
   const links = await env.DB.prepare(
-    'SELECT ml.id, ml.from_id, ml.to_id, ml.label, ml.relation_type FROM memory_links ml JOIN memories m1 ON m1.id = ml.from_id AND m1.archived_at IS NULL JOIN memories m2 ON m2.id = ml.to_id AND m2.archived_at IS NULL LIMIT 5000'
-  ).all();
+    'SELECT ml.id, ml.from_id, ml.to_id, ml.label, ml.relation_type FROM memory_links ml JOIN memories m1 ON m1.id = ml.from_id AND m1.brain_id = ? AND m1.archived_at IS NULL JOIN memories m2 ON m2.id = ml.to_id AND m2.brain_id = ? AND m2.archived_at IS NULL WHERE ml.brain_id = ? LIMIT 5000'
+  ).bind(brainId, brainId, brainId).all();
 
   const tsNow = now();
-  const linkStatsMap = await loadLinkStatsMap(env);
+  const linkStatsMap = await loadLinkStatsMap(env, brainId);
   const nodes = enrichMemoryRowsWithDynamics(
     memories.results as Array<Record<string, unknown>>,
     linkStatsMap,
@@ -2387,6 +2723,233 @@ function handleApiTools(): Response {
     relation_types: RELATION_TYPES,
   }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+type UserRow = {
+  id: string;
+  email: string;
+  password_hash: string;
+  display_name: string | null;
+  created_at: number;
+};
+
+type BrainSummary = {
+  id: string;
+  name: string;
+  slug: string | null;
+  role: string;
+  created_at: number;
+  updated_at: number;
+};
+
+function sanitizeDisplayName(raw: unknown, email: string): string | null {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed) return trimmed.slice(0, 120);
+  }
+  const local = email.split('@')[0]?.replace(/[^a-z0-9]+/gi, ' ').trim();
+  return local ? local.slice(0, 120) : null;
+}
+
+function sanitizeBrainName(raw: unknown, email: string): string {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed) return trimmed.slice(0, 120);
+  }
+  const local = email.split('@')[0]?.replace(/[^a-z0-9]+/gi, ' ').trim();
+  return local ? `${local.slice(0, 64)}'s Second Brain` : 'Second Brain';
+}
+
+function userPayload(row: { id: string; email: string; display_name: string | null; created_at: number }): Record<string, unknown> {
+  return {
+    id: row.id,
+    email: row.email,
+    display_name: row.display_name,
+    created_at: row.created_at,
+  };
+}
+
+async function listBrainsForUser(userId: string, env: Env): Promise<BrainSummary[]> {
+  const rows = await env.DB.prepare(
+    `SELECT
+      b.id,
+      b.name,
+      b.slug,
+      b.created_at,
+      b.updated_at,
+      bm.role
+     FROM brain_memberships bm
+     JOIN brains b ON b.id = bm.brain_id
+     WHERE bm.user_id = ?
+     ORDER BY CASE WHEN bm.role = 'owner' THEN 0 ELSE 1 END ASC, bm.created_at ASC`
+  ).bind(userId).all<BrainSummary>();
+  return rows.results;
+}
+
+function findActiveBrain(brains: BrainSummary[], preferredBrainId: string): BrainSummary | null {
+  if (!brains.length) return null;
+  const explicit = brains.find((b) => b.id === preferredBrainId);
+  if (explicit) return explicit;
+  return brains[0];
+}
+
+async function handleAuthSignup(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!body) return corsJsonResponse({ error: 'Invalid JSON body.' }, 400);
+
+  const emailRaw = body.email;
+  const passwordRaw = body.password;
+  if (typeof emailRaw !== 'string' || !isValidEmail(emailRaw)) {
+    return corsJsonResponse({ error: 'A valid email is required.' }, 400);
+  }
+  if (typeof passwordRaw !== 'string' || !isStrongEnoughPassword(passwordRaw)) {
+    return corsJsonResponse({ error: 'Password must be at least 10 characters.' }, 400);
+  }
+
+  const email = normalizeEmail(emailRaw);
+  const existing = await env.DB.prepare(
+    'SELECT id FROM users WHERE email = ? LIMIT 1'
+  ).bind(email).first<{ id: string }>();
+  if (existing?.id) return corsJsonResponse({ error: 'Email already registered.' }, 409);
+
+  const ts = now();
+  const userId = generateId();
+  const passwordHash = await hashPassword(passwordRaw);
+  const displayName = sanitizeDisplayName(body.display_name ?? body.name, email);
+  await env.DB.prepare(
+    'INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).bind(userId, email, passwordHash, displayName, ts, ts).run();
+
+  const brainId = generateId();
+  const brainName = sanitizeBrainName(body.brain_name, email);
+  const slug = `${slugify(brainName)}-${brainId.slice(0, 8)}`;
+  await env.DB.prepare(
+    'INSERT INTO brains (id, name, slug, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).bind(brainId, brainName, slug, userId, ts, ts).run();
+  await env.DB.prepare(
+    "INSERT INTO brain_memberships (brain_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)"
+  ).bind(brainId, userId, ts).run();
+
+  const tokens = await createSessionTokens(userId, brainId, env);
+  const brains = await listBrainsForUser(userId, env);
+  const activeBrain = findActiveBrain(brains, brainId);
+
+  return corsJsonResponse({
+    user: userPayload({ id: userId, email, display_name: displayName, created_at: ts }),
+    active_brain: activeBrain,
+    brains,
+    ...tokens,
+  }, 201);
+}
+
+async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!body) return corsJsonResponse({ error: 'Invalid JSON body.' }, 400);
+
+  const emailRaw = body.email;
+  const passwordRaw = body.password;
+  const preferredBrainId = typeof body.brain_id === 'string' ? body.brain_id.trim() : '';
+  if (typeof emailRaw !== 'string' || !isValidEmail(emailRaw)) {
+    return corsJsonResponse({ error: 'A valid email is required.' }, 400);
+  }
+  if (typeof passwordRaw !== 'string' || passwordRaw.length === 0) {
+    return corsJsonResponse({ error: 'Password is required.' }, 400);
+  }
+
+  const email = normalizeEmail(emailRaw);
+  const user = await env.DB.prepare(
+    'SELECT id, email, password_hash, display_name, created_at FROM users WHERE email = ? LIMIT 1'
+  ).bind(email).first<UserRow>();
+  if (!user || !(await verifyPassword(passwordRaw, user.password_hash))) {
+    return corsJsonResponse({ error: 'Invalid email or password.' }, 401);
+  }
+
+  const brains = await listBrainsForUser(user.id, env);
+  const activeBrain = findActiveBrain(brains, preferredBrainId);
+  if (!activeBrain) return corsJsonResponse({ error: 'No brain membership found for user.' }, 403);
+  if (preferredBrainId && activeBrain.id !== preferredBrainId) {
+    return corsJsonResponse({ error: 'Requested brain is not available for this user.' }, 403);
+  }
+
+  const tokens = await createSessionTokens(user.id, activeBrain.id, env);
+  return corsJsonResponse({
+    user: userPayload(user),
+    active_brain: activeBrain,
+    brains,
+    ...tokens,
+  });
+}
+
+async function handleAuthRefresh(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!body) return corsJsonResponse({ error: 'Invalid JSON body.' }, 400);
+  const refreshToken = typeof body.refresh_token === 'string' ? body.refresh_token.trim() : '';
+  if (!refreshToken) return corsJsonResponse({ error: 'refresh_token is required.' }, 400);
+
+  const rotated = await rotateSession(refreshToken, env);
+  if (!rotated) return corsJsonResponse({ error: 'Invalid or expired refresh token.' }, 401);
+
+  const user = await env.DB.prepare(
+    'SELECT id, email, display_name, created_at FROM users WHERE id = ? LIMIT 1'
+  ).bind(rotated.userId).first<{ id: string; email: string; display_name: string | null; created_at: number }>();
+  if (!user) return corsJsonResponse({ error: 'Session user not found.' }, 401);
+
+  const brains = await listBrainsForUser(rotated.userId, env);
+  const activeBrain = findActiveBrain(brains, rotated.brainId);
+  if (!activeBrain) return corsJsonResponse({ error: 'No brain membership found for session user.' }, 403);
+
+  return corsJsonResponse({
+    user: userPayload(user),
+    active_brain: activeBrain,
+    brains,
+    ...rotated.tokens,
+  });
+}
+
+async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  const refreshFromBody = typeof body?.refresh_token === 'string' ? body.refresh_token.trim() : '';
+  const refreshFromHeader = parseBearerToken(request) ?? '';
+  const refreshToken = refreshFromBody || refreshFromHeader;
+  if (!refreshToken) return corsJsonResponse({ error: 'refresh_token is required.' }, 400);
+  await revokeSession(refreshToken, env);
+  return corsJsonResponse({ ok: true });
+}
+
+async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
+  if (authCtx.kind === 'legacy') {
+    return corsJsonResponse({
+      kind: 'legacy',
+      user: null,
+      active_brain: {
+        id: LEGACY_BRAIN_ID,
+        name: 'Legacy Shared Brain',
+        role: 'legacy',
+      },
+      brains: [{
+        id: LEGACY_BRAIN_ID,
+        name: 'Legacy Shared Brain',
+        role: 'legacy',
+      }],
+    });
+  }
+  if (!authCtx.userId) return corsJsonResponse({ error: 'Unauthorized' }, 401);
+
+  const user = await env.DB.prepare(
+    'SELECT id, email, display_name, created_at FROM users WHERE id = ? LIMIT 1'
+  ).bind(authCtx.userId).first<{ id: string; email: string; display_name: string | null; created_at: number }>();
+  if (!user) return corsJsonResponse({ error: 'User not found.' }, 401);
+
+  const brains = await listBrainsForUser(user.id, env);
+  const activeBrain = findActiveBrain(brains, authCtx.brainId);
+  if (!activeBrain) return corsJsonResponse({ error: 'No brain membership found for user.' }, 403);
+
+  return corsJsonResponse({
+    kind: 'user',
+    user: userPayload(user),
+    active_brain: activeBrain,
+    brains,
   });
 }
 
@@ -2522,9 +3085,14 @@ function viewerHtml(): string {
   }
   .token-input:focus { border-color: var(--amber); }
   .token-input::placeholder { color: var(--text-dim); }
+  .login-btn-row {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1.1rem;
+  }
   .login-btn {
     width: 100%;
-    margin-top: 1.5rem;
+    margin-top: 0;
     background: var(--amber);
     color: var(--bg);
     border: none;
@@ -2538,6 +3106,16 @@ function viewerHtml(): string {
     transition: background 0.15s, transform 0.1s;
   }
   .login-btn:hover { background: #ffbc20; }
+  .login-btn.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border-bright);
+  }
+  .login-btn.secondary:hover {
+    background: var(--bg3);
+    color: var(--text-bright);
+  }
+  .token-btn { margin-top: 0.75rem; }
   .login-btn:active { transform: scale(0.99); }
   .login-error {
     margin-top: 1rem;
@@ -3064,6 +3642,7 @@ function viewerHtml(): string {
     #login-screen { padding: 1rem; }
     .login-box { padding: 2rem 1rem 1.5rem; }
     .login-box::before { left: 1rem; }
+    .login-btn-row { flex-direction: column; gap: 0.45rem; }
     .vault-logo { font-size: 1.65rem; }
     .vault-sub { margin-bottom: 1.5rem; font-size: 0.62rem; }
     .token-input, .search-input { font-size: 16px; }
@@ -3197,10 +3776,20 @@ function viewerHtml(): string {
   <div class="login-box">
     <div class="vault-logo">MEMORY<span>VAULT</span></div>
     <div class="vault-sub">Secure Access Required</div>
-    <div class="field-label">Access Token</div>
-    <input type="password" class="token-input" id="token-input" placeholder="Enter bearer token..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button class="login-btn" onclick="doLogin()">AUTHENTICATE →</button>
-    <div class="login-error" id="login-error">⚠ ACCESS DENIED — invalid token</div>
+    <div class="field-label">Email</div>
+    <input type="email" class="token-input" id="email-input" placeholder="you@example.com" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="field-label" style="margin-top:0.75rem">Password</div>
+    <input type="password" class="token-input" id="password-input" placeholder="Enter password" autocomplete="current-password">
+    <div class="field-label" style="margin-top:0.75rem">Brain Name (for signup)</div>
+    <input type="text" class="token-input" id="brain-name-input" placeholder="Second Brain name (optional)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="login-btn-row">
+      <button class="login-btn" onclick="doCredentialAuth('login')">SIGN IN →</button>
+      <button class="login-btn secondary" onclick="doCredentialAuth('signup')">SIGN UP →</button>
+    </div>
+    <div class="field-label" style="margin-top:1rem">Legacy Access Token</div>
+    <input type="password" class="token-input" id="token-input" placeholder="Bearer token (legacy mode)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button class="login-btn secondary token-btn" onclick="doTokenLogin()">TOKEN LOGIN →</button>
+    <div class="login-error" id="login-error">⚠ ACCESS DENIED</div>
   </div>
 </div>
 
@@ -3306,6 +3895,8 @@ function viewerHtml(): string {
     example_of: '#66a9ff',
   };
   let TOKEN = '';
+  let REFRESH_TOKEN = '';
+  let SESSION_MODE = 'legacy';
   let activeFilter = '';
   let searchTimeout = null;
   let allMemories = [];
@@ -3321,32 +3912,137 @@ function viewerHtml(): string {
   let graphSearchQuery = '';
   let graphRelationFilter = new Set(GRAPH_RELATION_TYPES);
 
-  function doLogin() {
-    const val = document.getElementById('token-input').value.trim();
-    if (!val) return;
-    // Test the token by calling the API
-    fetch(BASE + '/api/memories', {
-      headers: { 'Authorization': 'Bearer ' + val }
-    }).then(r => {
-      if (r.ok) {
-        TOKEN = val;
-        document.getElementById('login-screen').style.display = 'none';
-        document.getElementById('app').style.display = 'flex';
-        document.getElementById('app').style.flexDirection = 'column';
-        updateTime();
-        loadMemories();
-        startLivePolling();
-      } else {
-        document.getElementById('login-error').style.display = 'block';
-        document.getElementById('token-input').style.borderColor = 'var(--red)';
-      }
-    }).catch(() => {
-      document.getElementById('login-error').style.display = 'block';
-    });
+  function setLoginError(message) {
+    const el = document.getElementById('login-error');
+    if (!el) return;
+    el.textContent = message || '⚠ ACCESS DENIED';
+    el.style.display = 'block';
   }
 
-  function doLogout() {
+  function clearLoginError() {
+    const el = document.getElementById('login-error');
+    if (!el) return;
+    el.style.display = 'none';
+  }
+
+  function enterApp() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    document.getElementById('app').style.flexDirection = 'column';
+    updateTime();
+    loadMemories();
+    startLivePolling();
+  }
+
+  async function tryRefreshSession() {
+    if (!REFRESH_TOKEN) return false;
+    try {
+      const r = await fetch(BASE + '/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: REFRESH_TOKEN }),
+      });
+      if (!r.ok) return false;
+      const data = await r.json();
+      if (!data || !data.access_token) return false;
+      TOKEN = data.access_token;
+      REFRESH_TOKEN = data.refresh_token || REFRESH_TOKEN;
+      SESSION_MODE = 'user';
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function apiFetch(url, options = {}, allowRefresh = true) {
+    const mergedHeaders = Object.assign({}, options.headers || {}, TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {});
+    const response = await fetch(url, Object.assign({}, options, { headers: mergedHeaders }));
+    if (response.status === 401 && allowRefresh && REFRESH_TOKEN) {
+      const refreshed = await tryRefreshSession();
+      if (refreshed) return apiFetch(url, options, false);
+    }
+    return response;
+  }
+
+  async function doTokenLogin() {
+    clearLoginError();
+    const val = document.getElementById('token-input').value.trim();
+    if (!val) {
+      setLoginError('⚠ ENTER A TOKEN');
+      return;
+    }
+    try {
+      const r = await fetch(BASE + '/api/memories?limit=1', {
+        headers: { 'Authorization': 'Bearer ' + val },
+      });
+      if (!r.ok) {
+        setLoginError('⚠ ACCESS DENIED — invalid token');
+        return;
+      }
+      TOKEN = val;
+      REFRESH_TOKEN = '';
+      SESSION_MODE = 'legacy';
+      enterApp();
+    } catch {
+      setLoginError('⚠ NETWORK ERROR');
+    }
+  }
+
+  async function doCredentialAuth(mode) {
+    clearLoginError();
+    const email = document.getElementById('email-input').value.trim();
+    const password = document.getElementById('password-input').value;
+    const brainName = document.getElementById('brain-name-input').value.trim();
+    if (!email || !password) {
+      setLoginError('⚠ EMAIL + PASSWORD REQUIRED');
+      return;
+    }
+
+    const payload = { email, password };
+    if (mode === 'signup' && brainName) payload.brain_name = brainName;
+
+    try {
+      const endpoint = mode === 'signup' ? '/auth/signup' : '/auth/login';
+      const r = await fetch(BASE + endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setLoginError('⚠ ' + (data.error || 'AUTH FAILED'));
+        return;
+      }
+      TOKEN = data.access_token || '';
+      REFRESH_TOKEN = data.refresh_token || '';
+      SESSION_MODE = 'user';
+      if (!TOKEN) {
+        setLoginError('⚠ NO ACCESS TOKEN RETURNED');
+        return;
+      }
+      enterApp();
+    } catch {
+      setLoginError('⚠ NETWORK ERROR');
+    }
+  }
+
+  function doLogin() {
+    return doTokenLogin();
+  }
+
+  async function doLogout() {
+    if (SESSION_MODE === 'user' && REFRESH_TOKEN) {
+      try {
+        await fetch(BASE + '/auth/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: REFRESH_TOKEN }),
+        });
+      } catch {}
+    }
     TOKEN = '';
+    REFRESH_TOKEN = '';
+    SESSION_MODE = 'legacy';
     location.reload();
   }
 
@@ -3367,7 +4063,7 @@ function viewerHtml(): string {
     if (activeFilter) url += '&type=' + encodeURIComponent(activeFilter);
     if (search) url += '&search=' + encodeURIComponent(search);
     try {
-      const r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      const r = await apiFetch(url);
       if (!r.ok) { doLogout(); return; }
       const data = await r.json();
       allMemories = data.memories || [];
@@ -3469,7 +4165,7 @@ function viewerHtml(): string {
     const connEl = document.getElementById('expand-connections');
     connEl.innerHTML = '<div style="font-size:0.65rem;color:var(--text-dim);letter-spacing:0.1em;margin-top:1rem">LOADING CONNECTIONS...</div>';
     const myGen = ++expandGen;
-    fetch(BASE + '/api/links/' + m.id, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    apiFetch(BASE + '/api/links/' + m.id)
       .then(r => {
         if (r.status === 401) { doLogout(); return null; }
         if (!r.ok) throw new Error('fetch failed');
@@ -3564,7 +4260,7 @@ function viewerHtml(): string {
     pollIntervalId = setInterval(async () => {
       if (!TOKEN) return;
       try {
-        const r = await fetch(BASE + '/api/memories?limit=1', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+        const r = await apiFetch(BASE + '/api/memories?limit=1');
         if (!r.ok) return;
         const data = await r.json();
         const sig = (data.stats || []).map(s => s.type + ':' + s.count).join('|');
@@ -3693,7 +4389,7 @@ function viewerHtml(): string {
     svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--amber);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">LOADING GRAPH...</text>';
 
     try {
-      const r = await fetch(BASE + '/api/graph', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      const r = await apiFetch(BASE + '/api/graph');
       if (r.status === 401) { doLogout(); return; }
       if (!r.ok) throw new Error('failed');
       const data = await r.json();
@@ -3984,7 +4680,10 @@ function viewerHtml(): string {
   syncGraphToolbarState();
 
   // Enter key on login
-  document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doTokenLogin(); });
+  document.getElementById('email-input').addEventListener('keydown', e => { if (e.key === 'Enter') doCredentialAuth('login'); });
+  document.getElementById('password-input').addEventListener('keydown', e => { if (e.key === 'Enter') doCredentialAuth('login'); });
+  document.getElementById('brain-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') doCredentialAuth('signup'); });
 </script>
 </body>
 </html>`;
@@ -4010,6 +4709,54 @@ export default {
       });
     }
 
+    if (url.pathname === '/auth/signup') {
+      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
+      }
+      const response = await handleAuthSignup(request, env);
+      if (response.status >= 400) await recordFailedAttempt(ip, env);
+      else await clearRateLimit(ip, env);
+      return response;
+    }
+
+    if (url.pathname === '/auth/login') {
+      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
+      }
+      const response = await handleAuthLogin(request, env);
+      if (response.status >= 400) await recordFailedAttempt(ip, env);
+      else await clearRateLimit(ip, env);
+      return response;
+    }
+
+    if (url.pathname === '/auth/refresh') {
+      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
+      }
+      const response = await handleAuthRefresh(request, env);
+      if (response.status >= 400) await recordFailedAttempt(ip, env);
+      else await clearRateLimit(ip, env);
+      return response;
+    }
+
+    if (url.pathname === '/auth/logout') {
+      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+      return handleAuthLogout(request, env);
+    }
+
+    if (url.pathname === '/auth/me') {
+      if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) return unauthorized();
+      return handleAuthMe(authCtx, env);
+    }
+
     if (url.pathname === '/api/memories') {
       const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
       if (await isRateLimited(ip, env)) {
@@ -4018,12 +4765,13 @@ export default {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
         });
       }
-      if (!checkAuth(request, env)) {
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) {
         await recordFailedAttempt(ip, env);
         return unauthorized();
       }
       await clearRateLimit(ip, env);
-      return handleApiMemories(request, env);
+      return handleApiMemories(request, env, authCtx.brainId);
     }
 
     if (url.pathname === '/api/tools') {
@@ -4034,7 +4782,8 @@ export default {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
         });
       }
-      if (!checkAuth(request, env)) {
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) {
         await recordFailedAttempt(ip, env);
         return unauthorized();
       }
@@ -4050,12 +4799,13 @@ export default {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
         });
       }
-      if (!checkAuth(request, env)) {
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) {
         await recordFailedAttempt(ip, env);
         return unauthorized();
       }
       await clearRateLimit(ip, env);
-      return handleMcp(request, env, url);
+      return handleMcp(request, env, url, authCtx);
     }
 
     // GET /api/links/:id
@@ -4066,11 +4816,12 @@ export default {
           status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
         });
       }
-      if (!checkAuth(request, env)) { await recordFailedAttempt(ip, env); return unauthorized(); }
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(); }
       await clearRateLimit(ip, env);
       const memoryId = url.pathname.slice('/api/links/'.length);
-      if (!memoryId) return jsonResponse({ error: 'Memory ID required' }, 400);
-      return handleApiLinks(memoryId, env);
+      if (!memoryId) return corsJsonResponse({ error: 'Memory ID required' }, 400);
+      return handleApiLinks(memoryId, env, authCtx.brainId);
     }
 
     // GET /api/graph
@@ -4081,9 +4832,10 @@ export default {
           status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
         });
       }
-      if (!checkAuth(request, env)) { await recordFailedAttempt(ip, env); return unauthorized(); }
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(); }
       await clearRateLimit(ip, env);
-      return handleApiGraph(env);
+      return handleApiGraph(env, authCtx.brainId);
     }
 
     return jsonResponse({ error: 'Not found' }, 404);
