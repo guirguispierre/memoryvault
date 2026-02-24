@@ -7,6 +7,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-02-24
+
+### Added
+- `memory_link_suggest` for scored link recommendations.
+- `memory_path_find` for path tracing between memory nodes.
+- `memory_conflict_resolve` for contradiction lifecycle resolution.
+- `memory_entity_resolve` for canonical alias mapping.
+- `memory_source_trust_set` and `memory_source_trust_get` for source reliability control.
+- `brain_policy_set` and `brain_policy_get` for per-brain behavior defaults.
+- `brain_snapshot_create`, `brain_snapshot_list`, and `brain_snapshot_restore` for snapshot lifecycle.
+- `objective_next_actions` for objective-to-action prioritization.
+- `memory_subgraph` for focused graph extraction.
+- `memory_watch` for watch subscriptions with optional webhook delivery.
+
+### Changed
+- Dynamic scoring now supports source trust weighting.
+- Graph inference cap now follows brain policy (`max_inferred_edges`).
+- API/tooling version bumped to `1.7.0`.
+
 ## [1.6.0] - 2026-02-24
 
 ### Added

@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.6.0';
+const SERVER_VERSION = '1.7.0';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -465,6 +465,93 @@ async function ensureSchema(env: Env): Promise<void> {
       );
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_oauth_codes_code ON oauth_authorization_codes(code)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_authorization_codes(expires_at)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS brain_source_trust (
+          id TEXT PRIMARY KEY,
+          brain_id TEXT NOT NULL,
+          source_key TEXT NOT NULL,
+          trust REAL NOT NULL DEFAULT 0.5,
+          notes TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(brain_id, source_key),
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_source_trust_brain ON brain_source_trust(brain_id, source_key)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS brain_policies (
+          brain_id TEXT PRIMARY KEY,
+          policy_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS brain_snapshots (
+          id TEXT PRIMARY KEY,
+          brain_id TEXT NOT NULL,
+          label TEXT,
+          summary TEXT,
+          memory_count INTEGER NOT NULL DEFAULT 0,
+          link_count INTEGER NOT NULL DEFAULT 0,
+          payload_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_brain_snapshots_brain_created ON brain_snapshots(brain_id, created_at DESC)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS memory_conflict_resolutions (
+          id TEXT PRIMARY KEY,
+          brain_id TEXT NOT NULL,
+          pair_key TEXT NOT NULL,
+          a_id TEXT NOT NULL,
+          b_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          canonical_id TEXT,
+          note TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(brain_id, pair_key),
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_conflict_resolutions_brain_status ON memory_conflict_resolutions(brain_id, status, updated_at DESC)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS memory_entity_aliases (
+          id TEXT PRIMARY KEY,
+          brain_id TEXT NOT NULL,
+          canonical_memory_id TEXT NOT NULL,
+          alias_memory_id TEXT NOT NULL,
+          note TEXT,
+          confidence REAL NOT NULL DEFAULT 0.9,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(brain_id, alias_memory_id),
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_entity_aliases_brain_canonical ON memory_entity_aliases(brain_id, canonical_memory_id)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS memory_watches (
+          id TEXT PRIMARY KEY,
+          brain_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          event_types TEXT NOT NULL,
+          query TEXT,
+          webhook_url TEXT,
+          secret TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          last_triggered_at INTEGER,
+          last_error TEXT,
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_memory_watches_brain_active ON memory_watches(brain_id, is_active, updated_at DESC)");
 
       const ts = now();
       await env.DB.prepare(
@@ -520,10 +607,33 @@ type DynamicScoreBreakdown = {
     certainty_hits: number;
     hedge_hits: number;
     importance_hits: number;
+    source_trust: number | null;
     high_signal_source: boolean;
     low_signal_source: boolean;
     content_length: number;
   };
+};
+
+type BrainPolicy = {
+  decay_days: number;
+  max_inferred_edges: number;
+  min_link_suggestion_score: number;
+  retention_days: number;
+  private_mode: boolean;
+  snapshot_retention: number;
+  path_max_hops: number;
+  subgraph_default_radius: number;
+};
+
+const DEFAULT_BRAIN_POLICY: BrainPolicy = {
+  decay_days: 30,
+  max_inferred_edges: 360,
+  min_link_suggestion_score: 0.25,
+  retention_days: 3650,
+  private_mode: true,
+  snapshot_retention: 50,
+  path_max_hops: 5,
+  subgraph_default_radius: 2,
 };
 
 function toFiniteNumber(value: unknown, fallback: number): number {
@@ -537,6 +647,117 @@ function clamp01(value: number): number {
 
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function normalizeSourceKey(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 160);
+}
+
+function normalizeTag(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+function parseTagSet(raw: unknown): Set<string> {
+  if (typeof raw !== 'string' || !raw.trim()) return new Set();
+  return new Set(
+    raw.split(',')
+      .map((tag) => normalizeTag(tag))
+      .filter(Boolean)
+      .slice(0, 64)
+  );
+}
+
+function tokenizeText(raw: string, max = 80): string[] {
+  const stopWords = new Set([
+    'the', 'a', 'an', 'and', 'or', 'to', 'of', 'for', 'in', 'on', 'at', 'is', 'are', 'was', 'were', 'be',
+    'with', 'as', 'by', 'it', 'this', 'that', 'from', 'but', 'not', 'if', 'then', 'so', 'we', 'you', 'i',
+  ]);
+  const cleaned = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return [];
+  const out: string[] = [];
+  for (const token of cleaned.split(' ')) {
+    if (token.length < 2 || stopWords.has(token)) continue;
+    out.push(token);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let intersection = 0;
+  for (const item of a) {
+    if (b.has(item)) intersection++;
+  }
+  const union = a.size + b.size - intersection;
+  if (!union) return 0;
+  return intersection / union;
+}
+
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function parseJsonObject(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizePolicyPatch(patch: Record<string, unknown>, base: BrainPolicy): BrainPolicy {
+  return {
+    decay_days: Math.min(Math.max(Math.floor(toFiniteNumber(patch.decay_days, base.decay_days)), 1), 3650),
+    max_inferred_edges: Math.min(Math.max(Math.floor(toFiniteNumber(patch.max_inferred_edges, base.max_inferred_edges)), 20), 5000),
+    min_link_suggestion_score: clampToRange(patch.min_link_suggestion_score, base.min_link_suggestion_score, 0, 1),
+    retention_days: Math.min(Math.max(Math.floor(toFiniteNumber(patch.retention_days, base.retention_days)), 7), 36500),
+    private_mode: typeof patch.private_mode === 'boolean' ? patch.private_mode : base.private_mode,
+    snapshot_retention: Math.min(Math.max(Math.floor(toFiniteNumber(patch.snapshot_retention, base.snapshot_retention)), 1), 500),
+    path_max_hops: Math.min(Math.max(Math.floor(toFiniteNumber(patch.path_max_hops, base.path_max_hops)), 1), 8),
+    subgraph_default_radius: Math.min(Math.max(Math.floor(toFiniteNumber(patch.subgraph_default_radius, base.subgraph_default_radius)), 1), 6),
+  };
+}
+
+async function loadSourceTrustMap(env: Env, brainId: string): Promise<Map<string, number>> {
+  const rows = await env.DB.prepare(
+    'SELECT source_key, trust FROM brain_source_trust WHERE brain_id = ?'
+  ).bind(brainId).all<{ source_key: string; trust: number }>();
+  const out = new Map<string, number>();
+  for (const row of rows.results) {
+    const sourceKey = typeof row.source_key === 'string' ? normalizeSourceKey(row.source_key) : '';
+    if (!sourceKey) continue;
+    out.set(sourceKey, clampToRange(row.trust, 0.5));
+  }
+  return out;
+}
+
+async function getBrainPolicy(env: Env, brainId: string): Promise<BrainPolicy> {
+  const row = await env.DB.prepare(
+    'SELECT policy_json FROM brain_policies WHERE brain_id = ? LIMIT 1'
+  ).bind(brainId).first<{ policy_json: string }>();
+  const parsed = parseJsonObject(row?.policy_json ?? null);
+  if (!parsed) return { ...DEFAULT_BRAIN_POLICY };
+  return sanitizePolicyPatch(parsed, DEFAULT_BRAIN_POLICY);
+}
+
+async function setBrainPolicy(env: Env, brainId: string, patch: Record<string, unknown>): Promise<BrainPolicy> {
+  const existing = await getBrainPolicy(env, brainId);
+  const merged = sanitizePolicyPatch({ ...existing, ...patch }, existing);
+  const ts = now();
+  await env.DB.prepare(
+    `INSERT INTO brain_policies (brain_id, policy_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(brain_id) DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at`
+  ).bind(brainId, stableJson(merged), ts, ts).run();
+  return merged;
 }
 
 function canonicalizeForJson(value: unknown): unknown {
@@ -632,7 +853,8 @@ async function loadLinkStatsMap(env: Env, brainId: string): Promise<Map<string, 
 function computeDynamicScoreBreakdown(
   memory: Record<string, unknown>,
   rawStats?: Partial<LinkStats>,
-  tsNow = now()
+  tsNow = now(),
+  sourceTrustOverride?: number | null
 ): DynamicScoreBreakdown {
   const stats = normalizeLinkStats(rawStats);
   const baseConfidence = clamp01(toFiniteNumber(memory.confidence, 0.7));
@@ -666,6 +888,15 @@ function computeDynamicScoreBreakdown(
       ? 0.04
       : 0;
   const sourcePenalty = lowSignalSource ? 0.07 : 0;
+  const sourceTrust = sourceTrustOverride === undefined || sourceTrustOverride === null
+    ? null
+    : clampToRange(sourceTrustOverride, 0.5);
+  const sourceTrustConfidenceDelta = sourceTrust === null
+    ? 0
+    : (sourceTrust - 0.5) * 0.4;
+  const sourceTrustImportanceDelta = sourceTrust === null
+    ? 0
+    : (sourceTrust - 0.5) * 0.14;
   const certaintySignal = Math.min(0.2, certaintyHits * 0.04);
   const hedgePenalty = Math.min(0.2, hedgeHits * 0.055);
   const importanceKeywordSignal = Math.min(0.24, importanceHits * 0.045);
@@ -690,6 +921,7 @@ function computeDynamicScoreBreakdown(
   const confidenceComponentsRaw: ScoreComponent[] = [
     { name: 'base_confidence', delta: baseConfidence },
     { name: 'source_bonus', delta: sourceBonus },
+    { name: 'source_trust_delta', delta: sourceTrustConfidenceDelta },
     { name: 'certainty_signal', delta: certaintySignal },
     { name: 'type_confidence_bias', delta: typeConfidenceBias },
     { name: 'support_signal', delta: supportSignal },
@@ -703,6 +935,7 @@ function computeDynamicScoreBreakdown(
   const importanceComponentsRaw: ScoreComponent[] = [
     { name: 'base_importance', delta: baseImportance },
     { name: 'importance_keyword_signal', delta: importanceKeywordSignal },
+    { name: 'source_trust_delta', delta: sourceTrustImportanceDelta },
     { name: 'content_depth_signal', delta: contentDepthSignal },
     { name: 'type_importance_bias', delta: typeImportanceBias },
     { name: 'link_signal', delta: linkSignal },
@@ -737,6 +970,7 @@ function computeDynamicScoreBreakdown(
       certainty_hits: certaintyHits,
       hedge_hits: hedgeHits,
       importance_hits: importanceHits,
+      source_trust: sourceTrust,
       high_signal_source: highSignalSource,
       low_signal_source: lowSignalSource,
       content_length: contentLength,
@@ -747,9 +981,10 @@ function computeDynamicScoreBreakdown(
 function computeDynamicScores(
   memory: Record<string, unknown>,
   rawStats?: Partial<LinkStats>,
-  tsNow = now()
+  tsNow = now(),
+  sourceTrustOverride?: number | null
 ): Record<string, unknown> {
-  const breakdown = computeDynamicScoreBreakdown(memory, rawStats, tsNow);
+  const breakdown = computeDynamicScoreBreakdown(memory, rawStats, tsNow, sourceTrustOverride);
   return {
     ...breakdown.link_stats,
     dynamic_confidence: breakdown.dynamic_confidence,
@@ -760,14 +995,17 @@ function computeDynamicScores(
 function enrichMemoryRowsWithDynamics(
   rows: Array<Record<string, unknown>>,
   linkStatsMap: Map<string, LinkStats>,
-  tsNow = now()
+  tsNow = now(),
+  sourceTrustMap?: Map<string, number>
 ): Array<Record<string, unknown>> {
   return rows.map((row) => {
     const id = typeof row.id === 'string' ? row.id : '';
     const stats = id ? (linkStatsMap.get(id) ?? EMPTY_LINK_STATS) : EMPTY_LINK_STATS;
+    const sourceKey = typeof row.source === 'string' ? normalizeSourceKey(row.source) : '';
+    const sourceTrust = sourceKey && sourceTrustMap ? sourceTrustMap.get(sourceKey) : undefined;
     return {
       ...row,
-      ...computeDynamicScores(row, stats, tsNow),
+      ...computeDynamicScores(row, stats, tsNow, sourceTrust),
     };
   });
 }
@@ -796,7 +1034,8 @@ async function enrichAndProjectRows(
 ): Promise<Array<Record<string, unknown>>> {
   if (!rows.length) return [];
   const linkStatsMap = await loadLinkStatsMap(env, brainId);
-  return enrichMemoryRowsWithDynamics(rows, linkStatsMap, tsNow).map(projectMemoryForClient);
+  const sourceTrustMap = await loadSourceTrustMap(env, brainId);
+  return enrichMemoryRowsWithDynamics(rows, linkStatsMap, tsNow, sourceTrustMap).map(projectMemoryForClient);
 }
 
 type GraphEdge = { from: string; to: string; relation_type: RelationType };
@@ -862,6 +1101,103 @@ function stableJson(value: unknown): string {
   }
 }
 
+function parseWatchEventTypes(raw: string): string[] {
+  const parsed = parseJsonStringArray(raw, []);
+  const out: string[] = [];
+  for (const item of parsed) {
+    const value = item.trim();
+    if (!value) continue;
+    if (value === '*' || /^[a-z0-9_.:-]{2,64}$/i.test(value)) out.push(value);
+  }
+  return Array.from(new Set(out));
+}
+
+function normalizeWatchEventInput(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const value = item.trim();
+    if (!value) continue;
+    if (value === '*' || /^[a-z0-9_.:-]{2,64}$/i.test(value)) out.push(value);
+  }
+  return Array.from(new Set(out));
+}
+
+async function triggerMemoryWatches(
+  env: Env,
+  params: {
+    brain_id: string;
+    event_type: string;
+    entity_type: string;
+    entity_id: string;
+    summary: string;
+    payload: unknown;
+    created_at: number;
+  }
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT id, event_types, query, webhook_url, secret
+     FROM memory_watches
+     WHERE brain_id = ? AND is_active = 1
+     ORDER BY updated_at DESC
+     LIMIT 200`
+  ).bind(params.brain_id).all<{
+    id: string;
+    event_types: string;
+    query: string | null;
+    webhook_url: string | null;
+    secret: string | null;
+  }>();
+
+  const haystack = `${params.event_type} ${params.entity_type} ${params.entity_id} ${params.summary} ${stableJson(params.payload)}`
+    .toLowerCase();
+  for (const row of rows.results) {
+    const eventTypes = parseWatchEventTypes(row.event_types);
+    if (eventTypes.length && !eventTypes.includes('*') && !eventTypes.includes(params.event_type)) continue;
+    const query = typeof row.query === 'string' ? row.query.trim().toLowerCase() : '';
+    if (query && !haystack.includes(query)) continue;
+
+    const ts = params.created_at;
+    await env.DB.prepare(
+      'UPDATE memory_watches SET last_triggered_at = ?, updated_at = ?, last_error = NULL WHERE id = ? AND brain_id = ?'
+    ).bind(ts, ts, row.id, params.brain_id).run();
+
+    const webhook = typeof row.webhook_url === 'string' ? row.webhook_url.trim() : '';
+    if (!webhook || !(webhook.startsWith('https://') || webhook.startsWith('http://'))) continue;
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-MemoryVault-Watch-Id': row.id,
+      };
+      if (row.secret) headers['X-MemoryVault-Watch-Secret'] = row.secret;
+      const response = await fetch(webhook, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          watch_id: row.id,
+          event_type: params.event_type,
+          entity_type: params.entity_type,
+          entity_id: params.entity_id,
+          summary: params.summary,
+          payload: params.payload,
+          created_at: params.created_at,
+        }),
+      });
+      if (!response.ok) {
+        await env.DB.prepare(
+          'UPDATE memory_watches SET last_error = ?, updated_at = ? WHERE id = ? AND brain_id = ?'
+        ).bind(`webhook_status_${response.status}`, ts, row.id, params.brain_id).run();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message.slice(0, 300) : 'webhook_error';
+      await env.DB.prepare(
+        'UPDATE memory_watches SET last_error = ?, updated_at = ? WHERE id = ? AND brain_id = ?'
+      ).bind(message, ts, row.id, params.brain_id).run();
+    }
+  }
+}
+
 async function logChangelog(
   env: Env,
   brainId: string,
@@ -871,6 +1207,8 @@ async function logChangelog(
   summary: string,
   payload?: unknown
 ): Promise<void> {
+  const ts = now();
+  const payloadJson = payload === undefined ? null : stableJson(payload);
   await env.DB.prepare(
     'INSERT INTO memory_changelog (id, brain_id, event_type, entity_type, entity_id, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
@@ -880,9 +1218,22 @@ async function logChangelog(
     entityType,
     entityId,
     summary,
-    payload === undefined ? null : stableJson(payload),
-    now()
+    payloadJson,
+    ts
   ).run();
+  try {
+    await triggerMemoryWatches(env, {
+      brain_id: brainId,
+      event_type: eventType,
+      entity_type: entityType,
+      entity_id: entityId,
+      summary,
+      payload: payload ?? null,
+      created_at: ts,
+    });
+  } catch {
+    // Watch dispatch is best-effort and should never break memory writes.
+  }
 }
 
 async function ensureObjectiveRoot(env: Env, brainId: string): Promise<string> {
@@ -983,9 +1334,97 @@ const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
     introduced_in: '1.6.0',
     notes: 'Explainable confidence/importance scoring breakdown.',
   },
+  memory_link_suggest: {
+    introduced_in: '1.7.0',
+    notes: 'Scored relationship suggestions for graph expansion.',
+  },
+  memory_path_find: {
+    introduced_in: '1.7.0',
+    notes: 'Path search between memory nodes for reasoning traces.',
+  },
+  memory_conflict_resolve: {
+    introduced_in: '1.7.0',
+    notes: 'Conflict resolution state tracking for contradictions.',
+  },
+  memory_entity_resolve: {
+    introduced_in: '1.7.0',
+    notes: 'Canonical entity alias mapping and merge support.',
+  },
+  memory_source_trust_set: {
+    introduced_in: '1.7.0',
+    notes: 'Set source trust weights that influence dynamic confidence.',
+  },
+  memory_source_trust_get: {
+    introduced_in: '1.7.0',
+    notes: 'Inspect source trust map for a brain.',
+  },
+  brain_policy_set: {
+    introduced_in: '1.7.0',
+    notes: 'Configure retention, decay, and graph policy defaults.',
+  },
+  brain_policy_get: {
+    introduced_in: '1.7.0',
+    notes: 'Read effective brain policy.',
+  },
+  brain_snapshot_create: {
+    introduced_in: '1.7.0',
+    notes: 'Create a point-in-time brain snapshot.',
+  },
+  brain_snapshot_list: {
+    introduced_in: '1.7.0',
+    notes: 'List saved brain snapshots.',
+  },
+  brain_snapshot_restore: {
+    introduced_in: '1.7.0',
+    notes: 'Restore a brain snapshot in merge/replace mode.',
+  },
+  objective_next_actions: {
+    introduced_in: '1.7.0',
+    notes: 'Generate ranked next steps from objective nodes.',
+  },
+  memory_subgraph: {
+    introduced_in: '1.7.0',
+    notes: 'Focused graph extraction around seed/query.',
+  },
+  memory_watch: {
+    introduced_in: '1.7.0',
+    notes: 'Create/list/manage event watches with optional webhooks.',
+  },
 };
 
 const TOOL_CHANGELOG: ToolChangelogEntry[] = [
+  {
+    id: 'autonomy-1.7.0',
+    version: '1.7.0',
+    released_at: 1771966600,
+    summary: 'Autonomy, policy, and graph intelligence expansion.',
+    changes: [
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_link_suggest + memory_path_find',
+        description: 'Added link suggestion scoring and pathfinding for graph reasoning.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_conflict_resolve + memory_entity_resolve',
+        description: 'Added conflict lifecycle management and canonical entity alias resolution.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_source_trust_set/get + brain_policy_set/get',
+        description: 'Added trust and policy controls that influence dynamic scoring defaults.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'brain_snapshot_create/list/restore + memory_subgraph + memory_watch + objective_next_actions',
+        description: 'Added snapshot lifecycle, focused subgraph extraction, watch subscriptions, and objective action planning.',
+      },
+    ],
+  },
   {
     id: 'tooling-1.6.0',
     version: '1.6.0',
@@ -1343,6 +1782,7 @@ const TOOLS: ToolDefinition[] = [
       properties: {
         min_confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Only include conflicts when both sides are >= this confidence (default 0.7)' },
         limit: { type: 'number', description: 'Max conflicts returned (default 40)' },
+        include_resolved: { type: 'boolean', description: 'Include conflicts already marked resolved/dismissed (default false)' },
       },
       required: [],
     },
@@ -1378,7 +1818,309 @@ const TOOLS: ToolDefinition[] = [
       required: [],
     },
   },
+  {
+    name: 'objective_next_actions',
+    description: 'Generate prioritized next actions from active objective nodes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max actions to return (default 12)' },
+        include_done: { type: 'boolean', description: 'Include completed objectives (default false)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_link_suggest',
+    description: 'Suggest high-value links between memories using tags, lexical overlap, source, and recency signals.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional seed memory id' },
+        query: { type: 'string', description: 'Optional seed query (id/name/content/source)' },
+        limit: { type: 'number', description: 'Max suggestions (default 20)' },
+        min_score: { type: 'number', minimum: 0, maximum: 1, description: 'Minimum suggestion score (default from brain policy)' },
+        include_existing: { type: 'boolean', description: 'Include already-linked pairs (default false)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_path_find',
+    description: 'Find strongest explicit relationship paths between two memories.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from_id: { type: 'string', description: 'Start memory id' },
+        to_id: { type: 'string', description: 'Target memory id' },
+        max_hops: { type: 'number', description: 'Maximum path length in hops (default from policy)' },
+        limit: { type: 'number', description: 'Max paths to return (default 5)' },
+      },
+      required: ['from_id', 'to_id'],
+    },
+  },
+  {
+    name: 'memory_conflict_resolve',
+    description: 'Record or update a contradiction resolution state for a memory pair.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        a_id: { type: 'string', description: 'First memory id in the conflict pair' },
+        b_id: { type: 'string', description: 'Second memory id in the conflict pair' },
+        status: { type: 'string', enum: ['needs_review', 'resolved', 'superseded', 'dismissed'], description: 'Resolution status' },
+        canonical_id: { type: 'string', description: 'Winning/canonical memory id (optional)' },
+        note: { type: 'string', description: 'Optional resolver note' },
+      },
+      required: ['a_id', 'b_id', 'status'],
+    },
+  },
+  {
+    name: 'memory_entity_resolve',
+    description: 'Resolve entity aliases to a canonical memory and optionally archive aliases.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['resolve', 'lookup', 'list'], description: 'Operation mode (default resolve)' },
+        canonical_id: { type: 'string', description: 'Canonical memory id (required for resolve mode)' },
+        alias_id: { type: 'string', description: 'Single alias id (for resolve or lookup)' },
+        alias_ids: { type: 'array', items: { type: 'string' }, description: 'Alias ids to map to canonical memory' },
+        archive_aliases: { type: 'boolean', description: 'Archive alias memories after mapping (default false)' },
+        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Alias mapping confidence (default 0.9)' },
+        note: { type: 'string', description: 'Optional note on alias resolution' },
+        limit: { type: 'number', description: 'Max rows for list mode (default 100)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_source_trust_set',
+    description: 'Set a trust score for a source key to influence dynamic confidence.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'Source key/name' },
+        trust: { type: 'number', minimum: 0, maximum: 1, description: 'Trust score from 0 to 1' },
+        notes: { type: 'string', description: 'Optional note about why this trust score is set' },
+      },
+      required: ['source', 'trust'],
+    },
+  },
+  {
+    name: 'memory_source_trust_get',
+    description: 'Read source trust values for the brain.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'Optional source key filter' },
+        limit: { type: 'number', description: 'Max rows returned (default 200)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'brain_policy_set',
+    description: 'Set brain-level policy defaults for decay, retention, and graph behavior.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        decay_days: { type: 'number', description: 'Default days-before-decay threshold' },
+        max_inferred_edges: { type: 'number', description: 'Default inferred graph edge cap' },
+        min_link_suggestion_score: { type: 'number', minimum: 0, maximum: 1, description: 'Default minimum link suggestion score' },
+        retention_days: { type: 'number', description: 'Default retention window in days' },
+        private_mode: { type: 'boolean', description: 'Whether strict private mode is enabled' },
+        snapshot_retention: { type: 'number', description: 'Number of snapshots to retain automatically' },
+        path_max_hops: { type: 'number', description: 'Default hop limit for path finding' },
+        subgraph_default_radius: { type: 'number', description: 'Default BFS radius for subgraph extraction' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'brain_policy_get',
+    description: 'Get effective brain policy values.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'brain_snapshot_create',
+    description: 'Create a point-in-time snapshot of memories, links, trust map, and policy.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        label: { type: 'string', description: 'Optional snapshot label' },
+        summary: { type: 'string', description: 'Optional summary/reason' },
+        include_archived: { type: 'boolean', description: 'Include archived memories in the snapshot (default false)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'brain_snapshot_list',
+    description: 'List stored snapshots for the current brain.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max snapshots to return (default 50)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'brain_snapshot_restore',
+    description: 'Restore a snapshot in merge or replace mode.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        snapshot_id: { type: 'string', description: 'Snapshot id to restore' },
+        mode: { type: 'string', enum: ['replace', 'merge'], description: 'replace wipes existing brain data before import (default merge)' },
+        restore_policy: { type: 'boolean', description: 'Restore policy from snapshot payload (default true)' },
+        restore_source_trust: { type: 'boolean', description: 'Restore source trust map from snapshot payload (default true)' },
+      },
+      required: ['snapshot_id'],
+    },
+  },
+  {
+    name: 'memory_subgraph',
+    description: 'Return a focused subgraph around a seed/query/tag for efficient reasoning.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        seed_id: { type: 'string', description: 'Seed memory id' },
+        query: { type: 'string', description: 'Seed query text' },
+        tag: { type: 'string', description: 'Optional tag filter for seed selection' },
+        radius: { type: 'number', description: 'Hop radius (default from policy)' },
+        limit_nodes: { type: 'number', description: 'Max nodes in response (default 120)' },
+        include_inferred: { type: 'boolean', description: 'Include inferred shared-tag edges (default true)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_watch',
+    description: 'Manage watch subscriptions for changelog events with optional webhook delivery.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['create', 'list', 'delete', 'set_active', 'test'], description: 'Watch operation mode (default list)' },
+        id: { type: 'string', description: 'Watch id for delete/set_active/test' },
+        name: { type: 'string', description: 'Watch name for create mode' },
+        event_types: { type: 'array', items: { type: 'string' }, description: 'Event type filters (for create mode)' },
+        query: { type: 'string', description: 'Optional text query filter' },
+        webhook_url: { type: 'string', description: 'Optional webhook URL for event delivery' },
+        secret: { type: 'string', description: 'Optional webhook secret header value' },
+        active: { type: 'boolean', description: 'Desired active state for set_active mode' },
+        limit: { type: 'number', description: 'Max watch rows for list mode (default 100)' },
+      },
+      required: [],
+    },
+  },
 ];
+
+type MemoryGraphNode = {
+  id: string;
+  type: string;
+  title: string | null;
+  key: string | null;
+  content: string;
+  tags: string | null;
+  source: string | null;
+  created_at: number;
+  updated_at: number;
+  confidence: number;
+  importance: number;
+};
+
+type MemoryGraphLink = {
+  id: string;
+  from_id: string;
+  to_id: string;
+  relation_type: RelationType;
+  label: string | null;
+  inferred?: boolean;
+  score?: number;
+};
+
+async function loadActiveMemoryNodes(env: Env, brainId: string, limit = 1500): Promise<MemoryGraphNode[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance
+     FROM memories
+     WHERE brain_id = ? AND archived_at IS NULL
+     ORDER BY created_at DESC
+     LIMIT ?`
+  ).bind(brainId, limit).all<MemoryGraphNode>();
+  return rows.results;
+}
+
+async function loadExplicitMemoryLinks(env: Env, brainId: string, limit = 8000): Promise<MemoryGraphLink[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, from_id, to_id, relation_type, label
+     FROM memory_links
+     WHERE brain_id = ?
+     LIMIT ?`
+  ).bind(brainId, limit).all<{
+    id: string;
+    from_id: string;
+    to_id: string;
+    relation_type: string;
+    label: string | null;
+  }>();
+  return rows.results
+    .filter((row) => !!row.from_id && !!row.to_id)
+    .map((row) => ({
+      id: row.id,
+      from_id: row.from_id,
+      to_id: row.to_id,
+      relation_type: normalizeRelation(row.relation_type),
+      label: row.label,
+    }));
+}
+
+function buildTagInferredLinks(nodes: MemoryGraphNode[], maxEdges = 400): MemoryGraphLink[] {
+  const tagToIds = new Map<string, string[]>();
+  for (const node of nodes) {
+    const tags = parseTagSet(node.tags);
+    for (const tag of tags) {
+      const ids = tagToIds.get(tag);
+      if (ids) ids.push(node.id);
+      else tagToIds.set(tag, [node.id]);
+    }
+  }
+
+  const byPair = new Map<string, { from: string; to: string; score: number; shared: Set<string> }>();
+  for (const [tag, idsRaw] of tagToIds) {
+    const ids = Array.from(new Set(idsRaw));
+    if (ids.length < 2) continue;
+    const trimmed = ids.slice(0, 30);
+    const weight = 1 / Math.sqrt(trimmed.length);
+    for (let i = 0; i < trimmed.length; i++) {
+      for (let j = i + 1; j < trimmed.length; j++) {
+        const from = trimmed[i] < trimmed[j] ? trimmed[i] : trimmed[j];
+        const to = trimmed[i] < trimmed[j] ? trimmed[j] : trimmed[i];
+        const key = `${from}|${to}`;
+        const existing = byPair.get(key);
+        if (existing) {
+          existing.score += weight;
+          existing.shared.add(tag);
+        } else {
+          byPair.set(key, { from, to, score: weight, shared: new Set([tag]) });
+        }
+      }
+    }
+  }
+
+  return Array.from(byPair.values())
+    .map((row) => ({
+      id: `inferred-${row.from}-${row.to}`,
+      from_id: row.from,
+      to_id: row.to,
+      relation_type: 'related' as RelationType,
+      label: `shared: ${Array.from(row.shared).slice(0, 3).join(', ')}`,
+      inferred: true,
+      score: round3(row.score),
+    }))
+    .filter((row) => (row.score ?? 0) >= 0.75)
+    .sort((a, b) => toFiniteNumber(b.score, 0) - toFiniteNumber(a.score, 0))
+    .slice(0, maxEdges);
+}
 
 type ToolArgs = Record<string, unknown>;
 type McpResult = { content: Array<{ type: string; text: string }> };
@@ -1446,9 +2188,19 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         created_at: ts,
         updated_at: ts,
       };
+      let sourceTrust: number | undefined;
+      if (typeof source === 'string' && source.trim()) {
+        const sourceKey = normalizeSourceKey(source);
+        const trustRow = await env.DB.prepare(
+          'SELECT trust FROM brain_source_trust WHERE brain_id = ? AND source_key = ? LIMIT 1'
+        ).bind(brainId, sourceKey).first<{ trust: number }>();
+        if (trustRow && Number.isFinite(Number(trustRow.trust))) {
+          sourceTrust = clampToRange(trustRow.trust, 0.5);
+        }
+      }
       const scoredMemory = projectMemoryForClient({
         ...insertedRow,
-        ...computeDynamicScores(insertedRow, EMPTY_LINK_STATS, ts),
+        ...computeDynamicScores(insertedRow, EMPTY_LINK_STATS, ts, sourceTrust),
       });
 
       const saveResult: Record<string, unknown> = {
@@ -1771,7 +2523,10 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
 
       const linkStatsMap = await loadLinkStatsMap(env, brainId);
       const stats = linkStatsMap.get(String(row.id ?? '')) ?? EMPTY_LINK_STATS;
-      const breakdown = computeDynamicScoreBreakdown(row, stats, tsNow);
+      const sourceTrustMap = await loadSourceTrustMap(env, brainId);
+      const sourceKey = typeof row.source === 'string' ? normalizeSourceKey(row.source) : '';
+      const sourceTrust = sourceKey ? sourceTrustMap.get(sourceKey) : undefined;
+      const breakdown = computeDynamicScoreBreakdown(row, stats, tsNow, sourceTrust);
       const memory = projectMemoryForClient({
         ...row,
         ...breakdown.link_stats,
@@ -1887,6 +2642,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
 
       const tsNow = now();
       const linkStatsMap = await loadLinkStatsMap(env, brainId);
+      const sourceTrustMap = await loadSourceTrustMap(env, brainId);
       const toScoredMemory = (r: Record<string, unknown>): Record<string, unknown> => {
         const base = {
           id: r.id,
@@ -1901,7 +2657,13 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
           created_at: r.created_at,
           updated_at: r.updated_at,
         } as Record<string, unknown>;
-        const scored = computeDynamicScores(base, linkStatsMap.get(String(r.id ?? '')), tsNow);
+        const sourceKey = typeof base.source === 'string' ? normalizeSourceKey(base.source) : '';
+        const scored = computeDynamicScores(
+          base,
+          linkStatsMap.get(String(r.id ?? '')),
+          tsNow,
+          sourceKey ? sourceTrustMap.get(sourceKey) : undefined
+        );
         return projectMemoryForClient({ ...base, ...scored });
       };
 
@@ -2597,9 +3359,17 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
     }
 
     case 'memory_conflicts': {
-      const { min_confidence, limit: rawLimit } = args as { min_confidence?: unknown; limit?: unknown };
+      const { min_confidence, limit: rawLimit, include_resolved: rawIncludeResolved } = args as {
+        min_confidence?: unknown;
+        limit?: unknown;
+        include_resolved?: unknown;
+      };
+      if (rawIncludeResolved !== undefined && typeof rawIncludeResolved !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_resolved must be a boolean when provided.' }] };
+      }
       const minConfidence = clampToRange(min_confidence, 0.7);
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 40, 1), 200);
+      const includeResolved = rawIncludeResolved === true;
 
       const factsResult = await env.DB.prepare(
         'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? LIMIT 3000'
@@ -2614,7 +3384,6 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       const conflicts: Array<Record<string, unknown>> = [];
       const seenPairs = new Set<string>();
       const normalizedContent = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-      const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
       // Explicit contradiction edges between fact memories.
       const contradictionLinks = await env.DB.prepare(
@@ -2639,6 +3408,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         if (seenPairs.has(key)) continue;
         seenPairs.add(key);
         conflicts.push({
+          pair_key: key,
           conflict_type: 'explicit_contradiction_link',
           confidence_pair: [round3(confA), round3(confB)],
           link_id: row.link_id,
@@ -2677,6 +3447,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
             if (seenPairs.has(key)) continue;
             seenPairs.add(key);
             conflicts.push({
+              pair_key: key,
               conflict_type: 'fact_key_value_conflict',
               fact_key: keyName,
               confidence_pair: [round3(confA), round3(confB)],
@@ -2698,13 +3469,46 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         return bScore - aScore;
       });
 
+      const keys = Array.from(new Set(conflicts.map((conflict) => String(conflict.pair_key ?? '')).filter(Boolean)));
+      const resolutionMap = new Map<string, Record<string, unknown>>();
+      if (keys.length) {
+        const rows = await env.DB.prepare(
+          `SELECT pair_key, status, canonical_id, note, updated_at
+           FROM memory_conflict_resolutions
+           WHERE brain_id = ? AND pair_key IN (${keys.map(() => '?').join(',')})`
+        ).bind(brainId, ...keys).all<Record<string, unknown>>();
+        for (const row of rows.results) {
+          const key = typeof row.pair_key === 'string' ? row.pair_key : '';
+          if (key) resolutionMap.set(key, row);
+        }
+      }
+
+      const enrichedConflicts = conflicts
+        .map((conflict) => {
+          const key = typeof conflict.pair_key === 'string' ? conflict.pair_key : '';
+          const resolution = key ? resolutionMap.get(key) : undefined;
+          return {
+            ...conflict,
+            resolution_status: resolution?.status ?? null,
+            resolution_canonical_id: resolution?.canonical_id ?? null,
+            resolution_note: resolution?.note ?? null,
+            resolution_updated_at: resolution?.updated_at ?? null,
+          };
+        })
+        .filter((conflict) => {
+          if (includeResolved) return true;
+          const status = typeof conflict.resolution_status === 'string' ? conflict.resolution_status : '';
+          return !(status === 'resolved' || status === 'superseded' || status === 'dismissed');
+        });
+
       return {
         content: [{
           type: 'text',
           text: JSON.stringify({
             min_confidence: minConfidence,
-            total_conflicts: conflicts.length,
-            conflicts: conflicts.slice(0, limit),
+            include_resolved: includeResolved,
+            total_conflicts: enrichedConflicts.length,
+            conflicts: enrichedConflicts.slice(0, limit),
           }, null, 2),
         }],
       };
@@ -2870,6 +3674,1219 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
           }, null, 2),
         }],
       };
+    }
+
+    case 'objective_next_actions': {
+      const { limit: rawLimit, include_done: rawIncludeDone } = args as { limit?: unknown; include_done?: unknown };
+      if (rawIncludeDone !== undefined && typeof rawIncludeDone !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_done must be a boolean when provided.' }] };
+      }
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 12, 1), 100);
+      const includeDone = rawIncludeDone === true;
+
+      const rows = await env.DB.prepare(
+        `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance
+         FROM memories
+         WHERE brain_id = ? AND archived_at IS NULL AND tags LIKE ?
+         ORDER BY updated_at DESC
+         LIMIT 500`
+      ).bind(brainId, '%objective_node%').all<Record<string, unknown>>();
+      const objectives = await enrichAndProjectRows(env, brainId, rows.results);
+      const tsNow = now();
+
+      const actions: Array<Record<string, unknown>> = [];
+      for (const objective of objectives) {
+        const id = typeof objective.id === 'string' ? objective.id : '';
+        if (!id) continue;
+        const tags = parseTagSet(objective.tags);
+        const status = tags.has('status_done')
+          ? 'done'
+          : tags.has('status_paused')
+            ? 'paused'
+            : 'active';
+        if (!includeDone && status === 'done') continue;
+        if (status === 'paused') continue;
+        const kind = tags.has('kind_curiosity') ? 'curiosity' : 'goal';
+        const horizon = tags.has('horizon_short')
+          ? 'short'
+          : tags.has('horizon_medium')
+            ? 'medium'
+            : 'long';
+        const title = typeof objective.title === 'string' && objective.title.trim()
+          ? objective.title.trim()
+          : (typeof objective.key === 'string' && objective.key.trim() ? objective.key.trim() : id);
+        const updatedAt = toFiniteNumber(objective.updated_at, tsNow);
+        const ageDays = Math.max(0, (tsNow - updatedAt) / 86400);
+        const freshness = ageDays < 3 ? 1 : ageDays < 14 ? 0.75 : ageDays < 45 ? 0.45 : 0.2;
+        const importanceScore = clampToRange(objective.dynamic_importance ?? objective.importance, 0.6);
+        const urgency = horizon === 'short' ? 0.2 : horizon === 'medium' ? 0.12 : 0.06;
+        const actionScore = round3(clamp01((importanceScore * 0.68) + (freshness * 0.22) + urgency));
+        const actionText = kind === 'curiosity'
+          ? `Run one focused exploration step for "${title}" and capture one concrete finding.`
+          : `Advance "${title}" with one concrete deliverable-level action today.`;
+        actions.push({
+          objective_id: id,
+          title,
+          kind,
+          horizon,
+          status,
+          action: actionText,
+          score: actionScore,
+          dynamic_importance: round3(importanceScore),
+          last_updated_days_ago: round3(ageDays),
+        });
+      }
+
+      actions.sort((a, b) => toFiniteNumber(b.score, 0) - toFiniteNumber(a.score, 0));
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            count: Math.min(actions.length, limit),
+            actions: actions.slice(0, limit),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_link_suggest': {
+      const { id: rawId, query: rawQuery, limit: rawLimit, min_score: rawMinScore, include_existing: rawIncludeExisting } = args as {
+        id?: unknown;
+        query?: unknown;
+        limit?: unknown;
+        min_score?: unknown;
+        include_existing?: unknown;
+      };
+      if (rawId !== undefined && typeof rawId !== 'string') return { content: [{ type: 'text', text: 'id must be a string when provided.' }] };
+      if (rawQuery !== undefined && typeof rawQuery !== 'string') return { content: [{ type: 'text', text: 'query must be a string when provided.' }] };
+      if (rawIncludeExisting !== undefined && typeof rawIncludeExisting !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_existing must be a boolean when provided.' }] };
+      }
+      const policy = await getBrainPolicy(env, brainId);
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 20, 1), 120);
+      const minScore = clampToRange(rawMinScore, policy.min_link_suggestion_score);
+      const includeExisting = rawIncludeExisting === true;
+
+      const nodes = await loadActiveMemoryNodes(env, brainId, 1400);
+      if (!nodes.length) return { content: [{ type: 'text', text: 'No memories available.' }] };
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
+      const seedIds = new Set<string>();
+      if (typeof rawId === 'string' && rawId.trim()) {
+        const id = rawId.trim();
+        if (!nodeById.has(id)) return { content: [{ type: 'text', text: `Seed memory not found: ${id}` }] };
+        seedIds.add(id);
+      }
+      if (typeof rawQuery === 'string' && rawQuery.trim()) {
+        const query = rawQuery.trim().toLowerCase();
+        const scoredMatches = nodes.map((node) => {
+          const text = `${node.id} ${node.title ?? ''} ${node.key ?? ''} ${node.content} ${node.source ?? ''}`.toLowerCase();
+          const exact = text.includes(query) ? 1 : 0;
+          const tokenSet = new Set(tokenizeText(text, 120));
+          const queryTokens = tokenizeText(query, 24);
+          let tokenHits = 0;
+          for (const token of queryTokens) if (tokenSet.has(token)) tokenHits++;
+          const score = (exact * 0.7) + (queryTokens.length ? (tokenHits / queryTokens.length) * 0.3 : 0);
+          return { id: node.id, score };
+        })
+          .filter((row) => row.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 8);
+        for (const match of scoredMatches) seedIds.add(match.id);
+      }
+      if (!seedIds.size) {
+        for (const node of nodes.slice(0, 3)) seedIds.add(node.id);
+      }
+
+      const links = await loadExplicitMemoryLinks(env, brainId, 9000);
+      const existingPairs = new Set(links.map((edge) => pairKey(edge.from_id, edge.to_id)));
+      const tokenCache = new Map<string, Set<string>>();
+      const tagCache = new Map<string, Set<string>>();
+      const getTokenSet = (node: MemoryGraphNode): Set<string> => {
+        const existing = tokenCache.get(node.id);
+        if (existing) return existing;
+        const tokens = new Set(tokenizeText(`${node.title ?? ''} ${node.key ?? ''} ${node.content} ${node.source ?? ''}`, 120));
+        tokenCache.set(node.id, tokens);
+        return tokens;
+      };
+      const getTagSet = (node: MemoryGraphNode): Set<string> => {
+        const existing = tagCache.get(node.id);
+        if (existing) return existing;
+        const tags = parseTagSet(node.tags);
+        tagCache.set(node.id, tags);
+        return tags;
+      };
+
+      const suggestionsByPair = new Map<string, Record<string, unknown>>();
+      for (const seedId of seedIds) {
+        const seed = nodeById.get(seedId);
+        if (!seed) continue;
+        const seedTokens = getTokenSet(seed);
+        const seedTags = getTagSet(seed);
+        const seedSource = seed.source ? normalizeSourceKey(seed.source) : '';
+        for (const candidate of nodes) {
+          if (candidate.id === seed.id) continue;
+          const key = pairKey(seed.id, candidate.id);
+          if (!includeExisting && existingPairs.has(key)) continue;
+          const candidateTokens = getTokenSet(candidate);
+          const candidateTags = getTagSet(candidate);
+          let sharedTagCount = 0;
+          const sharedTags: string[] = [];
+          for (const tag of seedTags) {
+            if (!candidateTags.has(tag)) continue;
+            sharedTagCount++;
+            if (sharedTags.length < 5) sharedTags.push(tag);
+          }
+          const tagScore = Math.min(1, sharedTagCount / 3);
+          const lexicalScore = jaccardSimilarity(seedTokens, candidateTokens);
+          const sourceScore = seedSource && candidate.source && seedSource === normalizeSourceKey(candidate.source) ? 1 : 0;
+          const ageDeltaDays = Math.abs(toFiniteNumber(seed.updated_at, 0) - toFiniteNumber(candidate.updated_at, 0)) / 86400;
+          const temporalScore = ageDeltaDays < 7 ? 1 : ageDeltaDays < 30 ? 0.65 : ageDeltaDays < 120 ? 0.3 : 0.08;
+          const typeScore = seed.type === candidate.type ? 1 : 0.45;
+          const score = round3(
+            (tagScore * 0.45)
+            + (lexicalScore * 0.35)
+            + (sourceScore * 0.1)
+            + (temporalScore * 0.05)
+            + (typeScore * 0.05)
+          );
+          if (score < minScore) continue;
+
+          const prev = suggestionsByPair.get(key);
+          if (prev && toFiniteNumber(prev.score, 0) >= score) continue;
+          suggestionsByPair.set(key, {
+            from_id: seed.id,
+            to_id: candidate.id,
+            relation_hint: 'related',
+            score,
+            reasons: {
+              shared_tags: sharedTags,
+              lexical_similarity: round3(lexicalScore),
+              same_source: sourceScore === 1,
+              temporal_score: round3(temporalScore),
+              type_score: round3(typeScore),
+            },
+          });
+        }
+      }
+
+      const suggestions = Array.from(suggestionsByPair.values())
+        .sort((a, b) => toFiniteNumber(b.score, 0) - toFiniteNumber(a.score, 0))
+        .slice(0, limit);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            seed_ids: Array.from(seedIds),
+            min_score: minScore,
+            count: suggestions.length,
+            suggestions,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_path_find': {
+      const { from_id: rawFrom, to_id: rawTo, max_hops: rawMaxHops, limit: rawLimit } = args as {
+        from_id: unknown;
+        to_id: unknown;
+        max_hops?: unknown;
+        limit?: unknown;
+      };
+      if (typeof rawFrom !== 'string' || !rawFrom.trim()) return { content: [{ type: 'text', text: 'from_id must be a non-empty string.' }] };
+      if (typeof rawTo !== 'string' || !rawTo.trim()) return { content: [{ type: 'text', text: 'to_id must be a non-empty string.' }] };
+      const fromId = rawFrom.trim();
+      const toId = rawTo.trim();
+      if (fromId === toId) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              from_id: fromId,
+              to_id: toId,
+              count: 1,
+              paths: [{ nodes: [fromId], edges: [], hops: 0, avg_score: 1 }],
+            }, null, 2),
+          }],
+        };
+      }
+
+      const policy = await getBrainPolicy(env, brainId);
+      const maxHops = Math.min(Math.max(Number.isInteger(rawMaxHops) ? (rawMaxHops as number) : policy.path_max_hops, 1), 8);
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 5, 1), 20);
+
+      const fromExists = await env.DB.prepare(
+        'SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL LIMIT 1'
+      ).bind(brainId, fromId).first<{ id: string }>();
+      if (!fromExists?.id) return { content: [{ type: 'text', text: `Memory not found: ${fromId}` }] };
+      const toExists = await env.DB.prepare(
+        'SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL LIMIT 1'
+      ).bind(brainId, toId).first<{ id: string }>();
+      if (!toExists?.id) return { content: [{ type: 'text', text: `Memory not found: ${toId}` }] };
+
+      const links = await loadExplicitMemoryLinks(env, brainId, 12000);
+      const adjacency = new Map<string, Array<{ id: string; relation_type: RelationType; link_id: string; label: string | null; weight: number }>>();
+      for (const link of links) {
+        const weight = relationSignalWeight(link.relation_type);
+        const fromArr = adjacency.get(link.from_id);
+        const fromEdge = { id: link.to_id, relation_type: link.relation_type, link_id: link.id, label: link.label, weight };
+        if (fromArr) fromArr.push(fromEdge);
+        else adjacency.set(link.from_id, [fromEdge]);
+        const toArr = adjacency.get(link.to_id);
+        const toEdge = { id: link.from_id, relation_type: link.relation_type, link_id: link.id, label: link.label, weight };
+        if (toArr) toArr.push(toEdge);
+        else adjacency.set(link.to_id, [toEdge]);
+      }
+
+      const paths: Array<Record<string, unknown>> = [];
+      const visited = new Set<string>([fromId]);
+      let expansions = 0;
+      const maxExpansions = 50000;
+      const dfs = (
+        currentId: string,
+        depth: number,
+        nodesPath: string[],
+        edgesPath: Array<Record<string, unknown>>,
+        cumulativeScore: number
+      ): void => {
+        if (depth >= maxHops || expansions >= maxExpansions) return;
+        const neighbors = [...(adjacency.get(currentId) ?? [])]
+          .sort((a, b) => b.weight - a.weight)
+          .slice(0, 18);
+        for (const neighbor of neighbors) {
+          if (expansions >= maxExpansions) break;
+          if (visited.has(neighbor.id)) continue;
+          expansions++;
+          visited.add(neighbor.id);
+          const nextNodes = [...nodesPath, neighbor.id];
+          const nextEdges = [...edgesPath, {
+            link_id: neighbor.link_id,
+            from_id: currentId,
+            to_id: neighbor.id,
+            relation_type: neighbor.relation_type,
+            label: neighbor.label,
+            weight: round3(neighbor.weight),
+          }];
+          const nextScore = cumulativeScore + neighbor.weight;
+          if (neighbor.id === toId) {
+            const hops = nextEdges.length;
+            const avgScore = hops ? round3(nextScore / hops) : 0;
+            paths.push({
+              nodes: nextNodes,
+              edges: nextEdges,
+              hops,
+              cumulative_score: round3(nextScore),
+              avg_score: avgScore,
+            });
+          } else {
+            dfs(neighbor.id, depth + 1, nextNodes, nextEdges, nextScore);
+          }
+          visited.delete(neighbor.id);
+        }
+      };
+      dfs(fromId, 0, [fromId], [], 0);
+
+      paths.sort((a, b) => {
+        const scoreDelta = toFiniteNumber(b.avg_score, 0) - toFiniteNumber(a.avg_score, 0);
+        if (scoreDelta !== 0) return scoreDelta;
+        return toFiniteNumber(a.hops, 999) - toFiniteNumber(b.hops, 999);
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            from_id: fromId,
+            to_id: toId,
+            max_hops: maxHops,
+            explored_paths: paths.length,
+            expansions,
+            count: Math.min(paths.length, limit),
+            paths: paths.slice(0, limit),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_conflict_resolve': {
+      const { a_id: rawA, b_id: rawB, status: rawStatus, canonical_id: rawCanonical, note: rawNote } = args as {
+        a_id: unknown;
+        b_id: unknown;
+        status: unknown;
+        canonical_id?: unknown;
+        note?: unknown;
+      };
+      if (typeof rawA !== 'string' || !rawA.trim()) return { content: [{ type: 'text', text: 'a_id must be a non-empty string.' }] };
+      if (typeof rawB !== 'string' || !rawB.trim()) return { content: [{ type: 'text', text: 'b_id must be a non-empty string.' }] };
+      if (rawA === rawB) return { content: [{ type: 'text', text: 'a_id and b_id must be different.' }] };
+      if (typeof rawStatus !== 'string') return { content: [{ type: 'text', text: 'status is required.' }] };
+      const allowed = new Set(['needs_review', 'resolved', 'superseded', 'dismissed']);
+      const status = rawStatus.trim();
+      if (!allowed.has(status)) return { content: [{ type: 'text', text: 'Invalid status. Use needs_review|resolved|superseded|dismissed.' }] };
+      if (rawCanonical !== undefined && typeof rawCanonical !== 'string') return { content: [{ type: 'text', text: 'canonical_id must be a string when provided.' }] };
+      if (rawNote !== undefined && typeof rawNote !== 'string') return { content: [{ type: 'text', text: 'note must be a string when provided.' }] };
+
+      const aId = rawA.trim();
+      const bId = rawB.trim();
+      const aMem = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? AND id = ? LIMIT 1').bind(brainId, aId).first<{ id: string }>();
+      const bMem = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? AND id = ? LIMIT 1').bind(brainId, bId).first<{ id: string }>();
+      if (!aMem?.id || !bMem?.id) return { content: [{ type: 'text', text: 'Both conflict memory IDs must exist in this brain.' }] };
+
+      const canonicalId = typeof rawCanonical === 'string' && rawCanonical.trim() ? rawCanonical.trim() : null;
+      if (canonicalId && canonicalId !== aId && canonicalId !== bId) {
+        return { content: [{ type: 'text', text: 'canonical_id must match either a_id or b_id.' }] };
+      }
+
+      const ts = now();
+      const key = pairKey(aId, bId);
+      await env.DB.prepare(
+        `INSERT INTO memory_conflict_resolutions
+          (id, brain_id, pair_key, a_id, b_id, status, canonical_id, note, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(brain_id, pair_key)
+         DO UPDATE SET status = excluded.status, canonical_id = excluded.canonical_id, note = excluded.note, updated_at = excluded.updated_at`
+      ).bind(
+        generateId(),
+        brainId,
+        key,
+        aId,
+        bId,
+        status,
+        canonicalId,
+        typeof rawNote === 'string' && rawNote.trim() ? rawNote.trim().slice(0, 600) : null,
+        ts,
+        ts
+      ).run();
+
+      if (canonicalId && (status === 'resolved' || status === 'superseded')) {
+        const otherId = canonicalId === aId ? bId : aId;
+        const existingLink = await env.DB.prepare(
+          'SELECT id FROM memory_links WHERE brain_id = ? AND from_id = ? AND to_id = ? LIMIT 1'
+        ).bind(brainId, canonicalId, otherId).first<{ id: string }>();
+        if (existingLink?.id) {
+          await env.DB.prepare(
+            'UPDATE memory_links SET relation_type = ?, label = ? WHERE brain_id = ? AND id = ?'
+          ).bind('supersedes', 'conflict_resolution', brainId, existingLink.id).run();
+        } else {
+          await env.DB.prepare(
+            'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(generateId(), brainId, canonicalId, otherId, 'supersedes', 'conflict_resolution', ts).run();
+        }
+      }
+
+      const resolution = await env.DB.prepare(
+        'SELECT id, pair_key, a_id, b_id, status, canonical_id, note, created_at, updated_at FROM memory_conflict_resolutions WHERE brain_id = ? AND pair_key = ? LIMIT 1'
+      ).bind(brainId, key).first<Record<string, unknown>>();
+      await logChangelog(env, brainId, 'memory_conflict_resolved', 'memory_conflict', key, `Conflict marked as ${status}`, {
+        a_id: aId,
+        b_id: bId,
+        status,
+        canonical_id: canonicalId,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(resolution, null, 2) }] };
+    }
+
+    case 'memory_entity_resolve': {
+      const { mode: rawMode, canonical_id: rawCanonicalId, alias_id: rawAliasId, alias_ids: rawAliasIds, archive_aliases: rawArchiveAliases, confidence: rawConfidence, note: rawNote, limit: rawLimit } = args as {
+        mode?: unknown;
+        canonical_id?: unknown;
+        alias_id?: unknown;
+        alias_ids?: unknown;
+        archive_aliases?: unknown;
+        confidence?: unknown;
+        note?: unknown;
+        limit?: unknown;
+      };
+      if (rawMode !== undefined && typeof rawMode !== 'string') return { content: [{ type: 'text', text: 'mode must be a string when provided.' }] };
+      const mode = typeof rawMode === 'string' ? rawMode.trim().toLowerCase() : 'resolve';
+      if (!['resolve', 'lookup', 'list'].includes(mode)) return { content: [{ type: 'text', text: 'mode must be resolve|lookup|list.' }] };
+
+      if (mode === 'list') {
+        const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 100, 1), 500);
+        const rows = await env.DB.prepare(
+          `SELECT ea.id, ea.canonical_memory_id, ea.alias_memory_id, ea.note, ea.confidence, ea.created_at, ea.updated_at,
+                  c.title AS canonical_title, c.key AS canonical_key, a.title AS alias_title, a.key AS alias_key
+           FROM memory_entity_aliases ea
+           LEFT JOIN memories c ON c.id = ea.canonical_memory_id
+           LEFT JOIN memories a ON a.id = ea.alias_memory_id
+           WHERE ea.brain_id = ?
+           ORDER BY ea.updated_at DESC
+           LIMIT ?`
+        ).bind(brainId, limit).all<Record<string, unknown>>();
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ count: rows.results.length, aliases: rows.results }, null, 2),
+          }],
+        };
+      }
+
+      if (mode === 'lookup') {
+        if (typeof rawAliasId !== 'string' || !rawAliasId.trim()) {
+          return { content: [{ type: 'text', text: 'alias_id is required for lookup mode.' }] };
+        }
+        const aliasId = rawAliasId.trim();
+        const row = await env.DB.prepare(
+          `SELECT ea.id, ea.canonical_memory_id, ea.alias_memory_id, ea.note, ea.confidence, ea.created_at, ea.updated_at,
+                  c.title AS canonical_title, c.key AS canonical_key
+           FROM memory_entity_aliases ea
+           LEFT JOIN memories c ON c.id = ea.canonical_memory_id
+           WHERE ea.brain_id = ? AND ea.alias_memory_id = ?
+           LIMIT 1`
+        ).bind(brainId, aliasId).first<Record<string, unknown>>();
+        if (!row) return { content: [{ type: 'text', text: 'No alias mapping found for alias_id.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+      }
+
+      if (typeof rawCanonicalId !== 'string' || !rawCanonicalId.trim()) {
+        return { content: [{ type: 'text', text: 'canonical_id is required for resolve mode.' }] };
+      }
+      if (rawAliasId !== undefined && typeof rawAliasId !== 'string') return { content: [{ type: 'text', text: 'alias_id must be a string when provided.' }] };
+      if (rawAliasIds !== undefined && (!Array.isArray(rawAliasIds) || rawAliasIds.some((id) => typeof id !== 'string'))) {
+        return { content: [{ type: 'text', text: 'alias_ids must be an array of strings when provided.' }] };
+      }
+      if (rawArchiveAliases !== undefined && typeof rawArchiveAliases !== 'boolean') {
+        return { content: [{ type: 'text', text: 'archive_aliases must be a boolean when provided.' }] };
+      }
+      if (rawNote !== undefined && typeof rawNote !== 'string') return { content: [{ type: 'text', text: 'note must be a string when provided.' }] };
+
+      const canonicalId = rawCanonicalId.trim();
+      const canonicalExists = await env.DB.prepare(
+        'SELECT id FROM memories WHERE brain_id = ? AND id = ? LIMIT 1'
+      ).bind(brainId, canonicalId).first<{ id: string }>();
+      if (!canonicalExists?.id) return { content: [{ type: 'text', text: `Canonical memory not found: ${canonicalId}` }] };
+
+      const aliasIds = new Set<string>();
+      if (typeof rawAliasId === 'string' && rawAliasId.trim()) aliasIds.add(rawAliasId.trim());
+      if (Array.isArray(rawAliasIds)) {
+        for (const aliasId of rawAliasIds) {
+          const trimmed = aliasId.trim();
+          if (trimmed) aliasIds.add(trimmed);
+        }
+      }
+      aliasIds.delete(canonicalId);
+      if (!aliasIds.size) return { content: [{ type: 'text', text: 'Provide alias_id or alias_ids for resolve mode.' }] };
+
+      const confidence = clampToRange(rawConfidence, 0.9);
+      const archiveAliases = rawArchiveAliases === true;
+      const ts = now();
+      const mapped: Array<Record<string, unknown>> = [];
+      for (const aliasId of aliasIds) {
+        const aliasExists = await env.DB.prepare(
+          'SELECT id FROM memories WHERE brain_id = ? AND id = ? LIMIT 1'
+        ).bind(brainId, aliasId).first<{ id: string }>();
+        if (!aliasExists?.id) continue;
+        await env.DB.prepare(
+          `INSERT INTO memory_entity_aliases
+            (id, brain_id, canonical_memory_id, alias_memory_id, note, confidence, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(brain_id, alias_memory_id)
+           DO UPDATE SET canonical_memory_id = excluded.canonical_memory_id, note = excluded.note, confidence = excluded.confidence, updated_at = excluded.updated_at`
+        ).bind(
+          generateId(),
+          brainId,
+          canonicalId,
+          aliasId,
+          typeof rawNote === 'string' && rawNote.trim() ? rawNote.trim().slice(0, 600) : null,
+          confidence,
+          ts,
+          ts
+        ).run();
+
+        const existingLink = await env.DB.prepare(
+          'SELECT id FROM memory_links WHERE brain_id = ? AND from_id = ? AND to_id = ? LIMIT 1'
+        ).bind(brainId, canonicalId, aliasId).first<{ id: string }>();
+        if (existingLink?.id) {
+          await env.DB.prepare(
+            'UPDATE memory_links SET relation_type = ?, label = ? WHERE brain_id = ? AND id = ?'
+          ).bind('supersedes', 'entity_alias', brainId, existingLink.id).run();
+        } else {
+          await env.DB.prepare(
+            'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(generateId(), brainId, canonicalId, aliasId, 'supersedes', 'entity_alias', ts).run();
+        }
+        if (archiveAliases) {
+          await env.DB.prepare(
+            'UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ? AND archived_at IS NULL'
+          ).bind(ts, ts, brainId, aliasId).run();
+        }
+        mapped.push({ canonical_id: canonicalId, alias_id: aliasId, confidence, archived: archiveAliases });
+      }
+
+      await logChangelog(env, brainId, 'memory_entity_resolved', 'memory_entity', canonicalId, 'Updated entity alias mappings', {
+        canonical_id: canonicalId,
+        mapped_count: mapped.length,
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            canonical_id: canonicalId,
+            mapped_count: mapped.length,
+            mappings: mapped,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_source_trust_set': {
+      const { source: rawSource, trust: rawTrust, notes: rawNotes } = args as { source: unknown; trust: unknown; notes?: unknown };
+      if (typeof rawSource !== 'string' || !rawSource.trim()) return { content: [{ type: 'text', text: 'source must be a non-empty string.' }] };
+      if (rawNotes !== undefined && typeof rawNotes !== 'string') return { content: [{ type: 'text', text: 'notes must be a string when provided.' }] };
+      const sourceKey = normalizeSourceKey(rawSource);
+      const trust = clampToRange(rawTrust, NaN);
+      if (!Number.isFinite(trust)) return { content: [{ type: 'text', text: 'trust must be a number between 0 and 1.' }] };
+      const ts = now();
+      await env.DB.prepare(
+        `INSERT INTO brain_source_trust (id, brain_id, source_key, trust, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(brain_id, source_key)
+         DO UPDATE SET trust = excluded.trust, notes = excluded.notes, updated_at = excluded.updated_at`
+      ).bind(
+        generateId(),
+        brainId,
+        sourceKey,
+        trust,
+        typeof rawNotes === 'string' && rawNotes.trim() ? rawNotes.trim().slice(0, 400) : null,
+        ts,
+        ts
+      ).run();
+      const row = await env.DB.prepare(
+        'SELECT source_key, trust, notes, created_at, updated_at FROM brain_source_trust WHERE brain_id = ? AND source_key = ? LIMIT 1'
+      ).bind(brainId, sourceKey).first<Record<string, unknown>>();
+      await logChangelog(env, brainId, 'memory_source_trust_set', 'source', sourceKey, 'Updated source trust score', {
+        source: sourceKey,
+        trust,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+    }
+
+    case 'memory_source_trust_get': {
+      const { source: rawSource, limit: rawLimit } = args as { source?: unknown; limit?: unknown };
+      if (rawSource !== undefined && typeof rawSource !== 'string') return { content: [{ type: 'text', text: 'source must be a string when provided.' }] };
+      const sourceKey = typeof rawSource === 'string' ? normalizeSourceKey(rawSource) : '';
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 200, 1), 1000);
+      if (sourceKey) {
+        const row = await env.DB.prepare(
+          'SELECT source_key, trust, notes, created_at, updated_at FROM brain_source_trust WHERE brain_id = ? AND source_key = ? LIMIT 1'
+        ).bind(brainId, sourceKey).first<Record<string, unknown>>();
+        return { content: [{ type: 'text', text: JSON.stringify({ count: row ? 1 : 0, sources: row ? [row] : [] }, null, 2) }] };
+      }
+      const rows = await env.DB.prepare(
+        'SELECT source_key, trust, notes, created_at, updated_at FROM brain_source_trust WHERE brain_id = ? ORDER BY trust DESC, updated_at DESC LIMIT ?'
+      ).bind(brainId, limit).all<Record<string, unknown>>();
+      return { content: [{ type: 'text', text: JSON.stringify({ count: rows.results.length, sources: rows.results }, null, 2) }] };
+    }
+
+    case 'brain_policy_set': {
+      const policy = await setBrainPolicy(env, brainId, args);
+      await logChangelog(env, brainId, 'brain_policy_set', 'brain_policy', brainId, 'Updated brain policy', policy);
+      return { content: [{ type: 'text', text: JSON.stringify({ brain_id: brainId, policy }, null, 2) }] };
+    }
+
+    case 'brain_policy_get': {
+      const policy = await getBrainPolicy(env, brainId);
+      return { content: [{ type: 'text', text: JSON.stringify({ brain_id: brainId, policy }, null, 2) }] };
+    }
+
+    case 'brain_snapshot_create': {
+      const { label: rawLabel, summary: rawSummary, include_archived: rawIncludeArchived } = args as {
+        label?: unknown;
+        summary?: unknown;
+        include_archived?: unknown;
+      };
+      if (rawLabel !== undefined && typeof rawLabel !== 'string') return { content: [{ type: 'text', text: 'label must be a string when provided.' }] };
+      if (rawSummary !== undefined && typeof rawSummary !== 'string') return { content: [{ type: 'text', text: 'summary must be a string when provided.' }] };
+      if (rawIncludeArchived !== undefined && typeof rawIncludeArchived !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_archived must be a boolean when provided.' }] };
+      }
+      const includeArchived = rawIncludeArchived === true;
+      const ts = now();
+      const memories = await env.DB.prepare(
+        `SELECT id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at
+         FROM memories
+         WHERE brain_id = ? ${includeArchived ? '' : 'AND archived_at IS NULL'}
+         ORDER BY created_at DESC
+         LIMIT 5000`
+      ).bind(brainId).all<Record<string, unknown>>();
+      const memoryIds = new Set(memories.results.map((m) => String(m.id ?? '')).filter(Boolean));
+      const links = (await loadExplicitMemoryLinks(env, brainId, 12000))
+        .filter((link) => memoryIds.has(link.from_id) && memoryIds.has(link.to_id));
+      const sourceTrustRows = await env.DB.prepare(
+        'SELECT source_key, trust, notes, created_at, updated_at FROM brain_source_trust WHERE brain_id = ? ORDER BY source_key ASC'
+      ).bind(brainId).all<Record<string, unknown>>();
+      const aliasRows = await env.DB.prepare(
+        'SELECT canonical_memory_id, alias_memory_id, note, confidence, created_at, updated_at FROM memory_entity_aliases WHERE brain_id = ? ORDER BY updated_at DESC LIMIT 5000'
+      ).bind(brainId).all<Record<string, unknown>>();
+      const conflictResolutionRows = await env.DB.prepare(
+        'SELECT pair_key, a_id, b_id, status, canonical_id, note, created_at, updated_at FROM memory_conflict_resolutions WHERE brain_id = ? ORDER BY updated_at DESC LIMIT 5000'
+      ).bind(brainId).all<Record<string, unknown>>();
+      const policy = await getBrainPolicy(env, brainId);
+      const payload = {
+        schema: 'brain_snapshot_v1',
+        brain_id: brainId,
+        exported_at: ts,
+        include_archived: includeArchived,
+        memories: memories.results,
+        links,
+        source_trust: sourceTrustRows.results,
+        aliases: aliasRows.results,
+        conflict_resolutions: conflictResolutionRows.results,
+        policy,
+      };
+      const snapshotId = generateId();
+      await env.DB.prepare(
+        `INSERT INTO brain_snapshots (id, brain_id, label, summary, memory_count, link_count, payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        snapshotId,
+        brainId,
+        typeof rawLabel === 'string' && rawLabel.trim() ? rawLabel.trim().slice(0, 160) : null,
+        typeof rawSummary === 'string' && rawSummary.trim() ? rawSummary.trim().slice(0, 500) : null,
+        memories.results.length,
+        links.length,
+        stableJson(payload),
+        ts
+      ).run();
+
+      const retention = policy.snapshot_retention;
+      const snapshotRows = await env.DB.prepare(
+        'SELECT id FROM brain_snapshots WHERE brain_id = ? ORDER BY created_at DESC LIMIT 2000'
+      ).bind(brainId).all<{ id: string }>();
+      const staleIds = snapshotRows.results.slice(retention).map((row) => row.id);
+      for (const staleId of staleIds) {
+        await env.DB.prepare('DELETE FROM brain_snapshots WHERE brain_id = ? AND id = ?').bind(brainId, staleId).run();
+      }
+
+      await logChangelog(env, brainId, 'brain_snapshot_created', 'brain_snapshot', snapshotId, 'Created brain snapshot', {
+        memory_count: memories.results.length,
+        link_count: links.length,
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            snapshot_id: snapshotId,
+            memory_count: memories.results.length,
+            link_count: links.length,
+            retention_applied: retention,
+            pruned_snapshots: staleIds.length,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'brain_snapshot_list': {
+      const { limit: rawLimit } = args as { limit?: unknown };
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 50, 1), 500);
+      const rows = await env.DB.prepare(
+        `SELECT id, label, summary, memory_count, link_count, created_at
+         FROM brain_snapshots
+         WHERE brain_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`
+      ).bind(brainId, limit).all<Record<string, unknown>>();
+      return { content: [{ type: 'text', text: JSON.stringify({ count: rows.results.length, snapshots: rows.results }, null, 2) }] };
+    }
+
+    case 'brain_snapshot_restore': {
+      const { snapshot_id: rawSnapshotId, mode: rawMode, restore_policy: rawRestorePolicy, restore_source_trust: rawRestoreTrust } = args as {
+        snapshot_id: unknown;
+        mode?: unknown;
+        restore_policy?: unknown;
+        restore_source_trust?: unknown;
+      };
+      if (typeof rawSnapshotId !== 'string' || !rawSnapshotId.trim()) return { content: [{ type: 'text', text: 'snapshot_id must be a non-empty string.' }] };
+      if (rawMode !== undefined && typeof rawMode !== 'string') return { content: [{ type: 'text', text: 'mode must be replace or merge.' }] };
+      if (rawRestorePolicy !== undefined && typeof rawRestorePolicy !== 'boolean') return { content: [{ type: 'text', text: 'restore_policy must be a boolean when provided.' }] };
+      if (rawRestoreTrust !== undefined && typeof rawRestoreTrust !== 'boolean') return { content: [{ type: 'text', text: 'restore_source_trust must be a boolean when provided.' }] };
+      const mode = rawMode === 'replace' ? 'replace' : 'merge';
+      const restorePolicy = rawRestorePolicy !== false;
+      const restoreTrust = rawRestoreTrust !== false;
+
+      const snapshot = await env.DB.prepare(
+        'SELECT id, payload_json, created_at FROM brain_snapshots WHERE brain_id = ? AND id = ? LIMIT 1'
+      ).bind(brainId, rawSnapshotId.trim()).first<{ id: string; payload_json: string; created_at: number }>();
+      if (!snapshot?.id) return { content: [{ type: 'text', text: 'Snapshot not found.' }] };
+      const payload = parseJsonObject(snapshot.payload_json);
+      if (!payload) return { content: [{ type: 'text', text: 'Snapshot payload is invalid JSON.' }] };
+      const memoriesPayload = Array.isArray(payload.memories) ? payload.memories : [];
+      const linksPayload = Array.isArray(payload.links) ? payload.links : [];
+      const sourceTrustPayload = Array.isArray(payload.source_trust) ? payload.source_trust : [];
+      const aliasesPayload = Array.isArray(payload.aliases) ? payload.aliases : [];
+      const resolutionsPayload = Array.isArray(payload.conflict_resolutions) ? payload.conflict_resolutions : [];
+      const policyPayload = payload.policy && typeof payload.policy === 'object' && !Array.isArray(payload.policy)
+        ? payload.policy as Record<string, unknown>
+        : null;
+      const ts = now();
+
+      if (mode === 'replace') {
+        await env.DB.prepare('DELETE FROM memory_links WHERE brain_id = ?').bind(brainId).run();
+        await env.DB.prepare('DELETE FROM memory_entity_aliases WHERE brain_id = ?').bind(brainId).run();
+        await env.DB.prepare('DELETE FROM memory_conflict_resolutions WHERE brain_id = ?').bind(brainId).run();
+        await env.DB.prepare('DELETE FROM memories WHERE brain_id = ?').bind(brainId).run();
+        if (restoreTrust) {
+          await env.DB.prepare('DELETE FROM brain_source_trust WHERE brain_id = ?').bind(brainId).run();
+        }
+      }
+
+      let memoryCount = 0;
+      for (const rawMemory of memoriesPayload) {
+        if (!rawMemory || typeof rawMemory !== 'object' || Array.isArray(rawMemory)) continue;
+        const memory = rawMemory as Record<string, unknown>;
+        const memoryId = typeof memory.id === 'string' && memory.id ? memory.id : generateId();
+        const type = isValidType(memory.type) ? memory.type : 'note';
+        await env.DB.prepare(
+          `INSERT INTO memories
+            (id, brain_id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             brain_id = excluded.brain_id,
+             type = excluded.type,
+             title = excluded.title,
+             key = excluded.key,
+             content = excluded.content,
+             tags = excluded.tags,
+             source = excluded.source,
+             confidence = excluded.confidence,
+             importance = excluded.importance,
+             archived_at = excluded.archived_at,
+             created_at = excluded.created_at,
+             updated_at = excluded.updated_at`
+        ).bind(
+          memoryId,
+          brainId,
+          type,
+          typeof memory.title === 'string' ? memory.title : null,
+          typeof memory.key === 'string' ? memory.key : null,
+          typeof memory.content === 'string' && memory.content.trim() ? memory.content.trim() : '',
+          typeof memory.tags === 'string' ? memory.tags : null,
+          typeof memory.source === 'string' ? memory.source : null,
+          clampToRange(memory.confidence, 0.7),
+          clampToRange(memory.importance, 0.5),
+          memory.archived_at === null || memory.archived_at === undefined ? null : Math.floor(toFiniteNumber(memory.archived_at, ts)),
+          Math.floor(toFiniteNumber(memory.created_at, ts)),
+          Math.floor(toFiniteNumber(memory.updated_at, ts))
+        ).run();
+        memoryCount++;
+      }
+
+      const existingMemoryRows = await env.DB.prepare(
+        'SELECT id FROM memories WHERE brain_id = ? LIMIT 10000'
+      ).bind(brainId).all<{ id: string }>();
+      const existingMemoryIds = new Set(existingMemoryRows.results.map((row) => row.id));
+
+      let linkCount = 0;
+      for (const rawLink of linksPayload) {
+        if (!rawLink || typeof rawLink !== 'object' || Array.isArray(rawLink)) continue;
+        const link = rawLink as Record<string, unknown>;
+        const fromId = typeof link.from_id === 'string' ? link.from_id : '';
+        const toId = typeof link.to_id === 'string' ? link.to_id : '';
+        if (!fromId || !toId || !existingMemoryIds.has(fromId) || !existingMemoryIds.has(toId)) continue;
+        const linkId = typeof link.id === 'string' && link.id ? link.id : generateId();
+        const relationType = normalizeRelation(link.relation_type);
+        await env.DB.prepare(
+          `INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             brain_id = excluded.brain_id,
+             from_id = excluded.from_id,
+             to_id = excluded.to_id,
+             relation_type = excluded.relation_type,
+             label = excluded.label`
+        ).bind(
+          linkId,
+          brainId,
+          fromId,
+          toId,
+          relationType,
+          typeof link.label === 'string' ? link.label : null,
+          Math.floor(toFiniteNumber(link.created_at, ts))
+        ).run();
+        linkCount++;
+      }
+
+      let sourceTrustCount = 0;
+      if (restoreTrust) {
+        for (const rawTrust of sourceTrustPayload) {
+          if (!rawTrust || typeof rawTrust !== 'object' || Array.isArray(rawTrust)) continue;
+          const trustRow = rawTrust as Record<string, unknown>;
+          const sourceKey = typeof trustRow.source_key === 'string' ? normalizeSourceKey(trustRow.source_key) : '';
+          if (!sourceKey) continue;
+          await env.DB.prepare(
+            `INSERT INTO brain_source_trust (id, brain_id, source_key, trust, notes, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(brain_id, source_key) DO UPDATE SET trust = excluded.trust, notes = excluded.notes, updated_at = excluded.updated_at`
+          ).bind(
+            generateId(),
+            brainId,
+            sourceKey,
+            clampToRange(trustRow.trust, 0.5),
+            typeof trustRow.notes === 'string' ? trustRow.notes : null,
+            Math.floor(toFiniteNumber(trustRow.created_at, ts)),
+            ts
+          ).run();
+          sourceTrustCount++;
+        }
+      }
+
+      let aliasCount = 0;
+      for (const rawAlias of aliasesPayload) {
+        if (!rawAlias || typeof rawAlias !== 'object' || Array.isArray(rawAlias)) continue;
+        const alias = rawAlias as Record<string, unknown>;
+        const canonicalId = typeof alias.canonical_memory_id === 'string' ? alias.canonical_memory_id : '';
+        const aliasId = typeof alias.alias_memory_id === 'string' ? alias.alias_memory_id : '';
+        if (!canonicalId || !aliasId || !existingMemoryIds.has(canonicalId) || !existingMemoryIds.has(aliasId)) continue;
+        await env.DB.prepare(
+          `INSERT INTO memory_entity_aliases
+            (id, brain_id, canonical_memory_id, alias_memory_id, note, confidence, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(brain_id, alias_memory_id)
+           DO UPDATE SET canonical_memory_id = excluded.canonical_memory_id, note = excluded.note, confidence = excluded.confidence, updated_at = excluded.updated_at`
+        ).bind(
+          generateId(),
+          brainId,
+          canonicalId,
+          aliasId,
+          typeof alias.note === 'string' ? alias.note : null,
+          clampToRange(alias.confidence, 0.9),
+          Math.floor(toFiniteNumber(alias.created_at, ts)),
+          ts
+        ).run();
+        aliasCount++;
+      }
+
+      let resolutionCount = 0;
+      for (const rawResolution of resolutionsPayload) {
+        if (!rawResolution || typeof rawResolution !== 'object' || Array.isArray(rawResolution)) continue;
+        const resolution = rawResolution as Record<string, unknown>;
+        const aId = typeof resolution.a_id === 'string' ? resolution.a_id : '';
+        const bId = typeof resolution.b_id === 'string' ? resolution.b_id : '';
+        if (!aId || !bId || !existingMemoryIds.has(aId) || !existingMemoryIds.has(bId)) continue;
+        const status = typeof resolution.status === 'string' ? resolution.status : 'needs_review';
+        const resolvedKey = pairKey(aId, bId);
+        await env.DB.prepare(
+          `INSERT INTO memory_conflict_resolutions
+            (id, brain_id, pair_key, a_id, b_id, status, canonical_id, note, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(brain_id, pair_key)
+           DO UPDATE SET status = excluded.status, canonical_id = excluded.canonical_id, note = excluded.note, updated_at = excluded.updated_at`
+        ).bind(
+          generateId(),
+          brainId,
+          resolvedKey,
+          aId,
+          bId,
+          status,
+          typeof resolution.canonical_id === 'string' ? resolution.canonical_id : null,
+          typeof resolution.note === 'string' ? resolution.note : null,
+          Math.floor(toFiniteNumber(resolution.created_at, ts)),
+          ts
+        ).run();
+        resolutionCount++;
+      }
+
+      if (restorePolicy && policyPayload) {
+        await setBrainPolicy(env, brainId, policyPayload);
+      }
+
+      await logChangelog(env, brainId, 'brain_snapshot_restored', 'brain_snapshot', snapshot.id, `Restored brain snapshot (${mode})`, {
+        mode,
+        memory_count: memoryCount,
+        link_count: linkCount,
+        source_trust_count: sourceTrustCount,
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            snapshot_id: snapshot.id,
+            mode,
+            restored: {
+              memories: memoryCount,
+              links: linkCount,
+              source_trust: sourceTrustCount,
+              aliases: aliasCount,
+              conflict_resolutions: resolutionCount,
+            },
+            restore_policy: restorePolicy,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_subgraph': {
+      const { seed_id: rawSeedId, query: rawQuery, tag: rawTag, radius: rawRadius, limit_nodes: rawLimitNodes, include_inferred: rawIncludeInferred } = args as {
+        seed_id?: unknown;
+        query?: unknown;
+        tag?: unknown;
+        radius?: unknown;
+        limit_nodes?: unknown;
+        include_inferred?: unknown;
+      };
+      if (rawSeedId !== undefined && typeof rawSeedId !== 'string') return { content: [{ type: 'text', text: 'seed_id must be a string when provided.' }] };
+      if (rawQuery !== undefined && typeof rawQuery !== 'string') return { content: [{ type: 'text', text: 'query must be a string when provided.' }] };
+      if (rawTag !== undefined && typeof rawTag !== 'string') return { content: [{ type: 'text', text: 'tag must be a string when provided.' }] };
+      if (rawIncludeInferred !== undefined && typeof rawIncludeInferred !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_inferred must be a boolean when provided.' }] };
+      }
+      const policy = await getBrainPolicy(env, brainId);
+      const radius = Math.min(Math.max(Number.isInteger(rawRadius) ? (rawRadius as number) : policy.subgraph_default_radius, 1), 6);
+      const limitNodes = Math.min(Math.max(Number.isInteger(rawLimitNodes) ? (rawLimitNodes as number) : 120, 10), 1000);
+      const includeInferred = rawIncludeInferred !== false;
+      const nodes = await loadActiveMemoryNodes(env, brainId, 1800);
+      if (!nodes.length) return { content: [{ type: 'text', text: 'No memories available.' }] };
+      const tagFilter = typeof rawTag === 'string' && rawTag.trim() ? normalizeTag(rawTag) : '';
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
+      const candidateSeeds = tagFilter
+        ? nodes.filter((node) => parseTagSet(node.tags).has(tagFilter))
+        : nodes;
+      const seedIds = new Set<string>();
+      if (typeof rawSeedId === 'string' && rawSeedId.trim() && nodeById.has(rawSeedId.trim())) {
+        const seed = rawSeedId.trim();
+        if (!tagFilter || parseTagSet(nodeById.get(seed)?.tags).has(tagFilter)) seedIds.add(seed);
+      }
+      if (typeof rawQuery === 'string' && rawQuery.trim()) {
+        const query = rawQuery.trim().toLowerCase();
+        const scored = candidateSeeds.map((node) => {
+          const text = `${node.id} ${node.title ?? ''} ${node.key ?? ''} ${node.content} ${node.source ?? ''}`.toLowerCase();
+          const direct = text.includes(query) ? 1 : 0;
+          const overlap = jaccardSimilarity(
+            new Set(tokenizeText(text, 100)),
+            new Set(tokenizeText(query, 24))
+          );
+          return { id: node.id, score: direct * 0.7 + overlap * 0.3 };
+        }).filter((row) => row.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 8);
+        for (const item of scored) seedIds.add(item.id);
+      }
+      if (!seedIds.size) {
+        for (const node of candidateSeeds.slice(0, 3)) seedIds.add(node.id);
+      }
+      if (!seedIds.size) return { content: [{ type: 'text', text: 'No seed nodes matched the requested filters.' }] };
+
+      const links = await loadExplicitMemoryLinks(env, brainId, 12000);
+      const adjacency = new Map<string, string[]>();
+      for (const link of links) {
+        if (!nodeById.has(link.from_id) || !nodeById.has(link.to_id)) continue;
+        const fromArr = adjacency.get(link.from_id);
+        if (fromArr) fromArr.push(link.to_id);
+        else adjacency.set(link.from_id, [link.to_id]);
+        const toArr = adjacency.get(link.to_id);
+        if (toArr) toArr.push(link.from_id);
+        else adjacency.set(link.to_id, [link.from_id]);
+      }
+
+      const depthByNode = new Map<string, number>();
+      const queue: Array<{ id: string; depth: number }> = [];
+      for (const seedId of seedIds) {
+        depthByNode.set(seedId, 0);
+        queue.push({ id: seedId, depth: 0 });
+      }
+      while (queue.length > 0 && depthByNode.size < limitNodes) {
+        const current = queue.shift();
+        if (!current) break;
+        if (current.depth >= radius) continue;
+        const neighbors = adjacency.get(current.id) ?? [];
+        for (const neighbor of neighbors) {
+          if (depthByNode.has(neighbor)) continue;
+          depthByNode.set(neighbor, current.depth + 1);
+          queue.push({ id: neighbor, depth: current.depth + 1 });
+          if (depthByNode.size >= limitNodes) break;
+        }
+      }
+
+      const selectedIds = new Set(depthByNode.keys());
+      const selectedNodes = nodes.filter((node) => selectedIds.has(node.id));
+      const selectedEdges = links.filter((link) => selectedIds.has(link.from_id) && selectedIds.has(link.to_id));
+      const explicitPairs = new Set(selectedEdges.map((edge) => pairKey(edge.from_id, edge.to_id)));
+      const inferredEdges = includeInferred
+        ? buildTagInferredLinks(selectedNodes, Math.min(policy.max_inferred_edges, 1200))
+          .filter((edge) => !explicitPairs.has(pairKey(edge.from_id, edge.to_id)))
+        : [];
+
+      const projectedNodes = await enrichAndProjectRows(env, brainId, selectedNodes as unknown as Array<Record<string, unknown>>);
+      const depthObject: Record<string, number> = {};
+      for (const [nodeId, depth] of depthByNode) depthObject[nodeId] = depth;
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            seed_ids: Array.from(seedIds),
+            radius,
+            node_count: projectedNodes.length,
+            edge_count: selectedEdges.length,
+            inferred_edge_count: inferredEdges.length,
+            depth_by_node: depthObject,
+            nodes: projectedNodes,
+            edges: selectedEdges,
+            inferred_edges: inferredEdges,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_watch': {
+      const { mode: rawMode, id: rawId, name: rawName, event_types: rawEventTypes, query: rawQuery, webhook_url: rawWebhook, secret: rawSecret, active: rawActive, limit: rawLimit } = args as {
+        mode?: unknown;
+        id?: unknown;
+        name?: unknown;
+        event_types?: unknown;
+        query?: unknown;
+        webhook_url?: unknown;
+        secret?: unknown;
+        active?: unknown;
+        limit?: unknown;
+      };
+      if (rawMode !== undefined && typeof rawMode !== 'string') return { content: [{ type: 'text', text: 'mode must be a string when provided.' }] };
+      const mode = typeof rawMode === 'string' ? rawMode.trim().toLowerCase() : 'list';
+
+      if (mode === 'list') {
+        const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 100, 1), 500);
+        const rows = await env.DB.prepare(
+          `SELECT id, name, event_types, query, webhook_url, is_active, created_at, updated_at, last_triggered_at, last_error
+           FROM memory_watches
+           WHERE brain_id = ?
+           ORDER BY updated_at DESC
+           LIMIT ?`
+        ).bind(brainId, limit).all<Record<string, unknown>>();
+        const watches = rows.results.map((row) => ({
+          ...row,
+          event_types: typeof row.event_types === 'string' ? parseWatchEventTypes(row.event_types) : [],
+          is_active: Number(row.is_active ?? 0) === 1,
+        }));
+        return { content: [{ type: 'text', text: JSON.stringify({ count: watches.length, watches }, null, 2) }] };
+      }
+
+      if (mode === 'create') {
+        if (typeof rawName !== 'string' || !rawName.trim()) return { content: [{ type: 'text', text: 'name is required for create mode.' }] };
+        if (rawQuery !== undefined && typeof rawQuery !== 'string') return { content: [{ type: 'text', text: 'query must be a string when provided.' }] };
+        if (rawWebhook !== undefined && typeof rawWebhook !== 'string') return { content: [{ type: 'text', text: 'webhook_url must be a string when provided.' }] };
+        if (rawSecret !== undefined && typeof rawSecret !== 'string') return { content: [{ type: 'text', text: 'secret must be a string when provided.' }] };
+        const eventTypes = normalizeWatchEventInput(rawEventTypes);
+        const finalEventTypes = eventTypes.length ? eventTypes : ['*'];
+        const webhookUrl = typeof rawWebhook === 'string' && rawWebhook.trim() ? rawWebhook.trim() : null;
+        if (webhookUrl && !(webhookUrl.startsWith('https://') || webhookUrl.startsWith('http://'))) {
+          return { content: [{ type: 'text', text: 'webhook_url must start with http:// or https://.' }] };
+        }
+        const ts = now();
+        const watchId = generateId();
+        await env.DB.prepare(
+          `INSERT INTO memory_watches
+            (id, brain_id, name, event_types, query, webhook_url, secret, is_active, created_at, updated_at, last_triggered_at, last_error)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, NULL)`
+        ).bind(
+          watchId,
+          brainId,
+          rawName.trim().slice(0, 120),
+          stableJson(finalEventTypes),
+          typeof rawQuery === 'string' && rawQuery.trim() ? rawQuery.trim().slice(0, 200) : null,
+          webhookUrl,
+          typeof rawSecret === 'string' && rawSecret.trim() ? rawSecret.trim().slice(0, 200) : null,
+          ts,
+          ts
+        ).run();
+        const row = await env.DB.prepare(
+          'SELECT id, name, event_types, query, webhook_url, is_active, created_at, updated_at FROM memory_watches WHERE brain_id = ? AND id = ? LIMIT 1'
+        ).bind(brainId, watchId).first<Record<string, unknown>>();
+        await logChangelog(env, brainId, 'memory_watch_created', 'memory_watch', watchId, 'Created memory watch', {
+          event_types: finalEventTypes,
+        });
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              watch: row
+                ? {
+                    ...row,
+                    event_types: typeof row.event_types === 'string' ? parseWatchEventTypes(row.event_types) : [],
+                    is_active: Number(row.is_active ?? 0) === 1,
+                  }
+                : null,
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (mode === 'delete') {
+        if (typeof rawId !== 'string' || !rawId.trim()) return { content: [{ type: 'text', text: 'id is required for delete mode.' }] };
+        const watchId = rawId.trim();
+        const result = await env.DB.prepare(
+          'DELETE FROM memory_watches WHERE brain_id = ? AND id = ?'
+        ).bind(brainId, watchId).run();
+        if ((result.meta.changes ?? 0) === 0) return { content: [{ type: 'text', text: 'Watch not found.' }] };
+        await logChangelog(env, brainId, 'memory_watch_deleted', 'memory_watch', watchId, 'Deleted memory watch');
+        return { content: [{ type: 'text', text: JSON.stringify({ deleted: true, id: watchId }) }] };
+      }
+
+      if (mode === 'set_active') {
+        if (typeof rawId !== 'string' || !rawId.trim()) return { content: [{ type: 'text', text: 'id is required for set_active mode.' }] };
+        if (typeof rawActive !== 'boolean') return { content: [{ type: 'text', text: 'active must be true or false for set_active mode.' }] };
+        const watchId = rawId.trim();
+        const ts = now();
+        const result = await env.DB.prepare(
+          'UPDATE memory_watches SET is_active = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+        ).bind(rawActive ? 1 : 0, ts, brainId, watchId).run();
+        if ((result.meta.changes ?? 0) === 0) return { content: [{ type: 'text', text: 'Watch not found.' }] };
+        await logChangelog(env, brainId, 'memory_watch_updated', 'memory_watch', watchId, 'Updated memory watch activation', {
+          active: rawActive,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify({ id: watchId, active: rawActive }) }] };
+      }
+
+      if (mode === 'test') {
+        if (typeof rawId !== 'string' || !rawId.trim()) return { content: [{ type: 'text', text: 'id is required for test mode.' }] };
+        const watchId = rawId.trim();
+        const watch = await env.DB.prepare(
+          'SELECT id, webhook_url, secret, is_active FROM memory_watches WHERE brain_id = ? AND id = ? LIMIT 1'
+        ).bind(brainId, watchId).first<{ id: string; webhook_url: string | null; secret: string | null; is_active: number }>();
+        if (!watch?.id) return { content: [{ type: 'text', text: 'Watch not found.' }] };
+        const webhook = typeof watch.webhook_url === 'string' ? watch.webhook_url.trim() : '';
+        const ts = now();
+        if (!webhook) {
+          await env.DB.prepare(
+            'UPDATE memory_watches SET last_triggered_at = ?, last_error = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+          ).bind(ts, 'test_no_webhook', ts, brainId, watchId).run();
+          return { content: [{ type: 'text', text: JSON.stringify({ id: watchId, tested: true, delivered: false, reason: 'No webhook_url configured.' }) }] };
+        }
+        if (!(webhook.startsWith('https://') || webhook.startsWith('http://'))) {
+          return { content: [{ type: 'text', text: 'Configured webhook_url is invalid. It must start with http:// or https://.' }] };
+        }
+        try {
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-MemoryVault-Watch-Id': watchId,
+          };
+          if (watch.secret) headers['X-MemoryVault-Watch-Secret'] = watch.secret;
+          const response = await fetch(webhook, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              watch_id: watchId,
+              event_type: 'watch_test',
+              entity_type: 'memory_watch',
+              entity_id: watchId,
+              summary: 'Manual watch test',
+              payload: { mode: 'test' },
+              created_at: ts,
+            }),
+          });
+          await env.DB.prepare(
+            'UPDATE memory_watches SET last_triggered_at = ?, last_error = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+          ).bind(ts, response.ok ? null : `webhook_status_${response.status}`, ts, brainId, watchId).run();
+          return { content: [{ type: 'text', text: JSON.stringify({ id: watchId, tested: true, delivered: response.ok, status: response.status }) }] };
+        } catch (err) {
+          const message = err instanceof Error ? err.message.slice(0, 280) : 'webhook_error';
+          await env.DB.prepare(
+            'UPDATE memory_watches SET last_triggered_at = ?, last_error = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+          ).bind(ts, message, ts, brainId, watchId).run();
+          return { content: [{ type: 'text', text: JSON.stringify({ id: watchId, tested: true, delivered: false, error: message }) }] };
+        }
+      }
+
+      return { content: [{ type: 'text', text: 'Invalid mode. Use create|list|delete|set_active|test.' }] };
     }
 
     default:
@@ -3042,10 +5059,12 @@ async function handleApiMemories(request: Request, env: Env, brainId: string): P
   const results = await env.DB.prepare(query).bind(...params).all();
   const tsNow = now();
   const linkStatsMap = await loadLinkStatsMap(env, brainId);
+  const sourceTrustMap = await loadSourceTrustMap(env, brainId);
   const enrichedMemories = enrichMemoryRowsWithDynamics(
     results.results as Array<Record<string, unknown>>,
     linkStatsMap,
-    tsNow
+    tsNow,
+    sourceTrustMap
   );
   const projectedMemories = enrichedMemories.map(projectMemoryForClient);
   const sortedMemories = [...projectedMemories].sort(
@@ -3074,6 +5093,7 @@ async function handleApiLinks(memoryId: string, env: Env, brainId: string): Prom
 
   const tsNow = now();
   const linkStatsMap = await loadLinkStatsMap(env, brainId);
+  const sourceTrustMap = await loadSourceTrustMap(env, brainId);
   const toScoredMemory = (r: Record<string, unknown>): Record<string, unknown> => {
     const base = {
       id: r.id,
@@ -3088,9 +5108,10 @@ async function handleApiLinks(memoryId: string, env: Env, brainId: string): Prom
       created_at: r.created_at,
       updated_at: r.updated_at,
     } as Record<string, unknown>;
+    const sourceKey = typeof base.source === 'string' ? normalizeSourceKey(base.source) : '';
     return projectMemoryForClient({
       ...base,
-      ...computeDynamicScores(base, linkStatsMap.get(String(r.id ?? '')), tsNow),
+      ...computeDynamicScores(base, linkStatsMap.get(String(r.id ?? '')), tsNow, sourceKey ? sourceTrustMap.get(sourceKey) : undefined),
     });
   };
 
@@ -3125,11 +5146,14 @@ async function handleApiGraph(env: Env, brainId: string): Promise<Response> {
   ).bind(brainId, brainId, brainId).all();
 
   const tsNow = now();
+  const policy = await getBrainPolicy(env, brainId);
   const linkStatsMap = await loadLinkStatsMap(env, brainId);
+  const sourceTrustMap = await loadSourceTrustMap(env, brainId);
   const nodes = enrichMemoryRowsWithDynamics(
     memories.results as Array<Record<string, unknown>>,
     linkStatsMap,
-    tsNow
+    tsNow,
+    sourceTrustMap
   ).map(projectMemoryForClient);
   const explicitEdges = links.results as Array<Record<string, unknown>>;
 
@@ -3220,7 +5244,7 @@ async function handleApiGraph(env: Env, brainId: string): Promise<Response> {
     inferred: boolean;
   }> = [];
   const inferredDegreeByNode = new Map<string, number>();
-  const inferredMax = 360;
+  const inferredMax = Math.min(Math.max(policy.max_inferred_edges, 30), 5000);
   const inferredPerNodeCap = 7;
   for (const edge of inferredCandidates) {
     if (inferredEdges.length >= inferredMax) break;

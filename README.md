@@ -120,7 +120,13 @@ Use this server URL:
 - `memory_consolidate`, `memory_forget`
 - `memory_activate`, `memory_reinforce`, `memory_decay`
 - `memory_changelog`, `memory_conflicts`
-- `objective_set`, `objective_list`
+- `memory_link_suggest`, `memory_path_find`, `memory_subgraph`
+- `memory_conflict_resolve`, `memory_entity_resolve`
+- `memory_source_trust_set`, `memory_source_trust_get`
+- `objective_set`, `objective_list`, `objective_next_actions`
+- `brain_policy_set`, `brain_policy_get`
+- `brain_snapshot_create`, `brain_snapshot_list`, `brain_snapshot_restore`
+- `memory_watch`
 - `tool_manifest`, `tool_changelog`, `memory_explain_score`
 
 ## Scripts
