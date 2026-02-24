@@ -211,7 +211,23 @@ async function callTool(name: string, args: ToolArgs, env: Env): Promise<McpResu
         typeof tags === 'string' ? tags : null,
         ts, ts
       ).run();
-      return { content: [{ type: 'text', text: `Saved memory with id: ${id}` }] };
+      // Find up to 5 existing memories sharing at least one tag (for suggested linking)
+      let suggestedLinks: unknown[] = [];
+      if (typeof tags === 'string' && tags.trim()) {
+        const tagList = tags.split(',').map((t: string) => t.trim()).filter(Boolean);
+        if (tagList.length > 0) {
+          const conditions = tagList.map(() => 'tags LIKE ?').join(' OR ');
+          const bindings = tagList.map((t: string) => `%${t}%`);
+          const suggestions = await env.DB.prepare(
+            `SELECT id, type, title, key, tags FROM memories WHERE id != ? AND (${conditions}) LIMIT 5`
+          ).bind(id, ...bindings).all();
+          suggestedLinks = suggestions.results;
+        }
+      }
+
+      const saveResult: Record<string, unknown> = { id, message: `Saved memory with id: ${id}` };
+      if (suggestedLinks.length > 0) saveResult.suggested_links = suggestedLinks;
+      return { content: [{ type: 'text', text: JSON.stringify(saveResult) }] };
     }
 
     case 'memory_get': {
@@ -526,7 +542,7 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
   const limitParam = parseInt(url.searchParams.get('limit') ?? '100', 10);
   const limit = Math.min(Math.max(Number.isNaN(limitParam) ? 100 : limitParam, 1), 500);
 
-  let query = 'SELECT * FROM memories WHERE 1=1';
+  let query = 'SELECT m.*, (SELECT COUNT(*) FROM memory_links ml WHERE ml.from_id = m.id OR ml.to_id = m.id) as link_count FROM memories m WHERE 1=1';
   const params: unknown[] = [];
   if (type && VALID_TYPES.includes(type as MemoryType)) {
     query += ' AND type = ?'; params.push(type);
@@ -536,12 +552,50 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
     query += ' AND (content LIKE ? OR title LIKE ? OR key LIKE ?)';
     params.push(like, like, like);
   }
-  query += ' ORDER BY created_at DESC LIMIT ?';
+  query += ' ORDER BY m.created_at DESC LIMIT ?';
   params.push(limit);
 
   const results = await env.DB.prepare(query).bind(...params).all();
   const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories GROUP BY type').all();
   return new Response(JSON.stringify({ memories: results.results, stats: stats.results }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
+  const fromLinks = await env.DB.prepare(
+    'SELECT ml.id as link_id, ml.label, m.* FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ?'
+  ).bind(memoryId).all();
+
+  const toLinks = await env.DB.prepare(
+    'SELECT ml.id as link_id, ml.label, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ?'
+  ).bind(memoryId).all();
+
+  const results = [
+    ...fromLinks.results.map((r: Record<string, unknown>) => ({
+      link_id: r.link_id, label: r.label, direction: 'from',
+      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+    })),
+    ...toLinks.results.map((r: Record<string, unknown>) => ({
+      link_id: r.link_id, label: r.label, direction: 'to',
+      memory: { id: r.id, type: r.type, title: r.title, key: r.key, content: r.content, tags: r.tags, created_at: r.created_at, updated_at: r.updated_at },
+    })),
+  ];
+
+  return new Response(JSON.stringify(results), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+async function handleApiGraph(env: Env): Promise<Response> {
+  const memories = await env.DB.prepare(
+    'SELECT id, type, title, key, tags FROM memories ORDER BY created_at DESC'
+  ).all();
+  const links = await env.DB.prepare(
+    'SELECT id, from_id, to_id, label FROM memory_links'
+  ).all();
+
+  return new Response(JSON.stringify({ nodes: memories.results, edges: links.results }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }
@@ -1341,6 +1395,34 @@ export default {
       }
       await clearRateLimit(ip, env);
       return handleMcp(request, env, url);
+    }
+
+    // GET /api/links/:id
+    if (url.pathname.startsWith('/api/links/')) {
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+          status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+        });
+      }
+      if (!checkAuth(request, env)) { await recordFailedAttempt(ip, env); return unauthorized(); }
+      await clearRateLimit(ip, env);
+      const memoryId = url.pathname.slice('/api/links/'.length);
+      if (!memoryId) return jsonResponse({ error: 'Memory ID required' }, 400);
+      return handleApiLinks(memoryId, env);
+    }
+
+    // GET /api/graph
+    if (url.pathname === '/api/graph') {
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+      if (await isRateLimited(ip, env)) {
+        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+          status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+        });
+      }
+      if (!checkAuth(request, env)) { await recordFailedAttempt(ip, env); return unauthorized(); }
+      await clearRateLimit(ip, env);
+      return handleApiGraph(env);
     }
 
     return jsonResponse({ error: 'Not found' }, 404);
