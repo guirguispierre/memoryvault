@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.2.0';
+const SERVER_VERSION = '1.2.1';
 
 function generateId(): string {
   return crypto.randomUUID();
