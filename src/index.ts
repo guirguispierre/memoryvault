@@ -563,12 +563,17 @@ async function handleApiMemories(request: Request, env: Env): Promise<Response> 
 }
 
 async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
+  const mem = await env.DB.prepare('SELECT id FROM memories WHERE id = ?').bind(memoryId).first();
+  if (!mem) return new Response(JSON.stringify({ error: 'Memory not found.' }), {
+    status: 404, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+
   const fromLinks = await env.DB.prepare(
-    'SELECT ml.id as link_id, ml.label, m.* FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ?'
+    'SELECT ml.id as link_id, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.to_id WHERE ml.from_id = ?'
   ).bind(memoryId).all();
 
   const toLinks = await env.DB.prepare(
-    'SELECT ml.id as link_id, ml.label, m.* FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ?'
+    'SELECT ml.id as link_id, ml.label, m.id, m.type, m.title, m.key, m.content, m.tags, m.created_at, m.updated_at FROM memory_links ml JOIN memories m ON m.id = ml.from_id WHERE ml.to_id = ?'
   ).bind(memoryId).all();
 
   const results = [
@@ -589,10 +594,10 @@ async function handleApiLinks(memoryId: string, env: Env): Promise<Response> {
 
 async function handleApiGraph(env: Env): Promise<Response> {
   const memories = await env.DB.prepare(
-    'SELECT id, type, title, key, tags FROM memories ORDER BY created_at DESC'
+    'SELECT id, type, title, key, tags FROM memories ORDER BY created_at DESC LIMIT 1000'
   ).all();
   const links = await env.DB.prepare(
-    'SELECT id, from_id, to_id, label FROM memory_links'
+    'SELECT id, from_id, to_id, label FROM memory_links LIMIT 5000'
   ).all();
 
   return new Response(JSON.stringify({ nodes: memories.results, edges: links.results }), {
