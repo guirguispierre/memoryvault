@@ -4,8 +4,10 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.7.0';
+const SERVER_VERSION = '1.7.1';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
+const LEGACY_USER_ID = 'legacy-token-user';
+const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100_000;
@@ -313,6 +315,32 @@ async function clearRateLimit(ip: string, env: Env): Promise<void> {
   await env.DB.prepare(
     'DELETE FROM rate_limits WHERE ip = ? AND window = ?'
   ).bind(ip, window).run();
+}
+
+async function ensureLegacyTokenPrincipal(env: Env): Promise<{ userId: string; brainId: string }> {
+  const ts = now();
+  await env.DB.prepare(
+    'INSERT OR IGNORE INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).bind(
+    LEGACY_USER_ID,
+    LEGACY_USER_EMAIL,
+    'legacy_token_only',
+    'Legacy Token User',
+    ts,
+    ts
+  ).run();
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO brain_memberships (brain_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)"
+  ).bind(LEGACY_BRAIN_ID, LEGACY_USER_ID, ts).run();
+  return { userId: LEGACY_USER_ID, brainId: LEGACY_BRAIN_ID };
+}
+
+function normalizeLegacyToken(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  const match = trimmed.match(/^\s*Bearer\s+(.+?)\s*$/i);
+  return (match?.[1] ?? trimmed).trim();
 }
 
 const VALID_TYPES = ['note', 'fact', 'journal'] as const;
@@ -5856,24 +5884,32 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
     button{flex:1;border:none;border-radius:10px;padding:11px 12px;font-weight:600;cursor:pointer}
     .primary{background:#22c55e;color:#04110a}
     .secondary{background:#1d4ed8;color:#e8f0ff}
+    .tertiary{background:#f59e0b;color:#201200}
+    .hr{height:1px;background:#24364f;margin:16px 0}
     .meta{margin-top:14px;font-size:11px;color:#7f92a8}
   </style>
 </head>
 <body>
   <form class="card" method="post" action="/authorize">
     <h1>Connect Your Second Brain</h1>
-    <p>Sign in or create an account to authorize this MCP integration.</p>
+    <p>Sign in, create an account, or use a legacy API token to authorize this MCP integration.</p>
     ${errorBlock}
     ${hidden}
     <label>Email</label>
-    <input type="email" name="email" required autocomplete="username" />
+    <input type="email" name="email" autocomplete="username" />
     <label>Password</label>
-    <input type="password" name="password" required autocomplete="current-password" />
+    <input type="password" name="password" autocomplete="current-password" />
     <label>Brain Name (used when signing up)</label>
     <input type="text" name="brain_name" placeholder="My Second Brain" />
     <div class="row">
       <button class="primary" type="submit" name="auth_mode" value="login">Sign In</button>
       <button class="secondary" type="submit" name="auth_mode" value="signup">Sign Up</button>
+    </div>
+    <div class="hr"></div>
+    <label>Legacy API Token</label>
+    <input type="password" name="legacy_token" placeholder="sk-... or Bearer ...">
+    <div class="row">
+      <button class="tertiary" type="submit" name="auth_mode" value="token">Use Legacy Token</button>
     </div>
     <div class="meta">Client: ${escapeHtml(requestData.client_id ?? '')}</div>
   </form>
@@ -5938,73 +5974,92 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
   const emailRaw = form.get('email') ?? '';
   const passwordRaw = form.get('password') ?? '';
   const brainNameRaw = form.get('brain_name') ?? '';
-  if (!isValidEmail(emailRaw)) {
-    return new Response(renderAuthorizePage(parsed.data, 'Please enter a valid email.'), {
-      status: 400,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
-  }
-  if (typeof passwordRaw !== 'string' || passwordRaw.length === 0) {
-    return new Response(renderAuthorizePage(parsed.data, 'Please enter your password.'), {
-      status: 400,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
-  }
-
-  const email = normalizeEmail(emailRaw);
   let userId = '';
   let brainId = '';
 
-  if (authMode === 'signup') {
-    if (!isStrongEnoughPassword(passwordRaw)) {
-      return new Response(renderAuthorizePage(parsed.data, 'Password must be at least 10 characters.'), {
+  if (authMode === 'token') {
+    const legacyToken = normalizeLegacyToken(form.get('legacy_token') ?? form.get('token'));
+    if (!legacyToken) {
+      return new Response(renderAuthorizePage(parsed.data, 'Please enter your legacy API token.'), {
         status: 400,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }
-    const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: string }>();
-    if (existing?.id) {
-      return new Response(renderAuthorizePage(parsed.data, 'Account already exists. Use Sign In.'), {
-        status: 409,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      });
-    }
-
-    const ts = now();
-    userId = generateId();
-    const passwordHash = await hashPassword(passwordRaw);
-    const displayName = sanitizeDisplayName(undefined, email);
-    await env.DB.prepare(
-      'INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(userId, email, passwordHash, displayName, ts, ts).run();
-    brainId = generateId();
-    const brainName = sanitizeBrainName(brainNameRaw, email);
-    await env.DB.prepare(
-      'INSERT INTO brains (id, name, slug, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(brainId, brainName, `${slugify(brainName)}-${brainId.slice(0, 8)}`, userId, ts, ts).run();
-    await env.DB.prepare(
-      "INSERT INTO brain_memberships (brain_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)"
-    ).bind(brainId, userId, ts).run();
-  } else {
-    const user = await env.DB.prepare(
-      'SELECT id, email, password_hash FROM users WHERE email = ? LIMIT 1'
-    ).bind(email).first<{ id: string; email: string; password_hash: string }>();
-    if (!user || !(await verifyPassword(passwordRaw, user.password_hash))) {
-      return new Response(renderAuthorizePage(parsed.data, 'Invalid email or password.'), {
+    if (legacyToken !== env.AUTH_SECRET) {
+      return new Response(renderAuthorizePage(parsed.data, 'Invalid legacy API token.'), {
         status: 401,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }
-    userId = user.id;
-    const brains = await listBrainsForUser(userId, env);
-    const activeBrain = findActiveBrain(brains, '');
-    if (!activeBrain) {
-      return new Response(renderAuthorizePage(parsed.data, 'No brain found for this account.'), {
-        status: 403,
+    const principal = await ensureLegacyTokenPrincipal(env);
+    userId = principal.userId;
+    brainId = principal.brainId;
+  } else {
+    if (!isValidEmail(emailRaw)) {
+      return new Response(renderAuthorizePage(parsed.data, 'Please enter a valid email.'), {
+        status: 400,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }
-    brainId = activeBrain.id;
+    if (typeof passwordRaw !== 'string' || passwordRaw.length === 0) {
+      return new Response(renderAuthorizePage(parsed.data, 'Please enter your password.'), {
+        status: 400,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    }
+
+    const email = normalizeEmail(emailRaw);
+    if (authMode === 'signup') {
+      if (!isStrongEnoughPassword(passwordRaw)) {
+        return new Response(renderAuthorizePage(parsed.data, 'Password must be at least 10 characters.'), {
+          status: 400,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+      const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: string }>();
+      if (existing?.id) {
+        return new Response(renderAuthorizePage(parsed.data, 'Account already exists. Use Sign In.'), {
+          status: 409,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
+      const ts = now();
+      userId = generateId();
+      const passwordHash = await hashPassword(passwordRaw);
+      const displayName = sanitizeDisplayName(undefined, email);
+      await env.DB.prepare(
+        'INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).bind(userId, email, passwordHash, displayName, ts, ts).run();
+      brainId = generateId();
+      const brainName = sanitizeBrainName(brainNameRaw, email);
+      await env.DB.prepare(
+        'INSERT INTO brains (id, name, slug, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).bind(brainId, brainName, `${slugify(brainName)}-${brainId.slice(0, 8)}`, userId, ts, ts).run();
+      await env.DB.prepare(
+        "INSERT INTO brain_memberships (brain_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)"
+      ).bind(brainId, userId, ts).run();
+    } else {
+      const user = await env.DB.prepare(
+        'SELECT id, email, password_hash FROM users WHERE email = ? LIMIT 1'
+      ).bind(email).first<{ id: string; email: string; password_hash: string }>();
+      if (!user || !(await verifyPassword(passwordRaw, user.password_hash))) {
+        return new Response(renderAuthorizePage(parsed.data, 'Invalid email or password.'), {
+          status: 401,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+      userId = user.id;
+      const brains = await listBrainsForUser(userId, env);
+      const activeBrain = findActiveBrain(brains, '');
+      if (!activeBrain) {
+        return new Response(renderAuthorizePage(parsed.data, 'No brain found for this account.'), {
+          status: 403,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+      brainId = activeBrain.id;
+    }
   }
 
   const client = await ensureOAuthClient(parsed.data.client_id, parsed.data.redirect_uri, env);

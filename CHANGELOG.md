@@ -7,6 +7,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-02-27
+
+### Added
+- OAuth authorize page now supports `Use Legacy Token` for pre-account users.
+- Legacy token auth now provisions a legacy principal for OAuth session issuance.
+
+### Changed
+- Authorization form validation is mode-aware (email/password required only for sign-in/sign-up flows).
+- Server version bumped to `1.7.1`.
+
 ## [1.7.0] - 2026-02-24
 
 ### Added

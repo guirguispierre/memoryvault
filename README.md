@@ -89,7 +89,8 @@ Use this server URL:
 - Client should discover:
   - `/.well-known/oauth-protected-resource`
   - `/.well-known/oauth-authorization-server`
-- User signs in/signs up and gets connected to their own second brain.
+- User can sign in, sign up, or use a legacy API token from the authorize screen.
+- Legacy token mode maps to the legacy shared brain and upgrades the connection into OAuth session tokens.
 
 ### Legacy bearer mode
 
