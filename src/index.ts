@@ -33,12 +33,21 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function protectedResourceMetadataUrl(url: URL): string {
-  return `${url.origin}/.well-known/oauth-protected-resource`;
+function normalizeResourcePath(pathname: string): string {
+  const input = (pathname || '').trim();
+  const withLeadingSlash = input ? (input.startsWith('/') ? input : `/${input}`) : '/';
+  const normalized = withLeadingSlash.replace(/\/+$/, '') || '/';
+  if (normalized === '/') return '/mcp';
+  return normalized;
+}
+
+function protectedResourceMetadataUrl(url: URL, resourcePath = '/mcp'): string {
+  const normalized = normalizeResourcePath(resourcePath);
+  return `${url.origin}/.well-known/oauth-protected-resource${normalized}`;
 }
 
 function oauthChallengeHeader(url: URL): string {
-  return `Bearer realm="mcp", resource_metadata="${protectedResourceMetadataUrl(url)}"`;
+  return `Bearer realm="mcp", resource_metadata="${protectedResourceMetadataUrl(url, url.pathname)}"`;
 }
 
 function unauthorized(url?: URL): Response {
@@ -69,9 +78,9 @@ type AccessTokenPayload = {
 function parseBearerToken(request: Request): string | null {
   const auth = request.headers.get('Authorization');
   if (!auth) return null;
-  const parts = auth.split(' ');
-  if (parts.length !== 2 || parts[0] !== 'Bearer') return null;
-  return parts[1] || null;
+  const match = auth.match(/^\s*Bearer\s+(.+?)\s*$/i);
+  if (!match) return null;
+  return match[1] || null;
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -4907,6 +4916,15 @@ function corsJsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function isLikelyMcpRootRequest(request: Request): boolean {
+  const accept = (request.headers.get('Accept') ?? '').toLowerCase();
+  const contentType = (request.headers.get('Content-Type') ?? '').toLowerCase();
+  if (accept.includes('text/event-stream')) return true;
+  if (request.headers.has('MCP-Protocol-Version') || request.headers.has('mcp-protocol-version')) return true;
+  if (request.method === 'POST' && contentType.includes('application/json')) return true;
+  return false;
+}
+
 async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const body = await request.json();
@@ -7927,12 +7945,23 @@ function viewerHtml(): string {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname.startsWith('/mcp/')) {
+      url.pathname = url.pathname.slice('/mcp'.length) || '/';
+    }
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS_HEADERS });
     }
 
     await ensureSchema(env);
+
+    if (url.pathname === '/' && isLikelyMcpRootRequest(request)) {
+      const mcpUrl = new URL(url.toString());
+      mcpUrl.pathname = '/mcp';
+      const authCtx = await authenticateRequest(request, env);
+      if (!authCtx) return unauthorized(mcpUrl);
+      return handleMcp(request, env, mcpUrl, authCtx);
+    }
 
     if (url.pathname === '/') {
       return jsonResponse({ name: SERVER_NAME, version: SERVER_VERSION, status: 'ok', tools: TOOLS.length });
@@ -8061,19 +8090,10 @@ export default {
     }
 
     if (url.pathname === '/mcp') {
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-          status: 429,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-        });
-      }
       const authCtx = await authenticateRequest(request, env);
       if (!authCtx) {
-        await recordFailedAttempt(ip, env);
         return unauthorized(url);
       }
-      await clearRateLimit(ip, env);
       return handleMcp(request, env, url, authCtx);
     }
 
