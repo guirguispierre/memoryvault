@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.7.1';
+const SERVER_VERSION = '1.7.4';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
@@ -26,6 +26,18 @@ function generateId(): string {
 
 function now(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+function withPrimaryDbEnv(env: Env): Env {
+  const dbMaybe = env.DB as unknown as { withSession?: (constraint?: unknown) => unknown };
+  if (typeof dbMaybe.withSession !== 'function') return env;
+  try {
+    const sessionDb = dbMaybe.withSession('first-primary') as D1Database;
+    if (!sessionDb || typeof sessionDb.prepare !== 'function') return env;
+    return { ...env, DB: sessionDb };
+  } catch {
+    return env;
+  }
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -197,7 +209,7 @@ async function verifyAccessToken(token: string, secret: string): Promise<AccessT
   }
 }
 
-async function createSessionTokens(userId: string, brainId: string, env: Env): Promise<{
+async function createSessionTokens(userId: string, brainId: string, env: Env, clientId: string | null = null): Promise<{
   access_token: string;
   refresh_token: string;
   expires_in: number;
@@ -211,9 +223,9 @@ async function createSessionTokens(userId: string, brainId: string, env: Env): P
   const refreshExpiresAt = ts + REFRESH_TOKEN_TTL_SECONDS;
   await env.DB.prepare(
     `INSERT INTO auth_sessions
-      (id, user_id, brain_id, refresh_hash, expires_at, created_at, used_at, revoked_at, replaced_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
-  ).bind(sessionId, userId, brainId, refreshHash, refreshExpiresAt, ts, ts).run();
+      (id, user_id, brain_id, client_id, refresh_hash, expires_at, created_at, used_at, revoked_at, replaced_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
+  ).bind(sessionId, userId, brainId, clientId, refreshHash, refreshExpiresAt, ts, ts).run();
 
   const accessPayload: AccessTokenPayload = {
     typ: 'access',
@@ -233,26 +245,40 @@ async function createSessionTokens(userId: string, brainId: string, env: Env): P
   };
 }
 
-async function rotateSession(refreshToken: string, env: Env): Promise<{
-  userId: string;
-  brainId: string;
-  tokens: SessionTokens;
-} | null> {
+type RefreshSessionRow = {
+  id: string;
+  user_id: string;
+  brain_id: string;
+  client_id: string | null;
+  expires_at: number;
+  revoked_at: number | null;
+};
+
+async function getRefreshSessionByToken(refreshToken: string, env: Env): Promise<RefreshSessionRow | null> {
   const refreshHash = await sha256DigestBase64Url(refreshToken);
-  const ts = now();
-  const session = await env.DB.prepare(
-    `SELECT id, user_id, brain_id, expires_at, revoked_at
+  return env.DB.prepare(
+    `SELECT id, user_id, brain_id, client_id, expires_at, revoked_at
      FROM auth_sessions
      WHERE refresh_hash = ?
      LIMIT 1`
-  ).bind(refreshHash).first<{ id: string; user_id: string; brain_id: string; expires_at: number; revoked_at: number | null }>();
+  ).bind(refreshHash).first<RefreshSessionRow>();
+}
+
+async function rotateSession(refreshToken: string, env: Env): Promise<{
+  userId: string;
+  brainId: string;
+  clientId: string | null;
+  tokens: SessionTokens;
+} | null> {
+  const ts = now();
+  const session = await getRefreshSessionByToken(refreshToken, env);
   if (!session) return null;
   if (session.revoked_at !== null || session.expires_at <= ts) return null;
-  const tokens = await createSessionTokens(session.user_id, session.brain_id, env);
+  const tokens = await createSessionTokens(session.user_id, session.brain_id, env, session.client_id ?? null);
   await env.DB.prepare(
     'UPDATE auth_sessions SET revoked_at = ?, replaced_by = ? WHERE id = ?'
   ).bind(ts, tokens.session_id, session.id).run();
-  return { userId: session.user_id, brainId: session.brain_id, tokens };
+  return { userId: session.user_id, brainId: session.brain_id, clientId: session.client_id ?? null, tokens };
 }
 
 async function revokeSession(refreshToken: string, env: Env): Promise<boolean> {
@@ -271,10 +297,11 @@ async function authenticateRequest(request: Request, env: Env): Promise<AuthCont
     return { kind: 'legacy', brainId: LEGACY_BRAIN_ID, userId: null, sessionId: null };
   }
 
+  const authEnv = withPrimaryDbEnv(env);
   const payload = await verifyAccessToken(token, env.AUTH_SECRET);
   if (!payload) return null;
   const ts = now();
-  const row = await env.DB.prepare(
+  const row = await authEnv.DB.prepare(
     `SELECT s.id, s.user_id, s.brain_id
      FROM auth_sessions s
      JOIN brain_memberships bm ON bm.user_id = s.user_id AND bm.brain_id = s.brain_id
@@ -286,16 +313,16 @@ async function authenticateRequest(request: Request, env: Env): Promise<AuthCont
      LIMIT 1`
   ).bind(payload.sid, payload.sub, payload.bid, ts).first<{ id: string; user_id: string; brain_id: string }>();
   if (!row) return null;
-  await env.DB.prepare('UPDATE auth_sessions SET used_at = ? WHERE id = ?').bind(ts, row.id).run();
+  await authEnv.DB.prepare('UPDATE auth_sessions SET used_at = ? WHERE id = ?').bind(ts, row.id).run();
   return { kind: 'user', brainId: row.brain_id, userId: row.user_id, sessionId: row.id };
 }
 
-async function isRateLimited(ip: string, env: Env): Promise<boolean> {
+async function isRateLimited(ip: string, env: Env, limit = 10): Promise<boolean> {
   const window = Math.floor(Date.now() / (15 * 60 * 1000));
   const row = await env.DB.prepare(
     'SELECT count FROM rate_limits WHERE ip = ? AND window = ?'
   ).bind(ip, window).first<{ count: number }>();
-  return (row?.count ?? 0) >= 10;
+  return (row?.count ?? 0) >= limit;
 }
 
 async function recordFailedAttempt(ip: string, env: Env): Promise<void> {
@@ -454,6 +481,7 @@ async function ensureSchema(env: Env): Promise<void> {
           id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL,
           brain_id TEXT NOT NULL,
+          client_id TEXT,
           refresh_hash TEXT NOT NULL UNIQUE,
           expires_at INTEGER NOT NULL,
           created_at INTEGER NOT NULL,
@@ -464,8 +492,10 @@ async function ensureSchema(env: Env): Promise<void> {
           FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
         )`
       );
+      await runMigrationStatement(env, "ALTER TABLE auth_sessions ADD COLUMN client_id TEXT");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at DESC)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_brain ON auth_sessions(brain_id, expires_at DESC)");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_client ON auth_sessions(client_id, expires_at DESC)");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)");
       await runMigrationStatement(env,
         `CREATE TABLE IF NOT EXISTS oauth_clients (
@@ -5696,6 +5726,106 @@ function oauthError(error: string, errorDescription: string, status = 400): Resp
   });
 }
 
+function oauthRateLimitedError(): Response {
+  return new Response(JSON.stringify({
+    error: 'temporarily_unavailable',
+    error_description: 'Too many failed attempts. Try again later.',
+  }), {
+    status: 429,
+    headers: noStoreJsonHeaders({ 'Retry-After': '900' }),
+  });
+}
+
+function timingSafeEqualStrings(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+async function verifyTokenEndpointClientSecret(client: OAuthClientRow, providedSecret: string): Promise<Response | null> {
+  if (!client.client_secret_hash) {
+    return oauthError('invalid_client', 'Client secret is not configured for this client.', 401);
+  }
+  if (client.client_secret_expires_at > 0 && client.client_secret_expires_at <= now()) {
+    return oauthError('invalid_client', 'Client secret has expired.', 401);
+  }
+  const providedHash = await sha256DigestBase64Url(providedSecret);
+  if (!timingSafeEqualStrings(providedHash, client.client_secret_hash)) {
+    return oauthError('invalid_client', 'Client authentication failed.', 401);
+  }
+  return null;
+}
+
+async function validateTokenEndpointClientAuth(
+  client: OAuthClientRow,
+  params: URLSearchParams,
+  basicClient: { clientId: string; clientSecret: string } | null,
+  options: { requireConfidentialAuth: boolean } = { requireConfidentialAuth: false }
+): Promise<Response | null> {
+  const expectedClientId = client.client_id;
+  const paramClientId = getParam(params, 'client_id', 'clientId').trim();
+  const paramClientSecretRaw = params.get('client_secret') ?? params.get('clientSecret');
+  const paramClientSecret = (paramClientSecretRaw ?? '').trim();
+  const basicClientId = basicClient?.clientId ?? '';
+  const basicClientSecret = basicClient?.clientSecret ?? '';
+
+  if (paramClientId && paramClientId !== expectedClientId) {
+    return oauthError('invalid_client', 'client_id is invalid.', 401);
+  }
+  if (basicClientId && basicClientId !== expectedClientId) {
+    return oauthError('invalid_client', 'HTTP Basic client_id is invalid.', 401);
+  }
+  if (paramClientId && basicClientId && paramClientId !== basicClientId) {
+    return oauthError('invalid_client', 'Conflicting client identifiers were provided.', 401);
+  }
+
+  const methodRaw = (client.token_endpoint_auth_method || 'none').trim();
+  const method = (methodRaw === 'none' || methodRaw === 'client_secret_post' || methodRaw === 'client_secret_basic')
+    ? methodRaw
+    : 'none';
+
+  if (method === 'none') {
+    // Compatibility: some clients still send HTTP Basic even with token_endpoint_auth_method=none.
+    if (paramClientSecretRaw !== null && paramClientSecret.length > 0) {
+      return oauthError('invalid_client', 'This client does not use a client_secret.', 401);
+    }
+    return null;
+  }
+
+  if (method === 'client_secret_basic') {
+    if (!basicClient) {
+      if (!options.requireConfidentialAuth) return null;
+      return oauthError('invalid_client', 'client_secret_basic authentication is required.', 401);
+    }
+    if (!basicClientSecret) {
+      return oauthError('invalid_client', 'Client secret is required in HTTP Basic authentication.', 401);
+    }
+    if (paramClientSecretRaw !== null && paramClientSecret.length > 0) {
+      return oauthError('invalid_client', 'Do not send client_secret in the body for client_secret_basic.', 401);
+    }
+    return verifyTokenEndpointClientSecret(client, basicClientSecret);
+  }
+
+  if (method === 'client_secret_post') {
+    if (basicClient) {
+      return oauthError('invalid_client', 'Use client_secret in the request body for this client.', 401);
+    }
+    if (!paramClientId && options.requireConfidentialAuth) {
+      return oauthError('invalid_client', 'client_id is required for client_secret_post.', 401);
+    }
+    if (!paramClientSecret) {
+      if (!options.requireConfidentialAuth) return null;
+      return oauthError('invalid_client', 'client_secret is required for client_secret_post.', 401);
+    }
+    return verifyTokenEndpointClientSecret(client, paramClientSecret);
+  }
+
+  return oauthError('invalid_client', 'Unsupported token endpoint auth method.', 401);
+}
+
 function parseJsonStringArray(raw: string, fallback: string[] = []): string[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -5748,7 +5878,52 @@ async function readFormBody(request: Request): Promise<URLSearchParams | null> {
     }
     return params;
   }
-  return null;
+  // Compatibility fallback: some OAuth clients send form payloads without a content-type.
+  try {
+    const text = await request.text();
+    if (!text) return null;
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{')) {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+            params.set(k, String(v));
+          }
+        }
+        return params;
+      }
+    }
+    return new URLSearchParams(text);
+  } catch {
+    return null;
+  }
+}
+
+function getParam(params: URLSearchParams, ...names: string[]): string {
+  for (const name of names) {
+    const value = params.get(name);
+    if (value !== null && value !== undefined) return value;
+  }
+  return '';
+}
+
+function parseBasicClientAuth(request: Request): { clientId: string; clientSecret: string } | null {
+  const auth = request.headers.get('authorization') ?? '';
+  const match = auth.match(/^\s*Basic\s+(.+?)\s*$/i);
+  if (!match) return null;
+  try {
+    const decoded = atob(match[1]);
+    const split = decoded.indexOf(':');
+    if (split < 0) return null;
+    const clientId = decoded.slice(0, split).trim();
+    const clientSecret = decoded.slice(split + 1);
+    if (!clientId) return null;
+    return { clientId, clientSecret };
+  } catch {
+    return null;
+  }
 }
 
 async function getOAuthClient(clientId: string, env: Env): Promise<OAuthClientRow | null> {
@@ -5887,6 +6062,7 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
     .tertiary{background:#f59e0b;color:#201200}
     .hr{height:1px;background:#24364f;margin:16px 0}
     .meta{margin-top:14px;font-size:11px;color:#7f92a8}
+    .version-tag{position:fixed;right:12px;bottom:10px;font-size:11px;color:#7f92a8;letter-spacing:0.04em;user-select:none}
   </style>
 </head>
 <body>
@@ -5913,6 +6089,7 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
     </div>
     <div class="meta">Client: ${escapeHtml(requestData.client_id ?? '')}</div>
   </form>
+  <div class="version-tag">v${escapeHtml(SERVER_VERSION)}</div>
 </body>
 </html>`;
 }
@@ -5952,10 +6129,11 @@ async function issueAuthorizationCode(
 }
 
 async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promise<Response> {
+  const authEnv = withPrimaryDbEnv(env);
   if (request.method === 'GET') {
     const parsed = validateAuthorizeParams(url.searchParams);
     if (!parsed.ok) return oauthError('invalid_request', parsed.message, 400);
-    const client = await getOAuthClient(parsed.data.client_id, env);
+    const client = await getOAuthClient(parsed.data.client_id, authEnv);
     if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri)) {
       return oauthError('invalid_request', 'redirect_uri is not allowed for this client.', 400);
     }
@@ -5991,7 +6169,7 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }
-    const principal = await ensureLegacyTokenPrincipal(env);
+    const principal = await ensureLegacyTokenPrincipal(authEnv);
     userId = principal.userId;
     brainId = principal.brainId;
   } else {
@@ -6016,7 +6194,7 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }
-      const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: string }>();
+      const existing = await authEnv.DB.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: string }>();
       if (existing?.id) {
         return new Response(renderAuthorizePage(parsed.data, 'Account already exists. Use Sign In.'), {
           status: 409,
@@ -6028,19 +6206,19 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
       userId = generateId();
       const passwordHash = await hashPassword(passwordRaw);
       const displayName = sanitizeDisplayName(undefined, email);
-      await env.DB.prepare(
+      await authEnv.DB.prepare(
         'INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
       ).bind(userId, email, passwordHash, displayName, ts, ts).run();
       brainId = generateId();
       const brainName = sanitizeBrainName(brainNameRaw, email);
-      await env.DB.prepare(
+      await authEnv.DB.prepare(
         'INSERT INTO brains (id, name, slug, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
       ).bind(brainId, brainName, `${slugify(brainName)}-${brainId.slice(0, 8)}`, userId, ts, ts).run();
-      await env.DB.prepare(
+      await authEnv.DB.prepare(
         "INSERT INTO brain_memberships (brain_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)"
       ).bind(brainId, userId, ts).run();
     } else {
-      const user = await env.DB.prepare(
+      const user = await authEnv.DB.prepare(
         'SELECT id, email, password_hash FROM users WHERE email = ? LIMIT 1'
       ).bind(email).first<{ id: string; email: string; password_hash: string }>();
       if (!user || !(await verifyPassword(passwordRaw, user.password_hash))) {
@@ -6050,7 +6228,7 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
         });
       }
       userId = user.id;
-      const brains = await listBrainsForUser(userId, env);
+      const brains = await listBrainsForUser(userId, authEnv);
       const activeBrain = findActiveBrain(brains, '');
       if (!activeBrain) {
         return new Response(renderAuthorizePage(parsed.data, 'No brain found for this account.'), {
@@ -6062,7 +6240,7 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
     }
   }
 
-  const client = await ensureOAuthClient(parsed.data.client_id, parsed.data.redirect_uri, env);
+  const client = await ensureOAuthClient(parsed.data.client_id, parsed.data.redirect_uri, authEnv);
   if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri)) {
     return new Response(renderAuthorizePage(parsed.data, 'redirect_uri is not allowed for this client.'), {
       status: 400,
@@ -6079,7 +6257,7 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
     parsed.data.code_challenge_method,
     parsed.data.scope,
     parsed.data.resource,
-    env
+    authEnv
   );
   const redirectUrl = new URL(parsed.data.redirect_uri);
   redirectUrl.searchParams.set('code', code);
@@ -6091,21 +6269,22 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
 }
 
 async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
+  const authEnv = withPrimaryDbEnv(env);
   if (request.method !== 'POST') return oauthError('invalid_request', 'Method not allowed.', 405);
   const params = await readFormBody(request);
   if (!params) return oauthError('invalid_request', 'Invalid token request body.', 400);
+  const basicClient = parseBasicClientAuth(request);
 
-  const grantType = (params.get('grant_type') ?? '').trim();
+  const grantType = getParam(params, 'grant_type', 'grantType').trim();
   if (grantType === 'authorization_code') {
-    const code = (params.get('code') ?? '').trim();
-    const redirectUri = (params.get('redirect_uri') ?? '').trim();
-    const clientId = (params.get('client_id') ?? '').trim();
-    const codeVerifier = (params.get('code_verifier') ?? '').trim();
-    if (!code || !redirectUri || !clientId || !codeVerifier) {
-      return oauthError('invalid_request', 'grant_type=authorization_code requires code, redirect_uri, client_id, and code_verifier.');
+    const code = getParam(params, 'code').trim();
+    const redirectUri = getParam(params, 'redirect_uri', 'redirectUri').trim();
+    const codeVerifier = getParam(params, 'code_verifier', 'codeVerifier').trim();
+    if (!code || !codeVerifier) {
+      return oauthError('invalid_request', 'grant_type=authorization_code requires code and code_verifier.');
     }
 
-    const authCode = await env.DB.prepare(
+    const authCode = await authEnv.DB.prepare(
       `SELECT id, code, client_id, redirect_uri, user_id, brain_id, code_challenge, code_challenge_method, scope, resource, created_at, expires_at, used_at
        FROM oauth_authorization_codes
        WHERE code = ?
@@ -6114,8 +6293,21 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
     if (!authCode || authCode.used_at !== null || authCode.expires_at <= now()) {
       return oauthError('invalid_grant', 'Authorization code is invalid or expired.');
     }
-    if (authCode.client_id !== clientId || authCode.redirect_uri !== redirectUri) {
-      return oauthError('invalid_grant', 'Authorization code does not match client_id/redirect_uri.');
+
+    if (redirectUri && authCode.redirect_uri !== redirectUri) {
+      return oauthError('invalid_grant', 'Authorization code does not match redirect_uri.');
+    }
+
+    const client = await getOAuthClient(authCode.client_id, authEnv);
+    if (!client) {
+      return oauthError('invalid_client', 'Unknown client_id for this authorization code.', 401);
+    }
+    const clientAuthError = await validateTokenEndpointClientAuth(client, params, basicClient);
+    if (clientAuthError) return clientAuthError;
+
+    const providedClientId = getParam(params, 'client_id', 'clientId').trim() || (basicClient?.clientId ?? '');
+    if (providedClientId && providedClientId !== authCode.client_id) {
+      return oauthError('invalid_grant', 'Authorization code does not match client_id.');
     }
 
     const method = (authCode.code_challenge_method || 'S256').toUpperCase();
@@ -6132,11 +6324,11 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
       return oauthError('invalid_grant', 'Unsupported code challenge method.');
     }
 
-    await env.DB.prepare(
+    await authEnv.DB.prepare(
       'UPDATE oauth_authorization_codes SET used_at = ? WHERE id = ?'
     ).bind(now(), authCode.id).run();
 
-    const tokens = await createSessionTokens(authCode.user_id, authCode.brain_id, env);
+    const tokens = await createSessionTokens(authCode.user_id, authCode.brain_id, authEnv, authCode.client_id);
     return new Response(JSON.stringify({
       access_token: tokens.access_token,
       token_type: 'Bearer',
@@ -6149,10 +6341,30 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
   }
 
   if (grantType === 'refresh_token') {
-    const refreshToken = (params.get('refresh_token') ?? '').trim();
+    const refreshToken = getParam(params, 'refresh_token', 'refreshToken').trim();
     if (!refreshToken) return oauthError('invalid_request', 'refresh_token is required.');
-    const rotated = await rotateSession(refreshToken, env);
+    const session = await getRefreshSessionByToken(refreshToken, authEnv);
+    if (!session || session.revoked_at !== null || session.expires_at <= now()) {
+      return oauthError('invalid_grant', 'Refresh token is invalid or expired.');
+    }
+
+    if (session.client_id) {
+      const client = await getOAuthClient(session.client_id, authEnv);
+      if (!client) {
+        return oauthError('invalid_client', 'Unknown client_id for this refresh token.', 401);
+      }
+      const clientAuthError = await validateTokenEndpointClientAuth(
+        client,
+        params,
+        basicClient,
+        { requireConfidentialAuth: false }
+      );
+      if (clientAuthError) return clientAuthError;
+    }
+
+    const rotated = await rotateSession(refreshToken, authEnv);
     if (!rotated) return oauthError('invalid_grant', 'Refresh token is invalid or expired.');
+
     return new Response(JSON.stringify({
       access_token: rotated.tokens.access_token,
       token_type: 'Bearer',

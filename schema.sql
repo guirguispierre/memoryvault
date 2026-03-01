@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   brain_id TEXT NOT NULL,
+  client_id TEXT,
   refresh_hash TEXT NOT NULL UNIQUE,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_brain ON auth_sessions(brain_id, expires_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_client ON auth_sessions(client_id, expires_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS oauth_clients (
