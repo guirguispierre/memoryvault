@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.7.4';
+const SERVER_VERSION = '1.7.5';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
@@ -5788,10 +5788,9 @@ async function validateTokenEndpointClientAuth(
     : 'none';
 
   if (method === 'none') {
-    // Compatibility: some clients still send HTTP Basic even with token_endpoint_auth_method=none.
-    if (paramClientSecretRaw !== null && paramClientSecret.length > 0) {
-      return oauthError('invalid_client', 'This client does not use a client_secret.', 401);
-    }
+    // Public clients: ignore any client_secret sent in body or Basic auth.
+    // Many MCP clients (Claude Desktop, etc.) send a client_secret even for
+    // public clients registered with token_endpoint_auth_method=none.
     return null;
   }
 
