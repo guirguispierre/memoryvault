@@ -1,16 +1,33 @@
 export interface Env {
   DB: D1Database;
   AUTH_SECRET: string;
+  AI?: Ai;
+  MEMORY_INDEX?: Vectorize;
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.8.1';
+const SERVER_VERSION = '1.9.0';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100_000;
+const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5';
+const VECTORIZE_QUERY_TOP_K_MAX = 20;
+const VECTORIZE_UPSERT_BATCH_SIZE = 500;
+const VECTORIZE_DELETE_BATCH_SIZE = 500;
+const EMBEDDING_BATCH_SIZE = 16;
+const MEMORY_SEARCH_FUSION_K = 60;
+const MEMORY_SEARCH_DEFAULT_LIMIT = 20;
+const MEMORY_SEARCH_MAX_LIMIT = 20;
+
+type MemorySearchMode = 'lexical' | 'semantic' | 'hybrid';
+type SemanticMemoryCandidate = {
+  memory_id: string;
+  score: number;
+  rank: number;
+};
 
 type SessionTokens = {
   access_token: string;
@@ -393,6 +410,339 @@ function clampToRange(input: unknown, fallback: number, min = 0, max = 1): numbe
   const n = typeof input === 'number' ? input : Number(input);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(Math.max(n, min), max);
+}
+
+function isMemorySearchMode(value: unknown): value is MemorySearchMode {
+  return value === 'lexical' || value === 'semantic' || value === 'hybrid';
+}
+
+function hasSemanticSearchBindings(env: Env): env is Env & { AI: Ai; MEMORY_INDEX: Vectorize } {
+  return Boolean(env.AI && env.MEMORY_INDEX);
+}
+
+function normalizeSemanticScore(rawScore: number): number {
+  if (!Number.isFinite(rawScore)) return 0;
+  return clampToRange((rawScore + 1) / 2, 0, 0, 1);
+}
+
+function truncateForMetadata(value: string, max = 120): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.length <= max ? trimmed : trimmed.slice(0, max);
+}
+
+function parseTags(tags: unknown): string[] {
+  if (typeof tags !== 'string' || !tags.trim()) return [];
+  return tags
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function buildMemoryEmbeddingText(memory: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof memory.type === 'string' && memory.type.trim()) parts.push(`type: ${memory.type.trim()}`);
+  if (typeof memory.title === 'string' && memory.title.trim()) parts.push(`title: ${memory.title.trim()}`);
+  if (typeof memory.key === 'string' && memory.key.trim()) parts.push(`key: ${memory.key.trim()}`);
+  if (typeof memory.source === 'string' && memory.source.trim()) parts.push(`source: ${memory.source.trim()}`);
+  const tagList = parseTags(memory.tags);
+  if (tagList.length) parts.push(`tags: ${tagList.join(', ')}`);
+  if (typeof memory.content === 'string' && memory.content.trim()) parts.push(`content: ${memory.content.trim()}`);
+  if (!parts.length) return '';
+  return parts.join('\n').slice(0, 8000);
+}
+
+function extractEmbeddingList(response: unknown): number[][] {
+  const payload = response as { data?: unknown };
+  if (!Array.isArray(payload?.data)) {
+    throw new Error('Embedding response missing data array.');
+  }
+  const vectors: number[][] = [];
+  for (const row of payload.data) {
+    if (!Array.isArray(row)) {
+      throw new Error('Embedding response contained a non-vector entry.');
+    }
+    const vector: number[] = [];
+    for (const value of row) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) throw new Error('Embedding response contained a non-numeric value.');
+      vector.push(num);
+    }
+    vectors.push(vector);
+  }
+  return vectors;
+}
+
+async function embedTexts(env: Env, texts: string[]): Promise<number[][]> {
+  if (!hasSemanticSearchBindings(env)) return [];
+  if (!texts.length) return [];
+  const result = await env.AI.run(EMBEDDING_MODEL, { text: texts });
+  return extractEmbeddingList(result);
+}
+
+async function makeVectorId(brainId: string, memoryId: string): Promise<string> {
+  const digest = await sha256DigestBase64Url(`${brainId}:${memoryId}`);
+  return `m_${digest}`;
+}
+
+function buildMemoryVectorMetadata(brainId: string, memory: Record<string, unknown>): Record<string, string | number | boolean> {
+  const memoryId = typeof memory.id === 'string' ? memory.id : '';
+  const metadata: Record<string, string | number | boolean> = {
+    brain_id: brainId,
+    memory_id: memoryId,
+  };
+  if (typeof memory.type === 'string' && memory.type.trim()) metadata.type = truncateForMetadata(memory.type, 32);
+  if (typeof memory.key === 'string' && memory.key.trim()) metadata.key = truncateForMetadata(memory.key, 96);
+  if (typeof memory.title === 'string' && memory.title.trim()) metadata.title = truncateForMetadata(memory.title, 120);
+  if (typeof memory.source === 'string' && memory.source.trim()) metadata.source = truncateForMetadata(memory.source, 120);
+  if (typeof memory.tags === 'string' && memory.tags.trim()) metadata.tags = truncateForMetadata(memory.tags, 200);
+  if (typeof memory.created_at === 'number' && Number.isFinite(memory.created_at)) metadata.created_at = Math.floor(memory.created_at);
+  if (typeof memory.updated_at === 'number' && Number.isFinite(memory.updated_at)) metadata.updated_at = Math.floor(memory.updated_at);
+  metadata.archived = memory.archived_at !== null && memory.archived_at !== undefined;
+  return metadata;
+}
+
+async function deleteMemoryVectors(env: Env, brainId: string, memoryIds: string[]): Promise<number> {
+  if (!hasSemanticSearchBindings(env)) return 0;
+  const uniqueIds = Array.from(new Set(memoryIds.map((id) => id.trim()).filter(Boolean)));
+  if (!uniqueIds.length) return 0;
+  const vectorIds = await Promise.all(uniqueIds.map((id) => makeVectorId(brainId, id)));
+  for (let i = 0; i < vectorIds.length; i += VECTORIZE_DELETE_BATCH_SIZE) {
+    await env.MEMORY_INDEX.deleteByIds(vectorIds.slice(i, i + VECTORIZE_DELETE_BATCH_SIZE));
+  }
+  return uniqueIds.length;
+}
+
+async function syncMemoriesToVectorIndex(
+  env: Env,
+  brainId: string,
+  memories: Array<Record<string, unknown>>
+): Promise<{ upserted: number; deleted: number; skipped: number }> {
+  if (!hasSemanticSearchBindings(env) || !memories.length) {
+    return { upserted: 0, deleted: 0, skipped: memories.length };
+  }
+
+  const toDeleteIds: string[] = [];
+  const embeddable: Array<{
+    memory_id: string;
+    text: string;
+    metadata: Record<string, string | number | boolean>;
+  }> = [];
+  let skipped = 0;
+
+  for (const memory of memories) {
+    const memoryId = typeof memory.id === 'string' ? memory.id.trim() : '';
+    if (!memoryId) {
+      skipped++;
+      continue;
+    }
+    if (memory.archived_at !== null && memory.archived_at !== undefined) {
+      toDeleteIds.push(memoryId);
+      continue;
+    }
+    const text = buildMemoryEmbeddingText(memory);
+    if (!text) {
+      toDeleteIds.push(memoryId);
+      continue;
+    }
+    embeddable.push({
+      memory_id: memoryId,
+      text,
+      metadata: buildMemoryVectorMetadata(brainId, memory),
+    });
+  }
+
+  let deleted = 0;
+  if (toDeleteIds.length) {
+    deleted = await deleteMemoryVectors(env, brainId, toDeleteIds);
+  }
+
+  let upserted = 0;
+  for (let i = 0; i < embeddable.length; i += EMBEDDING_BATCH_SIZE) {
+    const chunk = embeddable.slice(i, i + EMBEDDING_BATCH_SIZE);
+    const embeddings = await embedTexts(env, chunk.map((entry) => entry.text));
+    if (embeddings.length !== chunk.length) {
+      throw new Error(`Embedding count mismatch. Expected ${chunk.length}, got ${embeddings.length}.`);
+    }
+    const vectors = await Promise.all(chunk.map(async (entry, idx) => ({
+      id: await makeVectorId(brainId, entry.memory_id),
+      namespace: brainId,
+      values: embeddings[idx],
+      metadata: entry.metadata,
+    })));
+    for (let j = 0; j < vectors.length; j += VECTORIZE_UPSERT_BATCH_SIZE) {
+      await env.MEMORY_INDEX.upsert(vectors.slice(j, j + VECTORIZE_UPSERT_BATCH_SIZE));
+    }
+    upserted += vectors.length;
+  }
+
+  return { upserted, deleted, skipped };
+}
+
+async function safeSyncMemoriesToVectorIndex(
+  env: Env,
+  brainId: string,
+  memories: Array<Record<string, unknown>>,
+  operation: string
+): Promise<void> {
+  if (!hasSemanticSearchBindings(env) || !memories.length) return;
+  try {
+    await syncMemoriesToVectorIndex(env, brainId, memories);
+  } catch (err) {
+    console.warn(`[semantic-sync:${operation}]`, err);
+  }
+}
+
+async function safeDeleteMemoryVectors(env: Env, brainId: string, memoryIds: string[], operation: string): Promise<void> {
+  if (!hasSemanticSearchBindings(env) || !memoryIds.length) return;
+  try {
+    await deleteMemoryVectors(env, brainId, memoryIds);
+  } catch (err) {
+    console.warn(`[semantic-delete:${operation}]`, err);
+  }
+}
+
+async function querySemanticMemoryCandidates(
+  env: Env,
+  brainId: string,
+  query: string,
+  topK: number,
+  minScore: number
+): Promise<SemanticMemoryCandidate[]> {
+  if (!hasSemanticSearchBindings(env)) return [];
+  const [queryEmbedding] = await embedTexts(env, [query.trim()]);
+  if (!queryEmbedding) return [];
+  const matches = await env.MEMORY_INDEX.query(queryEmbedding, {
+    topK: Math.min(Math.max(topK, 1), VECTORIZE_QUERY_TOP_K_MAX),
+    namespace: brainId,
+    returnMetadata: 'all',
+    returnValues: false,
+  });
+  const deduped = new Map<string, SemanticMemoryCandidate>();
+  let rank = 0;
+  for (const match of matches.matches ?? []) {
+    rank += 1;
+    const score = toFiniteNumber(match.score, 0);
+    if (score < minScore) continue;
+    const metadata = typeof match.metadata === 'object' && match.metadata !== null
+      ? match.metadata as Record<string, unknown>
+      : null;
+    const memoryId = typeof metadata?.memory_id === 'string' ? metadata.memory_id : '';
+    if (!memoryId) continue;
+    const existing = deduped.get(memoryId);
+    if (!existing || score > existing.score) {
+      deduped.set(memoryId, { memory_id: memoryId, score, rank });
+    }
+  }
+  return Array.from(deduped.values()).sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.rank - b.rank;
+  });
+}
+
+async function loadMemoryRowsByIds(
+  env: Env,
+  brainId: string,
+  ids: string[],
+  typeFilter?: MemoryType
+): Promise<Record<string, unknown>[]> {
+  const requestedIds = ids.map((id) => id.trim()).filter(Boolean);
+  if (!requestedIds.length) return [];
+  const uniqueIds = Array.from(new Set(requestedIds));
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  let sql = `SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL`;
+  const params: unknown[] = [brainId];
+  if (typeFilter) {
+    sql += ' AND type = ?';
+    params.push(typeFilter);
+  }
+  sql += ` AND id IN (${placeholders})`;
+  params.push(...uniqueIds);
+  const rows = await env.DB.prepare(sql).bind(...params).all<Record<string, unknown>>();
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const row of rows.results) {
+    const rowId = typeof row.id === 'string' ? row.id : '';
+    if (rowId) byId.set(rowId, row);
+  }
+  return requestedIds.map((id) => byId.get(id)).filter((row): row is Record<string, unknown> => Boolean(row));
+}
+
+async function runLexicalMemorySearch(
+  env: Env,
+  brainId: string,
+  query: string,
+  typeFilter: MemoryType | undefined,
+  limit: number
+): Promise<Record<string, unknown>[]> {
+  const like = `%${query.trim()}%`;
+  if (typeFilter) {
+    const results = await env.DB.prepare(
+      'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT ?'
+    ).bind(brainId, typeFilter, like, like, like, like, like, limit).all<Record<string, unknown>>();
+    return results.results;
+  }
+  const results = await env.DB.prepare(
+    'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT ?'
+  ).bind(brainId, like, like, like, like, like, limit).all<Record<string, unknown>>();
+  return results.results;
+}
+
+function fuseSearchRows(
+  mode: MemorySearchMode,
+  lexicalRows: Record<string, unknown>[],
+  semanticRows: Record<string, unknown>[],
+  semanticCandidates: SemanticMemoryCandidate[],
+  limit: number
+): Record<string, unknown>[] {
+  const rowById = new Map<string, Record<string, unknown>>();
+  const lexicalRank = new Map<string, number>();
+  const semanticRank = new Map<string, number>();
+  const semanticScore = new Map<string, number>();
+
+  lexicalRows.forEach((row, idx) => {
+    const id = typeof row.id === 'string' ? row.id : '';
+    if (!id) return;
+    rowById.set(id, row);
+    lexicalRank.set(id, idx + 1);
+  });
+  semanticRows.forEach((row, idx) => {
+    const id = typeof row.id === 'string' ? row.id : '';
+    if (!id) return;
+    if (!rowById.has(id)) rowById.set(id, row);
+    if (!semanticRank.has(id)) semanticRank.set(id, idx + 1);
+  });
+  semanticCandidates.forEach((candidate) => {
+    semanticScore.set(candidate.memory_id, candidate.score);
+  });
+
+  const ids = Array.from(rowById.keys());
+  ids.sort((a, b) => {
+    const lexA = lexicalRank.has(a) ? 1 / (MEMORY_SEARCH_FUSION_K + (lexicalRank.get(a) ?? 0)) : 0;
+    const lexB = lexicalRank.has(b) ? 1 / (MEMORY_SEARCH_FUSION_K + (lexicalRank.get(b) ?? 0)) : 0;
+    const semA = semanticRank.has(a) ? 1 / (MEMORY_SEARCH_FUSION_K + (semanticRank.get(a) ?? 0)) : 0;
+    const semB = semanticRank.has(b) ? 1 / (MEMORY_SEARCH_FUSION_K + (semanticRank.get(b) ?? 0)) : 0;
+    const semScoreA = normalizeSemanticScore(toFiniteNumber(semanticScore.get(a), -1));
+    const semScoreB = normalizeSemanticScore(toFiniteNumber(semanticScore.get(b), -1));
+
+    let fusedA = lexA;
+    let fusedB = lexB;
+    if (mode === 'semantic') {
+      fusedA = semA + (semScoreA * 0.25);
+      fusedB = semB + (semScoreB * 0.25);
+    } else if (mode === 'hybrid') {
+      fusedA = (semA * 0.7) + (lexA * 0.3) + (semScoreA * 0.15);
+      fusedB = (semB * 0.7) + (lexB * 0.3) + (semScoreB * 0.15);
+    }
+    if (fusedB !== fusedA) return fusedB - fusedA;
+
+    const rowA = rowById.get(a);
+    const rowB = rowById.get(b);
+    const updatedA = toFiniteNumber(rowA?.updated_at, toFiniteNumber(rowA?.created_at, 0));
+    const updatedB = toFiniteNumber(rowB?.updated_at, toFiniteNumber(rowB?.created_at, 0));
+    return updatedB - updatedA;
+  });
+
+  return ids.slice(0, limit).map((id) => rowById.get(id)).filter((row): row is Record<string, unknown> => Boolean(row));
 }
 
 async function runMigrationStatement(env: Env, sql: string): Promise<void> {
@@ -1334,6 +1684,20 @@ async function ensureObjectiveRoot(env: Env, brainId: string): Promise<string> {
     ts,
     ts
   ).run();
+  await safeSyncMemoriesToVectorIndex(env, brainId, [{
+    id,
+    type: 'note',
+    title: 'Autonomous Objectives Network',
+    key,
+    content: 'Root node for long-term goals and curiosities.',
+    tags: 'objective_root,autonomous_objectives,system_node',
+    source: 'system',
+    confidence: 0.9,
+    importance: 0.95,
+    archived_at: null,
+    created_at: ts,
+    updated_at: ts,
+  }], 'objective_root_created');
   await logChangelog(env, brainId, 'objective_root_created', 'memory', id, 'Created autonomous objectives root');
   return id;
 }
@@ -1419,6 +1783,14 @@ const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
     introduced_in: '1.6.0',
     notes: 'Explainable confidence/importance scoring breakdown.',
   },
+  memory_search: {
+    introduced_in: '1.0.0',
+    notes: 'Hybrid retrieval upgraded with semantic + lexical fusion in 1.9.0.',
+  },
+  memory_reindex: {
+    introduced_in: '1.9.0',
+    notes: 'Backfill/repair semantic vector embeddings from D1 memories.',
+  },
   memory_link_suggest: {
     introduced_in: '1.7.0',
     notes: 'Scored relationship suggestions for graph expansion.',
@@ -1478,6 +1850,32 @@ const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
 };
 
 const TOOL_CHANGELOG: ToolChangelogEntry[] = [
+  {
+    id: 'semantic-1.9.0',
+    version: '1.9.0',
+    released_at: 1772667243,
+    summary: 'Semantic memory retrieval with Cloudflare Vectorize + Workers AI.',
+    changes: [
+      {
+        type: 'updated',
+        target: 'tool',
+        name: 'memory_search',
+        description: 'Added lexical/semantic/hybrid retrieval modes with score fusion and semantic thresholds.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_reindex',
+        description: 'Added vector backfill/repair tool for indexing existing D1 memories.',
+      },
+      {
+        type: 'updated',
+        target: 'tool',
+        name: 'Vector index sync',
+        description: 'Memory mutations now keep Vectorize in sync for save/update/delete/archive/restore paths.',
+      },
+    ],
+  },
   {
     id: 'release-1.8.1',
     version: '1.8.1',
@@ -1678,14 +2076,29 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'memory_search',
-    description: 'Search memories by name/title, key, id, source, or text content across all memory types.',
+    description: 'Search memories with lexical, semantic, or hybrid retrieval across title/key/id/source/content.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query' },
         type: { type: 'string', enum: ['note', 'fact', 'journal'], description: 'Optionally filter by type' },
+        mode: { type: 'string', enum: ['lexical', 'semantic', 'hybrid'], description: 'Retrieval mode (default: hybrid)' },
+        limit: { type: 'number', description: 'Max results (1-20, default 20)' },
+        min_score: { type: 'number', description: 'Minimum semantic score threshold for semantic/hybrid modes (default -1)' },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'memory_reindex',
+    description: 'Rebuild semantic vectors for recent memories in the current brain.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max memories to process (1-2000, default 500)' },
+        include_archived: { type: 'boolean', description: 'Also process archived memories (archived rows trigger vector deletion)' },
+      },
+      required: [],
     },
   },
   {
@@ -2192,6 +2605,7 @@ const MUTATING_TOOL_NAMES = new Set<string>([
   'memory_forget',
   'memory_reinforce',
   'memory_decay',
+  'memory_reindex',
   'objective_set',
   'memory_conflict_resolve',
   'memory_entity_resolve',
@@ -2376,9 +2790,11 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         source: typeof source === 'string' ? source : null,
         confidence: confidenceVal,
         importance: importanceVal,
+        archived_at: null,
         created_at: ts,
         updated_at: ts,
       };
+      await safeSyncMemoriesToVectorIndex(env, brainId, [insertedRow], 'memory_save');
       let sourceTrust: number | undefined;
       if (typeof source === 'string' && source.trim()) {
         const sourceKey = normalizeSourceKey(source);
@@ -2434,24 +2850,106 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
     }
 
     case 'memory_search': {
-      const { query, type } = args as { query: unknown; type?: unknown };
+      const { query, type, mode: rawMode, limit: rawLimit, min_score: rawMinScore } = args as {
+        query: unknown;
+        type?: unknown;
+        mode?: unknown;
+        limit?: unknown;
+        min_score?: unknown;
+      };
       if (typeof query !== 'string' || query.trim() === '') return { content: [{ type: 'text', text: 'query must be a non-empty string.' }] };
       if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
-      const like = `%${query.trim()}%`;
-      let stmt;
-      if (type) {
-        stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
-        ).bind(brainId, type, like, like, like, like, like);
-      } else {
-        stmt = env.DB.prepare(
-          'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT 20'
-        ).bind(brainId, like, like, like, like, like);
+      if (rawMode !== undefined && !isMemorySearchMode(rawMode)) {
+        return { content: [{ type: 'text', text: 'mode must be lexical, semantic, or hybrid.' }] };
       }
-      const results = await stmt.all<Record<string, unknown>>();
-      if (!results.results.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
-      const scored = await enrichAndProjectRows(env, brainId, results.results);
+      const mode: MemorySearchMode = rawMode ?? 'hybrid';
+      const limit = Math.min(
+        Math.max(Number.isFinite(Number(rawLimit)) ? Math.floor(Number(rawLimit)) : MEMORY_SEARCH_DEFAULT_LIMIT, 1),
+        MEMORY_SEARCH_MAX_LIMIT
+      );
+      const minScore = rawMinScore === undefined
+        ? -1
+        : Math.min(Math.max(toFiniteNumber(rawMinScore, -1), -1), 1);
+      const typeFilter = type as MemoryType | undefined;
+
+      const lexicalFetchLimit = Math.min(Math.max(limit * 3, limit), 60);
+      const semanticFetchLimit = Math.min(Math.max(limit * 3, limit), VECTORIZE_QUERY_TOP_K_MAX);
+      const lexicalRows = mode === 'semantic'
+        ? []
+        : await runLexicalMemorySearch(env, brainId, query, typeFilter, lexicalFetchLimit);
+
+      let semanticCandidates: SemanticMemoryCandidate[] = [];
+      if (mode !== 'lexical') {
+        if (!hasSemanticSearchBindings(env)) {
+          if (mode === 'semantic') {
+            return { content: [{ type: 'text', text: 'Semantic search unavailable: AI and MEMORY_INDEX bindings are not configured.' }] };
+          }
+        } else {
+          try {
+            semanticCandidates = await querySemanticMemoryCandidates(env, brainId, query, semanticFetchLimit, minScore);
+          } catch (err) {
+            if (mode === 'semantic') {
+              const message = err instanceof Error ? err.message : 'Semantic query failed.';
+              return { content: [{ type: 'text', text: `Semantic search failed: ${message}` }] };
+            }
+            console.warn('[memory_search:semantic]', err);
+          }
+        }
+      }
+
+      const semanticRows = semanticCandidates.length
+        ? await loadMemoryRowsByIds(env, brainId, semanticCandidates.map((candidate) => candidate.memory_id), typeFilter)
+        : [];
+      const fusedRows = fuseSearchRows(mode, lexicalRows, semanticRows, semanticCandidates, limit);
+      if (!fusedRows.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
+
+      const scored = await enrichAndProjectRows(env, brainId, fusedRows);
       return { content: [{ type: 'text', text: JSON.stringify(scored, null, 2) }] };
+    }
+
+    case 'memory_reindex': {
+      const { limit: rawLimit, include_archived: rawIncludeArchived } = args as {
+        limit?: unknown;
+        include_archived?: unknown;
+      };
+      if (rawIncludeArchived !== undefined && typeof rawIncludeArchived !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_archived must be a boolean when provided.' }] };
+      }
+      if (!hasSemanticSearchBindings(env)) {
+        return { content: [{ type: 'text', text: 'Semantic reindex unavailable: AI and MEMORY_INDEX bindings are not configured.' }] };
+      }
+      const limit = Math.min(
+        Math.max(Number.isFinite(Number(rawLimit)) ? Math.floor(Number(rawLimit)) : 500, 1),
+        2000
+      );
+      const includeArchived = rawIncludeArchived === true;
+      let sql = `
+        SELECT id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at
+        FROM memories
+        WHERE brain_id = ?`;
+      const params: unknown[] = [brainId];
+      if (!includeArchived) {
+        sql += ' AND archived_at IS NULL';
+      }
+      sql += ' ORDER BY updated_at DESC LIMIT ?';
+      params.push(limit);
+      const rows = await env.DB.prepare(sql).bind(...params).all<Record<string, unknown>>();
+      if (!rows.results.length) {
+        return { content: [{ type: 'text', text: 'No memories available for reindex.' }] };
+      }
+      const stats = await syncMemoriesToVectorIndex(env, brainId, rows.results);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            processed: rows.results.length,
+            include_archived: includeArchived,
+            upserted: stats.upserted,
+            deleted: stats.deleted,
+            skipped: stats.skipped,
+          }, null, 2),
+        }],
+      };
     }
 
     case 'memory_list': {
@@ -2513,6 +3011,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       ).run();
       const updated = await env.DB.prepare('SELECT * FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).first<Record<string, unknown>>();
       if (!updated) return { content: [{ type: 'text', text: `Memory ${id} updated.` }] };
+      await safeSyncMemoriesToVectorIndex(env, brainId, [updated], 'memory_update');
       const [scored] = await enrichAndProjectRows(env, brainId, [updated]);
       await logChangelog(env, brainId, 'memory_updated', 'memory', id, 'Updated memory', {
         updated_fields: {
@@ -2533,6 +3032,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
       const result = await env.DB.prepare('DELETE FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).run();
       if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+      await safeDeleteMemoryVectors(env, brainId, [id], 'memory_delete');
       await logChangelog(env, brainId, 'memory_deleted', 'memory', id, 'Deleted memory');
       return { content: [{ type: 'text', text: `Memory ${id} deleted.` }] };
     }
@@ -3014,6 +3514,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       const groups: Array<{ canonical_id: string; archived_ids: string[]; fingerprint: string }> = [];
       let archivedCount = 0;
       let linkedCount = 0;
+      const archivedMemoryIdsForVectors: string[] = [];
 
       for (const [fingerprint, group] of byFingerprint) {
         if (group.length < 2) continue;
@@ -3038,6 +3539,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
             'UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ? AND archived_at IS NULL'
           ).bind(ts, ts, brainId, dupId).run();
           archivedCount++;
+          archivedMemoryIdsForVectors.push(dupId);
 
           const existingLink = await env.DB.prepare(
             'SELECT id FROM memory_links WHERE brain_id = ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))'
@@ -3060,6 +3562,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       }
 
       if (groups.length > 0) {
+        await safeDeleteMemoryVectors(env, brainId, archivedMemoryIdsForVectors, 'memory_consolidate');
         await logChangelog(env, brainId, 'memory_consolidated', 'memory', groups[0].canonical_id, 'Consolidated duplicate memories', {
           groups_consolidated: groups.length,
           archived_count: archivedCount,
@@ -3096,6 +3599,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         if (mode === 'hard') {
           const result = await env.DB.prepare('DELETE FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).run();
           if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+          await safeDeleteMemoryVectors(env, brainId, [id], 'memory_forget_hard_single');
           return { content: [{ type: 'text', text: JSON.stringify({ mode, deleted: 1, ids: [id] }) }] };
         }
         const ts = now();
@@ -3103,6 +3607,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
           'UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ? AND archived_at IS NULL'
         ).bind(ts, ts, brainId, id).run();
         if (result.meta.changes === 0) return { content: [{ type: 'text', text: 'Memory not found or already archived.' }] };
+        await safeDeleteMemoryVectors(env, brainId, [id], 'memory_forget_soft_single');
         return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: 1, ids: [id] }) }] };
       }
 
@@ -3136,6 +3641,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       const placeholders = ids.map(() => '?').join(', ');
       if (mode === 'hard') {
         await env.DB.prepare(`DELETE FROM memories WHERE brain_id = ? AND id IN (${placeholders})`).bind(brainId, ...ids).run();
+        await safeDeleteMemoryVectors(env, brainId, ids, 'memory_forget_hard_batch');
         await logChangelog(env, brainId, 'memory_forget_hard', 'memory', ids[0], 'Hard-forgot memories', { count: ids.length, ids });
         return { content: [{ type: 'text', text: JSON.stringify({ mode, deleted: ids.length, ids }, null, 2) }] };
       }
@@ -3144,6 +3650,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       await env.DB.prepare(
         `UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id IN (${placeholders})`
       ).bind(ts, ts, brainId, ...ids).run();
+      await safeDeleteMemoryVectors(env, brainId, ids, 'memory_forget_soft_batch');
       await logChangelog(env, brainId, 'memory_forget_soft', 'memory', ids[0], 'Soft-forgot memories', { count: ids.length, ids });
       return { content: [{ type: 'text', text: JSON.stringify({ mode, archived: ids.length, ids }, null, 2) }] };
     }
@@ -3885,6 +4392,9 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       const objectiveRow = await env.DB.prepare(
         'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND id = ? LIMIT 1'
       ).bind(brainId, objectiveId).first<Record<string, unknown>>();
+      if (objectiveRow) {
+        await safeSyncMemoriesToVectorIndex(env, brainId, [{ ...objectiveRow, archived_at: null }], 'objective_set');
+      }
       const [objectiveMemory] = objectiveRow ? await enrichAndProjectRows(env, brainId, [objectiveRow]) : [];
       await logChangelog(env, brainId, 'objective_upserted', 'memory', objectiveId, 'Upserted autonomous objective node', {
         kind,
@@ -4444,6 +4954,7 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
       const archiveAliases = rawArchiveAliases === true;
       const ts = now();
       const mapped: Array<Record<string, unknown>> = [];
+      const archivedAliasIds: string[] = [];
       for (const aliasId of aliasIds) {
         const aliasExists = await env.DB.prepare(
           'SELECT id FROM memories WHERE brain_id = ? AND id = ? LIMIT 1'
@@ -4482,8 +4993,13 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
           await env.DB.prepare(
             'UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ? AND archived_at IS NULL'
           ).bind(ts, ts, brainId, aliasId).run();
+          archivedAliasIds.push(aliasId);
         }
         mapped.push({ canonical_id: canonicalId, alias_id: aliasId, confidence, archived: archiveAliases });
+      }
+
+      if (archivedAliasIds.length) {
+        await safeDeleteMemoryVectors(env, brainId, archivedAliasIds, 'memory_entity_resolve_archive_aliases');
       }
 
       await logChangelog(env, brainId, 'memory_entity_resolved', 'memory_entity', canonicalId, 'Updated entity alias mappings', {
@@ -4692,8 +5208,18 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         ? payload.policy as Record<string, unknown>
         : null;
       const ts = now();
+      const restoredMemoryRowsForVectorSync: Array<Record<string, unknown>> = [];
 
       if (mode === 'replace') {
+        const existingMemoryIdsBeforeReplace = await env.DB.prepare(
+          'SELECT id FROM memories WHERE brain_id = ? LIMIT 50000'
+        ).bind(brainId).all<{ id: string }>();
+        await safeDeleteMemoryVectors(
+          env,
+          brainId,
+          existingMemoryIdsBeforeReplace.results.map((row) => row.id),
+          'brain_snapshot_restore_replace_purge'
+        );
         await env.DB.prepare('DELETE FROM memory_links WHERE brain_id = ?').bind(brainId).run();
         await env.DB.prepare('DELETE FROM memory_entity_aliases WHERE brain_id = ?').bind(brainId).run();
         await env.DB.prepare('DELETE FROM memory_conflict_resolutions WHERE brain_id = ?').bind(brainId).run();
@@ -4709,6 +5235,12 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         const memory = rawMemory as Record<string, unknown>;
         const memoryId = typeof memory.id === 'string' && memory.id ? memory.id : generateId();
         const type = isValidType(memory.type) ? memory.type : 'note';
+        const archivedAt = memory.archived_at === null || memory.archived_at === undefined
+          ? null
+          : Math.floor(toFiniteNumber(memory.archived_at, ts));
+        const createdAt = Math.floor(toFiniteNumber(memory.created_at, ts));
+        const updatedAt = Math.floor(toFiniteNumber(memory.updated_at, ts));
+        const content = typeof memory.content === 'string' && memory.content.trim() ? memory.content.trim() : '';
         await env.DB.prepare(
           `INSERT INTO memories
             (id, brain_id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at)
@@ -4732,16 +5264,34 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
           type,
           typeof memory.title === 'string' ? memory.title : null,
           typeof memory.key === 'string' ? memory.key : null,
-          typeof memory.content === 'string' && memory.content.trim() ? memory.content.trim() : '',
+          content,
           typeof memory.tags === 'string' ? memory.tags : null,
           typeof memory.source === 'string' ? memory.source : null,
           clampToRange(memory.confidence, 0.7),
           clampToRange(memory.importance, 0.5),
-          memory.archived_at === null || memory.archived_at === undefined ? null : Math.floor(toFiniteNumber(memory.archived_at, ts)),
-          Math.floor(toFiniteNumber(memory.created_at, ts)),
-          Math.floor(toFiniteNumber(memory.updated_at, ts))
+          archivedAt,
+          createdAt,
+          updatedAt
         ).run();
+        restoredMemoryRowsForVectorSync.push({
+          id: memoryId,
+          type,
+          title: typeof memory.title === 'string' ? memory.title : null,
+          key: typeof memory.key === 'string' ? memory.key : null,
+          content,
+          tags: typeof memory.tags === 'string' ? memory.tags : null,
+          source: typeof memory.source === 'string' ? memory.source : null,
+          confidence: clampToRange(memory.confidence, 0.7),
+          importance: clampToRange(memory.importance, 0.5),
+          archived_at: archivedAt,
+          created_at: createdAt,
+          updated_at: updatedAt,
+        });
         memoryCount++;
+      }
+
+      if (restoredMemoryRowsForVectorSync.length) {
+        await safeSyncMemoriesToVectorIndex(env, brainId, restoredMemoryRowsForVectorSync, 'brain_snapshot_restore');
       }
 
       const existingMemoryRows = await env.DB.prepare(

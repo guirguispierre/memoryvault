@@ -6,6 +6,7 @@ It supports:
 - Multi-tenant user accounts with isolated "brains"
 - OAuth-first MCP auth (works with clients that leave API key empty)
 - Legacy bearer-token auth fallback
+- Hybrid lexical + semantic memory retrieval (D1 + Vectorize + Workers AI embeddings)
 - Memory graph tools (links, activation, reinforcement, decay, conflicts, objectives)
 - Web viewer at `/view`
 
@@ -19,6 +20,8 @@ Changelog:
 
 - Runtime: Cloudflare Workers
 - Database: Cloudflare D1 (SQLite)
+- Semantic index: Cloudflare Vectorize (`MEMORY_INDEX`)
+- Embeddings: Cloudflare Workers AI (`@cf/baai/bge-base-en-v1.5`)
 - Protocol: Model Context Protocol (MCP) over HTTP/SSE
 - Auth:
   - OAuth Authorization Code + PKCE (`/authorize`, `/token`, `/register`)
@@ -51,6 +54,9 @@ npx wrangler d1 execute ai-memory --local --file=schema.sql
 npm run dev
 ```
 
+Notes:
+- Semantic search + reindex require Workers AI/Vectorize bindings and remote dev (`wrangler dev --remote`).
+
 ## Deploy
 
 1. Ensure Wrangler is authenticated
@@ -75,6 +81,13 @@ npx wrangler d1 execute ai-memory --remote --file=schema.sql
 
 ```bash
 npm run deploy
+```
+
+Before first semantic deploy, create Vectorize indexes:
+
+```bash
+npx wrangler vectorize create ai-memory-semantic-v1 --dimensions=768 --metric=cosine
+npx wrangler vectorize create ai-memory-semantic-v1-dev --dimensions=768 --metric=cosine
 ```
 
 ## MCP Integration
@@ -116,6 +129,7 @@ Use this server URL:
 ## Available MCP Tools
 
 - `memory_save`, `memory_get`, `memory_get_fact`, `memory_search`, `memory_list`
+- `memory_reindex` (semantic backfill/repair)
 - `memory_update`, `memory_delete`, `memory_stats`
 - `memory_link`, `memory_unlink`, `memory_links`
 - `memory_consolidate`, `memory_forget`

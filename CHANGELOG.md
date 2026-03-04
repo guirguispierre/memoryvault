@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-03-04
+
+### Added
+- Hybrid semantic retrieval for `memory_search` with `mode` (`lexical`, `semantic`, `hybrid`), `limit`, and `min_score`.
+- New `memory_reindex` MCP tool for semantic backfill/repair of existing memories.
+- Cloudflare Workers AI + Vectorize bindings in Wrangler config (`AI`, `MEMORY_INDEX`).
+
+### Changed
+- Memory write/archival paths now sync vector state (save, update, delete, consolidate, forget, objective upserts, entity archive, snapshot restore).
+- Server and package versions bumped to `1.9.0`.
+
 ## [1.8.1] - 2026-03-04
 
 ### Added
