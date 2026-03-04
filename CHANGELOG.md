@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-03-04
+
+### Added
+- `memory_tag_stats` MCP tool for tag frequency and co-occurrence analytics.
+- `memory_graph_stats` MCP tool for graph topology metrics (density, components, relation counts, hubs, and top tags).
+- `memory_neighbors` MCP tool for seeded neighborhood traversal by memory `id` or `query`.
+- Graph toolbar physics toggle (`PHYSICS ON/OFF`) in the web viewer.
+
+### Changed
+- Web graph exploration now supports hover neighborhood focus to spotlight a node and its immediate connections.
+- Graph node/link opacity behavior was refined for smoother search/focus transitions.
+- Server/tool version metadata bumped to `1.8.0`.
+
 ### Added
 - Browser-friendly endpoint guides for `/mcp` and machine endpoints (`/auth/*`, `/api/*`, `/register`, `/token`, and `/.well-known/*`) when opened via normal browser navigation.
 - Human-readable `/mcp` landing page explaining MCP purpose, connection steps, and key discovery URLs.

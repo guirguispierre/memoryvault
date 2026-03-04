@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.7.6';
+const SERVER_VERSION = '1.8.0';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
@@ -1361,6 +1361,18 @@ type ToolChangelogEntry = {
 };
 
 const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
+  memory_graph_stats: {
+    introduced_in: '1.8.0',
+    notes: 'Graph-level structural metrics, hubs, and topology analytics.',
+  },
+  memory_neighbors: {
+    introduced_in: '1.8.0',
+    notes: 'Seeded graph neighborhood extraction around a memory id/query.',
+  },
+  memory_tag_stats: {
+    introduced_in: '1.8.0',
+    notes: 'Tag frequency and co-occurrence analytics for knowledge grooming.',
+  },
   memory_link: {
     introduced_in: '1.4.0',
     notes: 'Structured memory relationships and graph reasoning.',
@@ -1460,6 +1472,26 @@ const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
 };
 
 const TOOL_CHANGELOG: ToolChangelogEntry[] = [
+  {
+    id: 'graph-tools-1.8.0',
+    version: '1.8.0',
+    released_at: 1772660000,
+    summary: 'Graph analytics and UX polish release.',
+    changes: [
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_graph_stats + memory_neighbors + memory_tag_stats',
+        description: 'Added graph topology metrics, seeded neighborhood extraction, and tag analytics tools.',
+      },
+      {
+        type: 'updated',
+        target: 'endpoint',
+        name: 'GET /view graph UX',
+        description: 'Improved graph exploration with neighborhood hover focus and physics pause/resume controls.',
+      },
+    ],
+  },
   {
     id: 'autonomy-1.7.0',
     version: '1.7.0',
@@ -1674,6 +1706,19 @@ const TOOLS: ToolDefinition[] = [
     name: 'memory_stats',
     description: 'Get statistics about stored memories: counts by type and recent activity.',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'memory_tag_stats',
+    description: 'Analyze tag frequency and co-occurrence across active memories.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max tags returned (default 20, max 100)' },
+        min_count: { type: 'number', description: 'Only include tags with at least this many memories (default 2)' },
+        include_pairs: { type: 'boolean', description: 'Include top tag-pair co-occurrences (default true)' },
+      },
+      required: [],
+    },
   },
   {
     name: 'tool_manifest',
@@ -2062,6 +2107,35 @@ const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'memory_graph_stats',
+    description: 'Return structural graph metrics, relation distributions, and top hub memories.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        include_inferred: { type: 'boolean', description: 'Include inferred shared-tag edges (default true)' },
+        top_hubs: { type: 'number', description: 'Max hub memories returned (default 12)' },
+        top_tags: { type: 'number', description: 'Max top tags returned (default 12)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_neighbors',
+    description: 'Get a seeded neighborhood around a memory id/query with hop depth and edge context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Seed memory id' },
+        query: { type: 'string', description: 'Fallback seed query if id is not provided' },
+        max_hops: { type: 'number', description: 'Neighborhood depth (default 1, max 4)' },
+        limit_nodes: { type: 'number', description: 'Max nodes returned (default 80)' },
+        relation_type: { type: 'string', enum: ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'], description: 'Optional explicit relation filter for traversal' },
+        include_inferred: { type: 'boolean', description: 'Include inferred shared-tag edges (default true)' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'memory_watch',
     description: 'Manage watch subscriptions for changelog events with optional webhook delivery.',
     inputSchema: {
@@ -2439,6 +2513,88 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
             avg_recent_dynamic_confidence: avgDynamicConfidence,
             avg_recent_dynamic_importance: avgDynamicImportance,
             recent_5: recentScored,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_tag_stats': {
+      const { limit: rawLimit, min_count: rawMinCount, include_pairs: rawIncludePairs } = args as {
+        limit?: unknown;
+        min_count?: unknown;
+        include_pairs?: unknown;
+      };
+      if (rawIncludePairs !== undefined && typeof rawIncludePairs !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_pairs must be a boolean when provided.' }] };
+      }
+      const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 20, 1), 100);
+      const minCount = Math.min(Math.max(Number.isInteger(rawMinCount) ? (rawMinCount as number) : 2, 1), 1000);
+      const includePairs = rawIncludePairs !== false;
+      const rows = await env.DB.prepare(
+        'SELECT id, tags FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 5000'
+      ).bind(brainId).all<{ id: string; tags: string | null }>();
+
+      const tagCounts = new Map<string, number>();
+      const tagMemoryIds = new Map<string, Set<string>>();
+      const pairCounts = new Map<string, number>();
+
+      for (const row of rows.results) {
+        const memoryId = typeof row.id === 'string' ? row.id : '';
+        if (!memoryId) continue;
+        const tags = Array.from(parseTagSet(row.tags));
+        if (!tags.length) continue;
+        for (const tag of tags) {
+          tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+          const ids = tagMemoryIds.get(tag) ?? new Set<string>();
+          ids.add(memoryId);
+          tagMemoryIds.set(tag, ids);
+        }
+        if (!includePairs || tags.length < 2) continue;
+        const sortedTags = tags.slice(0, 20).sort();
+        for (let i = 0; i < sortedTags.length; i++) {
+          for (let j = i + 1; j < sortedTags.length; j++) {
+            const key = `${sortedTags[i]}|${sortedTags[j]}`;
+            pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+          }
+        }
+      }
+
+      const topTags = Array.from(tagCounts.entries())
+        .filter(([, count]) => count >= minCount)
+        .sort((a, b) => {
+          if (b[1] !== a[1]) return b[1] - a[1];
+          return a[0].localeCompare(b[0]);
+        })
+        .slice(0, limit)
+        .map(([tag, count]) => ({
+          tag,
+          count,
+          sample_memory_ids: Array.from(tagMemoryIds.get(tag) ?? []).slice(0, 5),
+        }));
+
+      const topPairs = includePairs
+        ? Array.from(pairCounts.entries())
+          .filter(([, count]) => count >= Math.max(2, minCount - 1))
+          .sort((a, b) => {
+            if (b[1] !== a[1]) return b[1] - a[1];
+            return a[0].localeCompare(b[0]);
+          })
+          .slice(0, Math.min(25, limit))
+          .map(([pair, count]) => {
+            const [a, b] = pair.split('|');
+            return { tag_a: a, tag_b: b, count };
+          })
+        : [];
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            memory_count: rows.results.length,
+            unique_tag_count: tagCounts.size,
+            min_count: minCount,
+            tags: topTags,
+            top_pairs: topPairs,
           }, null, 2),
         }],
       };
@@ -4677,6 +4833,271 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
               conflict_resolutions: resolutionCount,
             },
             restore_policy: restorePolicy,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_graph_stats': {
+      const { include_inferred: rawIncludeInferred, top_hubs: rawTopHubs, top_tags: rawTopTags } = args as {
+        include_inferred?: unknown;
+        top_hubs?: unknown;
+        top_tags?: unknown;
+      };
+      if (rawIncludeInferred !== undefined && typeof rawIncludeInferred !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_inferred must be a boolean when provided.' }] };
+      }
+      const includeInferred = rawIncludeInferred !== false;
+      const topHubs = Math.min(Math.max(Number.isInteger(rawTopHubs) ? (rawTopHubs as number) : 12, 1), 50);
+      const topTags = Math.min(Math.max(Number.isInteger(rawTopTags) ? (rawTopTags as number) : 12, 1), 50);
+      const nodes = await loadActiveMemoryNodes(env, brainId, 2200);
+      const explicitLinks = await loadExplicitMemoryLinks(env, brainId, 16000);
+      const explicitPairs = new Set(explicitLinks.map((link) => pairKey(link.from_id, link.to_id)));
+      const policy = await getBrainPolicy(env, brainId);
+      const inferredLinks = includeInferred
+        ? buildTagInferredLinks(nodes, Math.min(policy.max_inferred_edges, 3000))
+          .filter((link) => !explicitPairs.has(pairKey(link.from_id, link.to_id)))
+        : [];
+      const allLinks = [...explicitLinks, ...inferredLinks];
+
+      const adjacency = new Map<string, string[]>();
+      const degreeById = new Map<string, number>();
+      const relationCounts: Record<string, number> = {
+        related: 0, supports: 0, contradicts: 0, supersedes: 0, causes: 0, example_of: 0, inferred: 0,
+      };
+      const perNodeRelation = new Map<string, Record<string, number>>();
+
+      for (const node of nodes) {
+        if (!adjacency.has(node.id)) adjacency.set(node.id, []);
+      }
+      for (const link of allLinks) {
+        if (!adjacency.has(link.from_id)) adjacency.set(link.from_id, []);
+        if (!adjacency.has(link.to_id)) adjacency.set(link.to_id, []);
+        adjacency.get(link.from_id)?.push(link.to_id);
+        adjacency.get(link.to_id)?.push(link.from_id);
+        degreeById.set(link.from_id, (degreeById.get(link.from_id) ?? 0) + 1);
+        degreeById.set(link.to_id, (degreeById.get(link.to_id) ?? 0) + 1);
+        const relationKey = link.inferred ? 'inferred' : normalizeRelation(link.relation_type);
+        relationCounts[relationKey] = (relationCounts[relationKey] ?? 0) + 1;
+
+        const fromStats = perNodeRelation.get(link.from_id) ?? {
+          related: 0, supports: 0, contradicts: 0, supersedes: 0, causes: 0, example_of: 0, inferred: 0,
+        };
+        fromStats[relationKey] = (fromStats[relationKey] ?? 0) + 1;
+        perNodeRelation.set(link.from_id, fromStats);
+        const toStats = perNodeRelation.get(link.to_id) ?? {
+          related: 0, supports: 0, contradicts: 0, supersedes: 0, causes: 0, example_of: 0, inferred: 0,
+        };
+        toStats[relationKey] = (toStats[relationKey] ?? 0) + 1;
+        perNodeRelation.set(link.to_id, toStats);
+      }
+
+      let connectedComponents = 0;
+      let isolatedNodes = 0;
+      const componentSizes: number[] = [];
+      const visited = new Set<string>();
+      for (const node of nodes) {
+        const seedId = node.id;
+        if (visited.has(seedId)) continue;
+        connectedComponents++;
+        let size = 0;
+        const queue = [seedId];
+        visited.add(seedId);
+        while (queue.length) {
+          const current = queue.shift();
+          if (!current) break;
+          size++;
+          const neighbors = adjacency.get(current) ?? [];
+          for (const neighbor of neighbors) {
+            if (visited.has(neighbor)) continue;
+            visited.add(neighbor);
+            queue.push(neighbor);
+          }
+        }
+        componentSizes.push(size);
+        if (size === 1 && (degreeById.get(seedId) ?? 0) === 0) isolatedNodes++;
+      }
+      componentSizes.sort((a, b) => b - a);
+
+      const projectedNodes = await enrichAndProjectRows(
+        env,
+        brainId,
+        nodes as unknown as Array<Record<string, unknown>>
+      );
+      const projectedById = new Map(projectedNodes.map((node) => [String(node.id), node]));
+      const topHubIds = nodes
+        .map((node) => node.id)
+        .sort((a, b) => {
+          const byDegree = (degreeById.get(b) ?? 0) - (degreeById.get(a) ?? 0);
+          if (byDegree !== 0) return byDegree;
+          return a.localeCompare(b);
+        })
+        .slice(0, topHubs);
+      const hubs = topHubIds.map((id) => ({
+        id,
+        degree: degreeById.get(id) ?? 0,
+        relations: perNodeRelation.get(id) ?? {},
+        memory: projectedById.get(id) ?? null,
+      }));
+
+      const tagCounts = new Map<string, number>();
+      for (const node of nodes) {
+        for (const tag of parseTagSet(node.tags)) {
+          tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+        }
+      }
+      const topTagRows = Array.from(tagCounts.entries())
+        .sort((a, b) => {
+          if (b[1] !== a[1]) return b[1] - a[1];
+          return a[0].localeCompare(b[0]);
+        })
+        .slice(0, topTags)
+        .map(([tag, count]) => ({ tag, count }));
+
+      const avgConfidence = projectedNodes.length
+        ? round3(projectedNodes.reduce((sum, node) => sum + toFiniteNumber(node.dynamic_confidence, 0.7), 0) / projectedNodes.length)
+        : null;
+      const avgImportance = projectedNodes.length
+        ? round3(projectedNodes.reduce((sum, node) => sum + toFiniteNumber(node.dynamic_importance, 0.5), 0) / projectedNodes.length)
+        : null;
+      const density = nodes.length > 1
+        ? round3((2 * allLinks.length) / (nodes.length * (nodes.length - 1)))
+        : 0;
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            node_count: nodes.length,
+            explicit_edge_count: explicitLinks.length,
+            inferred_edge_count: inferredLinks.length,
+            total_edge_count: allLinks.length,
+            connected_components: connectedComponents,
+            isolated_nodes: isolatedNodes,
+            largest_component_size: componentSizes[0] ?? 0,
+            density,
+            relation_counts: relationCounts,
+            avg_dynamic_confidence: avgConfidence,
+            avg_dynamic_importance: avgImportance,
+            top_hubs: hubs,
+            top_tags: topTagRows,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_neighbors': {
+      const { id: rawId, query: rawQuery, max_hops: rawMaxHops, limit_nodes: rawLimitNodes, relation_type: rawRelationType, include_inferred: rawIncludeInferred } = args as {
+        id?: unknown;
+        query?: unknown;
+        max_hops?: unknown;
+        limit_nodes?: unknown;
+        relation_type?: unknown;
+        include_inferred?: unknown;
+      };
+      if (rawId !== undefined && typeof rawId !== 'string') return { content: [{ type: 'text', text: 'id must be a string when provided.' }] };
+      if (rawQuery !== undefined && typeof rawQuery !== 'string') return { content: [{ type: 'text', text: 'query must be a string when provided.' }] };
+      if (rawIncludeInferred !== undefined && typeof rawIncludeInferred !== 'boolean') {
+        return { content: [{ type: 'text', text: 'include_inferred must be a boolean when provided.' }] };
+      }
+      if (rawRelationType !== undefined && !isValidRelationType(rawRelationType)) {
+        return { content: [{ type: 'text', text: 'relation_type must be one of related|supports|contradicts|supersedes|causes|example_of.' }] };
+      }
+      const relationFilter = isValidRelationType(rawRelationType) ? rawRelationType : null;
+      const maxHops = Math.min(Math.max(Number.isInteger(rawMaxHops) ? (rawMaxHops as number) : 1, 1), 4);
+      const limitNodes = Math.min(Math.max(Number.isInteger(rawLimitNodes) ? (rawLimitNodes as number) : 80, 5), 1000);
+      const includeInferred = rawIncludeInferred !== false && (relationFilter === null || relationFilter === 'related');
+
+      const nodes = await loadActiveMemoryNodes(env, brainId, 2200);
+      if (!nodes.length) return { content: [{ type: 'text', text: 'No memories available.' }] };
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
+
+      let seedId = '';
+      if (typeof rawId === 'string' && rawId.trim() && nodeById.has(rawId.trim())) {
+        seedId = rawId.trim();
+      }
+      if (!seedId && typeof rawQuery === 'string' && rawQuery.trim()) {
+        const q = rawQuery.trim().toLowerCase();
+        const qTokens = new Set(tokenizeText(q, 24));
+        const scored = nodes.map((node) => {
+          const blob = `${node.id} ${node.title ?? ''} ${node.key ?? ''} ${node.content} ${node.tags ?? ''} ${node.source ?? ''}`.toLowerCase();
+          const direct = blob.includes(q) ? 0.75 : 0;
+          const overlap = qTokens.size ? jaccardSimilarity(new Set(tokenizeText(blob, 100)), qTokens) : 0;
+          return { id: node.id, score: direct + overlap * 0.25 };
+        }).filter((row) => row.score > 0)
+          .sort((a, b) => b.score - a.score);
+        seedId = scored[0]?.id ?? '';
+      }
+      if (!seedId) {
+        return { content: [{ type: 'text', text: 'Provide id or query to select a seed memory.' }] };
+      }
+
+      const explicitLinks = (await loadExplicitMemoryLinks(env, brainId, 16000))
+        .filter((link) => nodeById.has(link.from_id) && nodeById.has(link.to_id))
+        .filter((link) => !relationFilter || normalizeRelation(link.relation_type) === relationFilter);
+      const explicitPairs = new Set(explicitLinks.map((link) => pairKey(link.from_id, link.to_id)));
+      const policy = await getBrainPolicy(env, brainId);
+      const inferredLinks = includeInferred
+        ? buildTagInferredLinks(nodes, Math.min(policy.max_inferred_edges, 1800))
+          .filter((link) => !explicitPairs.has(pairKey(link.from_id, link.to_id)))
+        : [];
+
+      const adjacency = new Map<string, string[]>();
+      for (const edge of [...explicitLinks, ...inferredLinks]) {
+        const fromArr = adjacency.get(edge.from_id);
+        if (fromArr) fromArr.push(edge.to_id);
+        else adjacency.set(edge.from_id, [edge.to_id]);
+        const toArr = adjacency.get(edge.to_id);
+        if (toArr) toArr.push(edge.from_id);
+        else adjacency.set(edge.to_id, [edge.from_id]);
+      }
+
+      const depthByNode = new Map<string, number>();
+      const queue: string[] = [seedId];
+      depthByNode.set(seedId, 0);
+      while (queue.length && depthByNode.size < limitNodes) {
+        const current = queue.shift();
+        if (!current) break;
+        const depth = depthByNode.get(current) ?? 0;
+        if (depth >= maxHops) continue;
+        const neighbors = adjacency.get(current) ?? [];
+        for (const neighborId of neighbors) {
+          if (depthByNode.has(neighborId)) continue;
+          depthByNode.set(neighborId, depth + 1);
+          queue.push(neighborId);
+          if (depthByNode.size >= limitNodes) break;
+        }
+      }
+
+      const selectedIds = new Set(depthByNode.keys());
+      const selectedNodes = nodes.filter((node) => selectedIds.has(node.id));
+      const selectedEdges = explicitLinks.filter((edge) => selectedIds.has(edge.from_id) && selectedIds.has(edge.to_id));
+      const selectedInferred = inferredLinks.filter((edge) => selectedIds.has(edge.from_id) && selectedIds.has(edge.to_id));
+      const projectedNodes = await enrichAndProjectRows(
+        env,
+        brainId,
+        selectedNodes as unknown as Array<Record<string, unknown>>
+      );
+      const projectedById = new Map(projectedNodes.map((node) => [String(node.id), node]));
+      const depthObject: Record<string, number> = {};
+      for (const [nodeId, depth] of depthByNode.entries()) depthObject[nodeId] = depth;
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            seed_id: seedId,
+            seed: projectedById.get(seedId) ?? null,
+            max_hops: maxHops,
+            relation_filter: relationFilter,
+            include_inferred: includeInferred,
+            node_count: projectedNodes.length,
+            edge_count: selectedEdges.length,
+            inferred_edge_count: selectedInferred.length,
+            depth_by_node: depthObject,
+            nodes: projectedNodes,
+            edges: selectedEdges,
+            inferred_edges: selectedInferred,
           }, null, 2),
         }],
       };
@@ -7163,10 +7584,10 @@ function viewerHtml(): string {
   .connection-chip .chip-relation.contradicts { border-color: var(--red); color: var(--red); }
   .connection-chip .chip-relation.supersedes { border-color: var(--amber); color: var(--amber); }
   .connection-chip .chip-relation.supports { border-color: #2eca75; color: #2eca75; }
-  .graph-node circle { stroke-width: 2px; cursor: pointer; transition: r 0.15s; }
+  .graph-node circle { stroke-width: 2px; cursor: pointer; transition: r 0.15s, opacity 0.18s, stroke-opacity 0.18s; }
   .graph-node circle:hover { r: 10; }
-  .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; }
-  .graph-link { stroke-width: 1.5px; }
+  .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; transition: opacity 0.18s; }
+  .graph-link { stroke-width: 1.5px; transition: stroke-opacity 0.18s; }
   .graph-link.explicit { stroke: var(--border-bright); opacity: 0.9; }
   .graph-link.explicit.relation-related { stroke: var(--border-bright); }
   .graph-link.explicit.relation-supports { stroke: #2eca75; }
@@ -7225,6 +7646,7 @@ function viewerHtml(): string {
   }
   .graph-btn:hover { border-color: var(--amber); color: var(--amber); }
   .graph-btn.active { color: var(--teal); border-color: var(--teal); }
+  .graph-btn.off { opacity: 0.6; border-color: var(--border); color: var(--text-dim); }
   .graph-legend {
     position: absolute;
     left: 0.75rem;
@@ -7513,6 +7935,7 @@ function viewerHtml(): string {
       <div class="graph-toolbar-row">
         <button class="graph-btn active" id="graph-toggle-inferred" onclick="toggleGraphInferred()">INFERRED ON</button>
         <button class="graph-btn active" id="graph-toggle-labels" onclick="toggleGraphLabels()">LABELS ON</button>
+        <button class="graph-btn active" id="graph-toggle-physics" onclick="toggleGraphPhysics()">PHYSICS ON</button>
         <button class="graph-btn" onclick="resetGraphView()">RESET VIEW</button>
       </div>
       <div class="graph-toolbar-row">
@@ -7574,9 +7997,11 @@ function viewerHtml(): string {
   let graphShowLabels = !window.matchMedia('(max-width: 640px)').matches;
   let graphSvgSelection = null;
   let graphZoomBehavior = null;
+  let graphSimulation = null;
   let graphAutoTunedLabels = false;
   let graphSearchQuery = '';
   let graphRelationFilter = new Set(GRAPH_RELATION_TYPES);
+  let graphPhysicsEnabled = true;
   let lastStatsSnapshot = { all: null, note: null, fact: null, journal: null };
 
   function setLoginError(message) {
@@ -7962,13 +8387,21 @@ function viewerHtml(): string {
   function syncGraphToolbarState() {
     const inferredBtn = document.getElementById('graph-toggle-inferred');
     const labelsBtn = document.getElementById('graph-toggle-labels');
+    const physicsBtn = document.getElementById('graph-toggle-physics');
     if (inferredBtn) {
       inferredBtn.classList.toggle('active', graphShowInferred);
+      inferredBtn.classList.toggle('off', !graphShowInferred);
       inferredBtn.textContent = graphShowInferred ? 'INFERRED ON' : 'INFERRED OFF';
     }
     if (labelsBtn) {
       labelsBtn.classList.toggle('active', graphShowLabels);
+      labelsBtn.classList.toggle('off', !graphShowLabels);
       labelsBtn.textContent = graphShowLabels ? 'LABELS ON' : 'LABELS OFF';
+    }
+    if (physicsBtn) {
+      physicsBtn.classList.toggle('active', graphPhysicsEnabled);
+      physicsBtn.classList.toggle('off', !graphPhysicsEnabled);
+      physicsBtn.textContent = graphPhysicsEnabled ? 'PHYSICS ON' : 'PHYSICS OFF';
     }
     GRAPH_RELATION_TYPES.forEach((relation) => {
       const btn = document.getElementById('graph-rel-' + relation);
@@ -8047,6 +8480,17 @@ function viewerHtml(): string {
     if (graphVisible) rerenderGraphFromCache();
   }
 
+  function toggleGraphPhysics() {
+    graphPhysicsEnabled = !graphPhysicsEnabled;
+    syncGraphToolbarState();
+    if (!graphSimulation) return;
+    if (graphPhysicsEnabled) {
+      graphSimulation.alpha(0.55).restart();
+    } else {
+      graphSimulation.stop();
+    }
+  }
+
   function resetGraphView() {
     if (!graphSvgSelection || !graphZoomBehavior) return;
     graphSvgSelection.transition().duration(220).call(graphZoomBehavior.transform, d3.zoomIdentity);
@@ -8054,6 +8498,7 @@ function viewerHtml(): string {
     graphSearchQuery = '';
     const searchInput = document.getElementById('graph-search-input');
     if (searchInput) searchInput.value = '';
+    if (graphPhysicsEnabled && graphSimulation) graphSimulation.alpha(0.45).restart();
     syncGraphToolbarState();
     rerenderGraphFromCache();
   }
@@ -8188,6 +8633,25 @@ function viewerHtml(): string {
       degreeById.set(l.source, (degreeById.get(l.source) || 0) + 1);
       degreeById.set(l.target, (degreeById.get(l.target) || 0) + 1);
     });
+    const neighborhoodByNode = new Map();
+    links.forEach((l) => {
+      const fromId = String(l.source);
+      const toId = String(l.target);
+      const fromSet = neighborhoodByNode.get(fromId) || new Set();
+      fromSet.add(toId);
+      neighborhoodByNode.set(fromId, fromSet);
+      const toSet = neighborhoodByNode.get(toId) || new Set();
+      toSet.add(fromId);
+      neighborhoodByNode.set(toId, toSet);
+    });
+    const baseNodeOpacity = (d) => {
+      const confidence = Math.min(Math.max(Number.isFinite(Number(d.dynamic_confidence ?? d.confidence)) ? Number(d.dynamic_confidence ?? d.confidence) : 0.7, 0), 1);
+      const visible = isNodeVisible(d.id);
+      const baseOpacity = 0.42 + confidence * 0.5;
+      return visible ? baseOpacity : Math.max(0.08, baseOpacity * 0.25);
+    };
+    const baseNodeStrokeOpacity = (d) => isNodeVisible(d.id) ? 1 : 0.2;
+    const baseNodeTextOpacity = (d) => isNodeVisible(d.id) ? 1 : 0.2;
 
     const inferredHeavy = inferredLinks.length > explicitLinks.length;
     const simulation = d3.forceSimulation(nodes)
@@ -8220,6 +8684,8 @@ function viewerHtml(): string {
       }).strength(isMobile ? 0.01 : 0.035))
       .force('y', d3.forceY(height / 2).strength(isMobile ? 0.01 : 0.03))
       .force('collision', d3.forceCollide(isMobile ? (inferredHeavy ? 27 : 24) : (inferredHeavy ? 34 : 30)));
+    graphSimulation = simulation;
+    if (!graphPhysicsEnabled) simulation.stop();
 
     const svg = d3.select('#graph-svg');
     graphSvgSelection = svg;
@@ -8322,14 +8788,9 @@ function viewerHtml(): string {
         return Math.min(maxR, base + degree * 0.4 + importance * (isMobile ? 4.2 : 3.6));
       })
       .attr('fill', d => typeColor[d.type] || '#888')
-      .attr('fill-opacity', (d) => {
-        const confidence = Math.min(Math.max(Number.isFinite(Number(d.dynamic_confidence ?? d.confidence)) ? Number(d.dynamic_confidence ?? d.confidence) : 0.7, 0), 1);
-        const visible = isNodeVisible(d.id);
-        const baseOpacity = 0.42 + confidence * 0.5;
-        return visible ? baseOpacity : Math.max(0.08, baseOpacity * 0.25);
-      })
+      .attr('fill-opacity', baseNodeOpacity)
       .attr('stroke', d => typeColor[d.type] || '#888')
-      .attr('stroke-opacity', (d) => isNodeVisible(d.id) ? 1 : 0.2)
+      .attr('stroke-opacity', baseNodeStrokeOpacity)
       .attr('stroke-width', (d) => {
         const importance = Math.min(Math.max(Number.isFinite(Number(d.dynamic_importance ?? d.importance)) ? Number(d.dynamic_importance ?? d.importance) : 0.5, 0), 1);
         return 1.4 + importance * 1.6;
@@ -8337,8 +8798,67 @@ function viewerHtml(): string {
 
     node.append('text')
       .attr('dx', 12).attr('dy', 4)
-      .style('opacity', (d) => isNodeVisible(d.id) ? 1 : 0.2)
+      .style('opacity', baseNodeTextOpacity)
       .text(d => (d.title || d.key || d.content || '').slice(0, isMobile ? 18 : 24));
+
+    const applyGraphFocus = (focusId) => {
+      if (!focusId) {
+        link.attr('stroke-opacity', linkOpacity);
+        linkLabel.style('opacity', (d) => linkOpacity(d) >= 0.5 ? 1 : 0);
+        node.select('circle')
+          .attr('fill-opacity', (d) => baseNodeOpacity(d))
+          .attr('stroke-opacity', (d) => baseNodeStrokeOpacity(d));
+        node.select('text').style('opacity', (d) => baseNodeTextOpacity(d));
+        return;
+      }
+
+      const neighborSet = neighborhoodByNode.get(focusId) ?? new Set();
+      const focusSet = new Set([focusId]);
+      neighborSet.forEach((neighborId) => focusSet.add(neighborId));
+      const isFocusedNode = (id) => focusSet.has(String(id));
+      const isFocusedEdge = (d) => {
+        const sId = getEndpointId(d.source);
+        const tId = getEndpointId(d.target);
+        return isFocusedNode(sId) && isFocusedNode(tId);
+      };
+
+      link.attr('stroke-opacity', (d) => {
+        if (!isFocusedEdge(d)) return 0.04;
+        const base = linkOpacity(d);
+        if (d.kind === 'inferred') return Math.max(base, 0.58);
+        return Math.max(base, 1);
+      });
+
+      linkLabel.style('opacity', (d) => {
+        if (!graphShowLabels) return 0;
+        return isFocusedEdge(d) ? 1 : 0;
+      });
+
+      node.select('circle')
+        .attr('fill-opacity', (d) => {
+          const id = String(d.id);
+          if (id === focusId) return 1;
+          if (focusSet.has(id)) return Math.max(baseNodeOpacity(d), 0.78);
+          return Math.min(baseNodeOpacity(d), 0.1);
+        })
+        .attr('stroke-opacity', (d) => {
+          const id = String(d.id);
+          if (id === focusId) return 1;
+          if (focusSet.has(id)) return 0.95;
+          return 0.12;
+        });
+
+      node.select('text').style('opacity', (d) => {
+        const id = String(d.id);
+        if (id === focusId) return 1;
+        if (focusSet.has(id)) return 0.95;
+        return 0.1;
+      });
+    };
+
+    node
+      .on('mouseenter', (event, d) => { applyGraphFocus(String(d.id)); })
+      .on('mouseleave', () => { applyGraphFocus(''); });
 
     node.append('title').text((d) => {
       const label = d.title || d.key || (d.content || '').slice(0, 70) || d.id;

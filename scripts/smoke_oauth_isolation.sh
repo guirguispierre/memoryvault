@@ -157,7 +157,7 @@ tools_json="$(curl -fsS -X POST "$BASE_URL/mcp" \
   -d '{"jsonrpc":"2.0","id":"tools","method":"tools/list"}')"
 tool_count="$(jq '.result.tools | length' <<<"$tools_json")"
 [[ "$tool_count" -ge 20 ]] || fail "Expected at least 20 tools, got $tool_count"
-for tool in memory_link memory_unlink memory_links memory_changelog memory_conflicts objective_set objective_list objective_next_actions tool_manifest tool_changelog memory_explain_score memory_link_suggest memory_path_find memory_conflict_resolve memory_entity_resolve memory_source_trust_set memory_source_trust_get brain_policy_set brain_policy_get brain_snapshot_create brain_snapshot_list brain_snapshot_restore memory_subgraph memory_watch; do
+for tool in memory_link memory_unlink memory_links memory_changelog memory_conflicts objective_set objective_list objective_next_actions tool_manifest tool_changelog memory_explain_score memory_link_suggest memory_path_find memory_conflict_resolve memory_entity_resolve memory_source_trust_set memory_source_trust_get brain_policy_set brain_policy_get brain_snapshot_create brain_snapshot_list brain_snapshot_restore memory_subgraph memory_tag_stats memory_graph_stats memory_neighbors memory_watch; do
   jq -e --arg t "$tool" '.result.tools | map(.name) | index($t) != null' <<<"$tools_json" >/dev/null \
     || fail "Expected tool '$tool' in tools/list"
 done
