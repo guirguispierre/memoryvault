@@ -7953,12 +7953,27 @@ function viewerHtml(): string {
     gap: 0.55rem;
     margin-bottom: 0.8rem;
   }
+  .settings-head-main {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+  }
   .settings-head h3 {
     color: var(--amber);
     font-size: 0.72rem;
     letter-spacing: 0.18em;
     text-transform: uppercase;
     font-weight: 700;
+  }
+  .settings-version {
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    color: var(--teal);
+    font-size: 0.56rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.18rem 0.4rem;
   }
   .settings-close {
     border: 1px solid var(--border);
@@ -8028,6 +8043,113 @@ function viewerHtml(): string {
     gap: 0.5rem;
     justify-content: flex-end;
     flex-wrap: wrap;
+  }
+  .changelog-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 296;
+    background: rgba(6, 10, 15, 0.84);
+    padding: 8vh 1rem 1rem;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .changelog-overlay.open { display: flex; }
+  .changelog-box {
+    width: min(860px, 100%);
+    border: 1px solid var(--border-bright);
+    background: rgba(13, 18, 25, 0.98);
+    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.42);
+    padding: 0.9rem;
+  }
+  .changelog-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.55rem;
+    margin-bottom: 0.8rem;
+  }
+  .changelog-title-group h3 {
+    color: var(--amber);
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+  .changelog-subtitle {
+    color: var(--text-dim);
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+  .changelog-list {
+    border: 1px solid var(--border);
+    background: rgba(8, 12, 16, 0.64);
+    padding: 0.7rem;
+    max-height: min(62vh, 720px);
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+  .changelog-entry {
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    padding: 0.6rem;
+  }
+  .changelog-entry-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+    margin-bottom: 0.35rem;
+    flex-wrap: wrap;
+  }
+  .changelog-entry-version {
+    color: var(--teal);
+    font-size: 0.63rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .changelog-entry-date {
+    color: var(--text-dim);
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .changelog-entry-summary {
+    color: var(--text-bright);
+    font-size: 0.74rem;
+    line-height: 1.45;
+    margin-bottom: 0.4rem;
+  }
+  .changelog-change-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .changelog-change-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.45rem;
+    align-items: start;
+  }
+  .changelog-change-type {
+    border: 1px solid var(--border);
+    color: var(--amber);
+    font-size: 0.54rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.08rem 0.28rem;
+    white-space: nowrap;
+  }
+  .changelog-change-text {
+    color: var(--text);
+    font-size: 0.68rem;
+    line-height: 1.45;
   }
   body.compact-cards .grid-wrap {
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -8203,6 +8325,10 @@ function viewerHtml(): string {
     .settings-grid { grid-template-columns: 1fr; }
     .settings-actions { justify-content: stretch; }
     .settings-actions .refresh-btn { width: 100%; }
+    .changelog-overlay { padding-top: 5vh; }
+    .changelog-box { padding: 0.62rem; }
+    .changelog-list { max-height: min(60vh, 560px); }
+    .changelog-change-row { grid-template-columns: 1fr; gap: 0.25rem; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -8413,7 +8539,10 @@ function viewerHtml(): string {
 <div class="settings-overlay" id="settings-overlay" onclick="closeSettingsOverlay(event)">
   <div class="settings-box" onclick="event.stopPropagation()">
     <div class="settings-head">
-      <h3>Viewer Settings</h3>
+      <div class="settings-head-main">
+        <h3>Viewer Settings</h3>
+        <span class="settings-version">v${escapeHtml(SERVER_VERSION)}</span>
+      </div>
       <button class="settings-close" onclick="closeSettingsOverlay()">Close</button>
     </div>
     <div class="settings-grid">
@@ -8529,8 +8658,25 @@ function viewerHtml(): string {
       </div>
     </div>
     <div class="settings-actions">
+      <button class="refresh-btn utility-btn" onclick="openChangelogOverlay()">VIEW CHANGELOG</button>
       <button class="refresh-btn utility-btn" onclick="resetViewerSettings()">RESET DEFAULTS</button>
       <button class="refresh-btn" onclick="applySettingsFromForm()">SAVE SETTINGS</button>
+    </div>
+  </div>
+</div>
+
+<div class="changelog-overlay" id="changelog-overlay" onclick="closeChangelogOverlay(event)">
+  <div class="changelog-box" onclick="event.stopPropagation()">
+    <div class="changelog-head">
+      <div class="changelog-title-group">
+        <h3>Release Changelog</h3>
+        <div class="changelog-subtitle" id="changelog-subtitle">Recent platform updates</div>
+      </div>
+      <button class="settings-close" onclick="closeChangelogOverlay()">Close</button>
+    </div>
+    <div class="changelog-list" id="changelog-list"></div>
+    <div class="settings-actions" style="margin-top:0.7rem">
+      <button class="refresh-btn utility-btn" onclick="window.open('https://github.com/guirguispierre/ai-memory-mcp/blob/master/CHANGELOG.md', '_blank', 'noopener')">OPEN FULL CHANGELOG</button>
     </div>
   </div>
 </div>
@@ -8539,6 +8685,7 @@ function viewerHtml(): string {
 
 <script>
   const BASE = location.origin;
+  const VIEWER_SERVER_VERSION = '${escapeHtml(SERVER_VERSION)}';
   const GRAPH_RELATION_TYPES = ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'];
   const GRAPH_RELATION_COLOR = {
     related: '#2a4060',
@@ -9155,6 +9302,14 @@ function viewerHtml(): string {
         run: () => openSettingsOverlay(),
       },
       {
+        label: 'Open changelog',
+        detail: 'Recent release notes',
+        run: () => {
+          if (!ensureAppReady('Changelog')) return;
+          openChangelogOverlay();
+        },
+      },
+      {
         label: 'Lock session',
         detail: 'Sign out',
         run: () => {
@@ -9335,6 +9490,107 @@ function viewerHtml(): string {
     if (!overlay) return;
     fillSettingsForm();
     overlay.classList.add('open');
+  }
+
+  function closeChangelogOverlay(event) {
+    const overlay = document.getElementById('changelog-overlay');
+    if (!overlay) return;
+    if (event && event.target !== overlay) return;
+    overlay.classList.remove('open');
+  }
+
+  function formatChangelogDate(unixTs) {
+    const ts = Number(unixTs);
+    if (!Number.isFinite(ts) || ts <= 0) return 'Unknown date';
+    return new Date(ts * 1000).toISOString().slice(0, 10);
+  }
+
+  function renderChangelogEntries(entries, latestVersion) {
+    const list = document.getElementById('changelog-list');
+    const subtitle = document.getElementById('changelog-subtitle');
+    if (!list || !subtitle) return;
+    const rows = Array.isArray(entries) ? entries : [];
+    const latest = typeof latestVersion === 'string' && latestVersion.trim()
+      ? latestVersion.trim()
+      : VIEWER_SERVER_VERSION;
+    subtitle.textContent = 'Latest version: v' + latest + ' - showing ' + rows.length + ' entries';
+    if (!rows.length) {
+      list.innerHTML = '<div class="setting-help">No changelog entries available.</div>';
+      return;
+    }
+
+    list.innerHTML = rows.map((entry) => {
+      const version = typeof entry.version === 'string' && entry.version.trim() ? entry.version.trim() : 'unknown';
+      const summary = typeof entry.summary === 'string' ? entry.summary : '';
+      const releaseDate = formatChangelogDate(entry.released_at);
+      const changes = Array.isArray(entry.changes) ? entry.changes : [];
+      const changesHtml = changes.slice(0, 16).map((change) => {
+        const type = typeof change.type === 'string' && change.type.trim() ? change.type.trim() : 'changed';
+        const target = typeof change.target === 'string' && change.target.trim() ? change.target.trim() : '';
+        const name = typeof change.name === 'string' && change.name.trim() ? change.name.trim() : 'Untitled change';
+        const description = typeof change.description === 'string' && change.description.trim() ? change.description.trim() : '';
+        const prefix = target ? (target + ': ') : '';
+        const detail = prefix + name + (description ? (' - ' + description) : '');
+        return '<li class="changelog-change-row">' +
+          '<span class="changelog-change-type">' + esc(type) + '</span>' +
+          '<span class="changelog-change-text">' + esc(detail) + '</span>' +
+        '</li>';
+      }).join('');
+      return '<article class="changelog-entry">' +
+        '<div class="changelog-entry-head">' +
+          '<span class="changelog-entry-version">v' + esc(version) + '</span>' +
+          '<span class="changelog-entry-date">' + esc(releaseDate) + '</span>' +
+        '</div>' +
+        '<div class="changelog-entry-summary">' + esc(summary || 'No summary available.') + '</div>' +
+        (changesHtml ? ('<ul class="changelog-change-list">' + changesHtml + '</ul>') : '') +
+      '</article>';
+    }).join('');
+  }
+
+  async function loadChangelogEntries() {
+    const list = document.getElementById('changelog-list');
+    const subtitle = document.getElementById('changelog-subtitle');
+    if (!list || !subtitle) return;
+    list.innerHTML = '<div class="setting-help">Loading changelog...</div>';
+    subtitle.textContent = 'Fetching latest release notes...';
+    try {
+      const response = await apiFetch(BASE + '/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'viewer-changelog',
+          method: 'tools/call',
+          params: {
+            name: 'tool_changelog',
+            arguments: { limit: 12 },
+          },
+        }),
+      });
+      if (response.status === 401) {
+        doLogout(true);
+        return;
+      }
+      if (!response.ok) throw new Error('Failed to load changelog.');
+      const rpc = await response.json();
+      if (rpc && rpc.error) throw new Error(typeof rpc.error.message === 'string' ? rpc.error.message : 'Failed to load changelog.');
+      const text = rpc?.result?.content?.[0]?.text;
+      if (typeof text !== 'string' || !text.trim()) throw new Error('Invalid changelog response.');
+      const parsed = JSON.parse(text);
+      renderChangelogEntries(parsed?.entries, parsed?.latest_version);
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to load changelog.';
+      subtitle.textContent = 'Unable to load release notes.';
+      list.innerHTML = '<div class="setting-help" style="color:var(--red)">' + esc(message) + '</div>';
+    }
+  }
+
+  async function openChangelogOverlay() {
+    closeSettingsOverlay();
+    const overlay = document.getElementById('changelog-overlay');
+    if (!overlay) return;
+    overlay.classList.add('open');
+    await loadChangelogEntries();
   }
 
   function applySettingsFromForm() {
@@ -9979,6 +10235,7 @@ function viewerHtml(): string {
     const key = String(e.key || '').toLowerCase();
     const shortcutsOpen = document.getElementById('shortcuts-overlay').classList.contains('open');
     const settingsOpen = document.getElementById('settings-overlay').classList.contains('open');
+    const changelogOpen = document.getElementById('changelog-overlay').classList.contains('open');
     const expandOpen = document.getElementById('expand-overlay').classList.contains('open');
     const typing = isTypingTarget(e.target);
 
@@ -10001,6 +10258,14 @@ function viewerHtml(): string {
       if (key === 'escape') {
         e.preventDefault();
         closeShortcutsOverlay();
+      }
+      return;
+    }
+
+    if (changelogOpen) {
+      if (key === 'escape') {
+        e.preventDefault();
+        closeChangelogOverlay();
       }
       return;
     }
