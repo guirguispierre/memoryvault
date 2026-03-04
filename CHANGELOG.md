@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Viewer command palette (`Ctrl/Cmd+K`) for quick actions (refresh, graph, toggles, focus, logout).
 - Viewer keyboard shortcuts overlay (`?`) with inline key reference.
 - Viewer toast notifications for auth, graph, and sync actions.
+- Viewer settings panel for user preferences (live polling, time mode, compact cards, graph defaults, auto-open graph, toast toggle), persisted in local storage.
+- Expanded viewer settings with startup filter, search debounce, toast duration, logout confirmation, graph hover-focus toggle, scanline toggle, and reduced-motion mode.
 
 ## [1.8.0] - 2026-03-04
 

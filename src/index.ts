@@ -6977,6 +6977,15 @@ function viewerHtml(): string {
       radial-gradient(45% 40% at 20% 72%, rgba(240, 165, 0, 0.1), transparent 70%);
     animation: ambientShift 18s ease-in-out infinite alternate;
   }
+  body.scanlines-off::before {
+    display: none;
+  }
+  body.motion-reduced *,
+  body.motion-reduced *::before,
+  body.motion-reduced *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 
   /* ── LOGIN SCREEN ── */
   #login-screen {
@@ -7851,6 +7860,125 @@ function viewerHtml(): string {
     font-size: 0.72rem;
     line-height: 1.45;
   }
+  .settings-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 295;
+    background: rgba(6, 10, 15, 0.84);
+    padding: 8vh 1rem 1rem;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .settings-overlay.open { display: flex; }
+  .settings-box {
+    width: min(760px, 100%);
+    border: 1px solid var(--border-bright);
+    background: rgba(13, 18, 25, 0.98);
+    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.42);
+    padding: 0.9rem;
+  }
+  .settings-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    margin-bottom: 0.8rem;
+  }
+  .settings-head h3 {
+    color: var(--amber);
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .settings-close {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.48rem;
+    cursor: pointer;
+  }
+  .settings-close:hover { border-color: var(--amber); color: var(--amber); }
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 0.75rem;
+    margin-bottom: 0.7rem;
+  }
+  .setting-row {
+    border: 1px solid var(--border);
+    background: rgba(8, 12, 16, 0.64);
+    padding: 0.55rem 0.62rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .setting-row.setting-inline {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+  .setting-row label,
+  .setting-row .setting-label {
+    color: var(--text);
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    line-height: 1.35;
+  }
+  .setting-row .setting-help {
+    color: var(--text-dim);
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+    line-height: 1.35;
+  }
+  .setting-input {
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    color: var(--teal);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    outline: none;
+    padding: 0.4rem 0.5rem;
+    min-height: 30px;
+  }
+  .setting-input:focus { border-color: var(--amber); }
+  .setting-check {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--teal);
+  }
+  .settings-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  body.compact-cards .grid-wrap {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1px;
+  }
+  body.compact-cards .card {
+    padding: 0.95rem 1rem;
+  }
+  body.compact-cards .card-content {
+    font-size: 0.74rem;
+    max-height: 88px;
+  }
+  body.compact-cards .card-footer {
+    margin-top: 0.65rem;
+    padding-top: 0.55rem;
+  }
+  body.compact-cards .card-id {
+    font-size: 0.5rem;
+  }
 
   @media (max-width: 900px) {
     .hdr { padding: 0.85rem 1rem; }
@@ -8002,6 +8130,11 @@ function viewerHtml(): string {
     .shortcuts-box { padding: 0.62rem; }
     .shortcut-key { min-width: 74px; }
     .shortcut-desc { font-size: 0.68rem; }
+    .settings-overlay { padding-top: 5vh; }
+    .settings-box { padding: 0.62rem; }
+    .settings-grid { grid-template-columns: 1fr; }
+    .settings-actions { justify-content: stretch; }
+    .settings-actions .refresh-btn { width: 100%; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -8132,6 +8265,7 @@ function viewerHtml(): string {
     <button class="refresh-btn" onclick="loadMemories()">↻ REFRESH</button>
     <button class="refresh-btn utility-btn" onclick="openCommandPalette()">COMMAND</button>
     <button class="refresh-btn utility-btn" onclick="toggleShortcutsOverlay()">SHORTCUTS</button>
+    <button class="refresh-btn utility-btn" onclick="openSettingsOverlay()">SETTINGS</button>
   </div>
 
   <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--bg);min-height:600px">
@@ -8198,11 +8332,137 @@ function viewerHtml(): string {
     <div class="shortcuts-grid">
       <span class="shortcut-key">Ctrl/Cmd+K</span><span class="shortcut-desc">Open command palette</span>
       <span class="shortcut-key">?</span><span class="shortcut-desc">Open this shortcuts panel</span>
+      <span class="shortcut-key">S</span><span class="shortcut-desc">Open settings panel</span>
       <span class="shortcut-key">/</span><span class="shortcut-desc">Focus search input</span>
       <span class="shortcut-key">G</span><span class="shortcut-desc">Open graph view</span>
       <span class="shortcut-key">R</span><span class="shortcut-desc">Refresh memories</span>
       <span class="shortcut-key">Esc</span><span class="shortcut-desc">Close overlays or modal cards</span>
       <span class="shortcut-key">Enter</span><span class="shortcut-desc">Run selected command in command palette</span>
+    </div>
+  </div>
+</div>
+
+<div class="settings-overlay" id="settings-overlay" onclick="closeSettingsOverlay(event)">
+  <div class="settings-box" onclick="event.stopPropagation()">
+    <div class="settings-head">
+      <h3>Viewer Settings</h3>
+      <button class="settings-close" onclick="closeSettingsOverlay()">Close</button>
+    </div>
+    <div class="settings-grid">
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Live Polling</div>
+          <div class="setting-help">Auto-refresh memory stats in background.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-live-poll-enabled">
+      </div>
+      <div class="setting-row">
+        <label for="settings-live-poll-interval">Polling Interval (sec)</label>
+        <input type="number" min="5" max="120" step="1" class="setting-input" id="settings-live-poll-interval">
+        <div class="setting-help">Lower is faster updates, higher is lighter load.</div>
+      </div>
+      <div class="setting-row">
+        <label for="settings-time-mode">Time Display</label>
+        <select class="setting-input" id="settings-time-mode">
+          <option value="utc">UTC</option>
+          <option value="local">Local</option>
+        </select>
+        <div class="setting-help">Header clock format mode.</div>
+      </div>
+      <div class="setting-row">
+        <label for="settings-default-filter">Default Startup Filter</label>
+        <select class="setting-input" id="settings-default-filter">
+          <option value="">All</option>
+          <option value="note">Notes</option>
+          <option value="fact">Facts</option>
+          <option value="journal">Journal</option>
+        </select>
+        <div class="setting-help">Initial list filter after sign-in.</div>
+      </div>
+      <div class="setting-row">
+        <label for="settings-search-debounce">Search Debounce (ms)</label>
+        <input type="number" min="120" max="1500" step="10" class="setting-input" id="settings-search-debounce">
+        <div class="setting-help">Delay before list search triggers.</div>
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Compact Cards</div>
+          <div class="setting-help">Fit more memory cards on screen.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-compact-cards">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Default Inferred Edges</div>
+          <div class="setting-help">Initial graph inferred-edge visibility.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-graph-inferred">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Default Graph Labels</div>
+          <div class="setting-help">Initial graph label visibility.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-graph-labels">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Default Graph Physics</div>
+          <div class="setting-help">Start graph simulation enabled.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-graph-physics">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Open Graph On Sign-in</div>
+          <div class="setting-help">Skip list view and jump to graph first.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-auto-open-graph">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Toast Notifications</div>
+          <div class="setting-help">In-app feedback for actions and errors.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-toasts-enabled">
+      </div>
+      <div class="setting-row">
+        <label for="settings-toast-duration">Toast Duration (ms)</label>
+        <input type="number" min="1200" max="8000" step="100" class="setting-input" id="settings-toast-duration">
+        <div class="setting-help">How long toast messages stay visible.</div>
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Confirm Before Lock</div>
+          <div class="setting-help">Prompt before manual logout/lock.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-confirm-logout">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Graph Hover Focus</div>
+          <div class="setting-help">Highlight node neighborhood on hover.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-graph-focus">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Show Scanlines</div>
+          <div class="setting-help">Enable CRT-style scanline overlay.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-show-scanlines">
+      </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Reduce Motion</div>
+          <div class="setting-help">Disable most transitions and animations.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-reduce-motion">
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button class="refresh-btn utility-btn" onclick="resetViewerSettings()">RESET DEFAULTS</button>
+      <button class="refresh-btn" onclick="applySettingsFromForm()">SAVE SETTINGS</button>
     </div>
   </div>
 </div>
@@ -8245,6 +8505,105 @@ function viewerHtml(): string {
   let commandVisibleActions = [];
   let commandActiveIndex = 0;
   let toastCounter = 0;
+  let clockIntervalId = null;
+  const VIEWER_SETTINGS_KEY = 'memoryvault.viewer.settings.v1';
+  let viewerSettings = null;
+
+  function buildDefaultViewerSettings() {
+    return {
+      live_poll_enabled: true,
+      live_poll_interval_sec: 10,
+      time_mode: 'utc',
+      default_memory_filter: '',
+      search_debounce_ms: 300,
+      compact_cards: false,
+      graph_show_inferred: true,
+      graph_show_labels: !window.matchMedia('(max-width: 640px)').matches,
+      graph_physics_enabled: true,
+      graph_focus_highlight: true,
+      auto_open_graph: false,
+      toasts_enabled: true,
+      toast_duration_ms: 2300,
+      confirm_logout: false,
+      show_scanlines: true,
+      reduce_motion: false,
+    };
+  }
+
+  function normalizeViewerSettings(raw) {
+    const defaults = buildDefaultViewerSettings();
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const intervalRaw = Number(source.live_poll_interval_sec);
+    const interval = Number.isFinite(intervalRaw) ? intervalRaw : defaults.live_poll_interval_sec;
+    const searchDebounceRaw = Number(source.search_debounce_ms);
+    const searchDebounce = Number.isFinite(searchDebounceRaw) ? searchDebounceRaw : defaults.search_debounce_ms;
+    const toastDurationRaw = Number(source.toast_duration_ms);
+    const toastDuration = Number.isFinite(toastDurationRaw) ? toastDurationRaw : defaults.toast_duration_ms;
+    const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
+      ? source.default_memory_filter
+      : '';
+    return {
+      live_poll_enabled: source.live_poll_enabled !== false,
+      live_poll_interval_sec: Math.min(Math.max(Math.round(interval), 5), 120),
+      time_mode: source.time_mode === 'local' ? 'local' : 'utc',
+      default_memory_filter: defaultFilter,
+      search_debounce_ms: Math.min(Math.max(Math.round(searchDebounce), 120), 1500),
+      compact_cards: source.compact_cards === true,
+      graph_show_inferred: source.graph_show_inferred !== false,
+      graph_show_labels: source.graph_show_labels === undefined ? defaults.graph_show_labels : source.graph_show_labels !== false,
+      graph_physics_enabled: source.graph_physics_enabled !== false,
+      graph_focus_highlight: source.graph_focus_highlight !== false,
+      auto_open_graph: source.auto_open_graph === true,
+      toasts_enabled: source.toasts_enabled !== false,
+      toast_duration_ms: Math.min(Math.max(Math.round(toastDuration), 1200), 8000),
+      confirm_logout: source.confirm_logout === true,
+      show_scanlines: source.show_scanlines !== false,
+      reduce_motion: source.reduce_motion === true,
+    };
+  }
+
+  function loadViewerSettings() {
+    const defaults = buildDefaultViewerSettings();
+    try {
+      const raw = localStorage.getItem(VIEWER_SETTINGS_KEY);
+      if (!raw) return defaults;
+      const parsed = JSON.parse(raw);
+      return normalizeViewerSettings(parsed);
+    } catch {
+      return defaults;
+    }
+  }
+
+  function persistViewerSettings() {
+    if (!viewerSettings) return;
+    try {
+      localStorage.setItem(VIEWER_SETTINGS_KEY, JSON.stringify(viewerSettings));
+    } catch {}
+  }
+
+  function applyViewerSettingsToRuntime(options = {}) {
+    if (!viewerSettings) return;
+    const restartPolling = options.restartPolling !== false;
+    const rerenderGraph = options.rerenderGraph === true;
+    const rerenderGrid = options.rerenderGrid === true;
+    graphShowInferred = viewerSettings.graph_show_inferred;
+    graphShowLabels = viewerSettings.graph_show_labels;
+    graphPhysicsEnabled = viewerSettings.graph_physics_enabled;
+    document.body.classList.toggle('compact-cards', viewerSettings.compact_cards);
+    document.body.classList.toggle('scanlines-off', !viewerSettings.show_scanlines);
+    document.body.classList.toggle('motion-reduced', viewerSettings.reduce_motion);
+    syncGraphToolbarState();
+    if (restartPolling) startLivePolling(true);
+    if (rerenderGrid) renderGrid(allMemories);
+    if (rerenderGraph && graphVisible) rerenderGraphFromCache();
+  }
+
+  function initializeViewerSettings() {
+    viewerSettings = loadViewerSettings();
+    applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: false, rerenderGrid: false });
+  }
+
+  initializeViewerSettings();
 
   function setLoginError(message) {
     const el = document.getElementById('login-error');
@@ -8268,9 +8627,10 @@ function viewerHtml(): string {
     return false;
   }
 
-  function showToast(message, tone = 'info') {
+  function showToast(message, tone = 'info', force = false) {
     const text = String(message || '').trim();
     const wrap = document.getElementById('toast-wrap');
+    if (!force && viewerSettings && viewerSettings.toasts_enabled === false) return;
     if (!text || !wrap) return;
     const toast = document.createElement('div');
     const safeTone = ['info', 'success', 'error'].includes(tone) ? tone : 'info';
@@ -8278,20 +8638,27 @@ function viewerHtml(): string {
     toast.dataset.toastId = String(++toastCounter);
     toast.textContent = text;
     wrap.appendChild(toast);
+    const durationMs = Math.min(Math.max(Number(viewerSettings?.toast_duration_ms ?? 2300), 1200), 8000);
     setTimeout(() => {
       toast.classList.add('hide');
       setTimeout(() => toast.remove(), 220);
-    }, 2300);
+    }, durationMs);
   }
 
   function enterApp() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     document.getElementById('app').style.flexDirection = 'column';
-    updateTime();
+    startClock();
+    const defaultFilter = viewerSettings?.default_memory_filter || '';
+    activeFilter = defaultFilter;
+    syncFilterPills(activeFilter);
     loadMemories();
     startLivePolling();
     showToast('Session active. Loading memory stream.', 'success');
+    if (viewerSettings && viewerSettings.auto_open_graph) {
+      setTimeout(() => { if (TOKEN) showGraph(); }, 180);
+    }
   }
 
   async function tryRefreshSession() {
@@ -8394,7 +8761,11 @@ function viewerHtml(): string {
     return doTokenLogin();
   }
 
-  async function doLogout() {
+  async function doLogout(force = false) {
+    if (!force && viewerSettings?.confirm_logout) {
+      const ok = window.confirm('Lock and sign out of the current session?');
+      if (!ok) return;
+    }
     if (SESSION_MODE === 'user' && REFRESH_TOKEN) {
       try {
         await fetch(BASE + '/auth/logout', {
@@ -8404,6 +8775,14 @@ function viewerHtml(): string {
         });
       } catch {}
     }
+    if (pollIntervalId) {
+      clearInterval(pollIntervalId);
+      pollIntervalId = null;
+    }
+    if (clockIntervalId) {
+      clearInterval(clockIntervalId);
+      clockIntervalId = null;
+    }
     TOKEN = '';
     REFRESH_TOKEN = '';
     SESSION_MODE = 'legacy';
@@ -8412,8 +8791,20 @@ function viewerHtml(): string {
 
   function updateTime() {
     const el = document.getElementById('hdr-time');
-    if (el) el.textContent = new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
-    setTimeout(updateTime, 1000);
+    if (el) {
+      if (viewerSettings && viewerSettings.time_mode === 'local') {
+        const local = new Date().toLocaleString();
+        el.textContent = local + ' LOCAL';
+      } else {
+        el.textContent = new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
+      }
+    }
+  }
+
+  function startClock() {
+    if (clockIntervalId) clearInterval(clockIntervalId);
+    updateTime();
+    clockIntervalId = setInterval(updateTime, 1000);
   }
 
   function pulseStatPill(id, changed) {
@@ -8439,7 +8830,7 @@ function viewerHtml(): string {
     if (search) url += '&search=' + encodeURIComponent(search);
     try {
       const r = await apiFetch(url);
-      if (!r.ok) { doLogout(); return; }
+      if (!r.ok) { doLogout(true); return; }
       const data = await r.json();
       allMemories = data.memories || [];
       updateStats(data.stats || [], allMemories);
@@ -8550,7 +8941,7 @@ function viewerHtml(): string {
     const myGen = ++expandGen;
     apiFetch(BASE + '/api/links/' + m.id)
       .then(r => {
-        if (r.status === 401) { doLogout(); return null; }
+        if (r.status === 401) { doLogout(true); return null; }
         if (!r.ok) throw new Error('fetch failed');
         return r.json();
       })
@@ -8691,6 +9082,11 @@ function viewerHtml(): string {
         run: () => toggleShortcutsOverlay(),
       },
       {
+        label: 'Open settings',
+        detail: 'Viewer preferences',
+        run: () => openSettingsOverlay(),
+      },
+      {
         label: 'Lock session',
         detail: 'Sign out',
         run: () => {
@@ -8801,6 +9197,102 @@ function viewerHtml(): string {
     else overlay.classList.add('open');
   }
 
+  function fillSettingsForm() {
+    if (!viewerSettings) return;
+    const livePollEnabled = document.getElementById('settings-live-poll-enabled');
+    const livePollInterval = document.getElementById('settings-live-poll-interval');
+    const timeMode = document.getElementById('settings-time-mode');
+    const defaultFilter = document.getElementById('settings-default-filter');
+    const searchDebounce = document.getElementById('settings-search-debounce');
+    const compactCards = document.getElementById('settings-compact-cards');
+    const graphInferred = document.getElementById('settings-graph-inferred');
+    const graphLabels = document.getElementById('settings-graph-labels');
+    const graphPhysics = document.getElementById('settings-graph-physics');
+    const graphFocus = document.getElementById('settings-graph-focus');
+    const autoOpenGraph = document.getElementById('settings-auto-open-graph');
+    const toastsEnabled = document.getElementById('settings-toasts-enabled');
+    const toastDuration = document.getElementById('settings-toast-duration');
+    const confirmLogout = document.getElementById('settings-confirm-logout');
+    const showScanlines = document.getElementById('settings-show-scanlines');
+    const reduceMotion = document.getElementById('settings-reduce-motion');
+    if (livePollEnabled) livePollEnabled.checked = viewerSettings.live_poll_enabled;
+    if (livePollInterval) livePollInterval.value = String(viewerSettings.live_poll_interval_sec);
+    if (timeMode) timeMode.value = viewerSettings.time_mode;
+    if (defaultFilter) defaultFilter.value = viewerSettings.default_memory_filter || '';
+    if (searchDebounce) searchDebounce.value = String(viewerSettings.search_debounce_ms);
+    if (compactCards) compactCards.checked = viewerSettings.compact_cards;
+    if (graphInferred) graphInferred.checked = viewerSettings.graph_show_inferred;
+    if (graphLabels) graphLabels.checked = viewerSettings.graph_show_labels;
+    if (graphPhysics) graphPhysics.checked = viewerSettings.graph_physics_enabled;
+    if (graphFocus) graphFocus.checked = viewerSettings.graph_focus_highlight;
+    if (autoOpenGraph) autoOpenGraph.checked = viewerSettings.auto_open_graph;
+    if (toastsEnabled) toastsEnabled.checked = viewerSettings.toasts_enabled;
+    if (toastDuration) toastDuration.value = String(viewerSettings.toast_duration_ms);
+    if (confirmLogout) confirmLogout.checked = viewerSettings.confirm_logout;
+    if (showScanlines) showScanlines.checked = viewerSettings.show_scanlines;
+    if (reduceMotion) reduceMotion.checked = viewerSettings.reduce_motion;
+  }
+
+  function readSettingsFromForm() {
+    const raw = {
+      live_poll_enabled: document.getElementById('settings-live-poll-enabled')?.checked !== false,
+      live_poll_interval_sec: Number(document.getElementById('settings-live-poll-interval')?.value ?? 10),
+      time_mode: document.getElementById('settings-time-mode')?.value === 'local' ? 'local' : 'utc',
+      default_memory_filter: document.getElementById('settings-default-filter')?.value || '',
+      search_debounce_ms: Number(document.getElementById('settings-search-debounce')?.value ?? 300),
+      compact_cards: document.getElementById('settings-compact-cards')?.checked === true,
+      graph_show_inferred: document.getElementById('settings-graph-inferred')?.checked !== false,
+      graph_show_labels: document.getElementById('settings-graph-labels')?.checked !== false,
+      graph_physics_enabled: document.getElementById('settings-graph-physics')?.checked !== false,
+      graph_focus_highlight: document.getElementById('settings-graph-focus')?.checked !== false,
+      auto_open_graph: document.getElementById('settings-auto-open-graph')?.checked === true,
+      toasts_enabled: document.getElementById('settings-toasts-enabled')?.checked !== false,
+      toast_duration_ms: Number(document.getElementById('settings-toast-duration')?.value ?? 2300),
+      confirm_logout: document.getElementById('settings-confirm-logout')?.checked === true,
+      show_scanlines: document.getElementById('settings-show-scanlines')?.checked !== false,
+      reduce_motion: document.getElementById('settings-reduce-motion')?.checked === true,
+    };
+    return normalizeViewerSettings(raw);
+  }
+
+  function closeSettingsOverlay(event) {
+    const overlay = document.getElementById('settings-overlay');
+    if (!overlay) return;
+    if (event && event.target !== overlay) return;
+    overlay.classList.remove('open');
+  }
+
+  function openSettingsOverlay() {
+    const overlay = document.getElementById('settings-overlay');
+    if (!overlay) return;
+    fillSettingsForm();
+    overlay.classList.add('open');
+  }
+
+  function applySettingsFromForm() {
+    viewerSettings = readSettingsFromForm();
+    persistViewerSettings();
+    applyViewerSettingsToRuntime({ restartPolling: true, rerenderGraph: true, rerenderGrid: true });
+    updateTime();
+    closeSettingsOverlay();
+    showToast('Settings saved.', 'success', true);
+  }
+
+  function resetViewerSettings() {
+    viewerSettings = buildDefaultViewerSettings();
+    persistViewerSettings();
+    fillSettingsForm();
+    applyViewerSettingsToRuntime({ restartPolling: true, rerenderGraph: true, rerenderGrid: true });
+    updateTime();
+    showToast('Settings reset to defaults.', 'info', true);
+  }
+
+  function syncFilterPills(type) {
+    ['all','note','fact','journal','graph'].forEach(t => {
+      document.getElementById('stat-' + t).classList.toggle('active', (type === '' ? 'all' : type) === t);
+    });
+  }
+
   function setFilter(type) {
     graphVisible = false;
     const graphView = document.getElementById('graph-view');
@@ -8808,15 +9300,14 @@ function viewerHtml(): string {
     graphView.style.display = 'none';
     document.querySelector('.grid-wrap').style.display = 'grid';
     activeFilter = type;
-    ['all','note','fact','journal','graph'].forEach(t => {
-      document.getElementById('stat-' + t).classList.toggle('active', (type === '' ? 'all' : type) === t);
-    });
+    syncFilterPills(type);
     loadMemories();
   }
 
   function onSearch(val) {
     clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(loadMemories, 300);
+    const debounceMs = Math.min(Math.max(Number(viewerSettings?.search_debounce_ms ?? 300), 120), 1500);
+    searchTimeout = setTimeout(loadMemories, debounceMs);
   }
 
   function esc(str) {
@@ -8847,10 +9338,20 @@ function viewerHtml(): string {
   let lastPollSig = '';
   let pollIntervalId = null;
 
-  function startLivePolling() {
-    if (pollIntervalId) return;
+  function startLivePolling(forceRestart = false) {
+    if (forceRestart && pollIntervalId) {
+      clearInterval(pollIntervalId);
+      pollIntervalId = null;
+    }
     const liveEl = document.getElementById('live-indicator');
+    const pollingEnabled = !viewerSettings || viewerSettings.live_poll_enabled;
+    if (!pollingEnabled) {
+      if (liveEl) liveEl.style.display = 'none';
+      return;
+    }
+    if (pollIntervalId) return;
     if (liveEl) liveEl.style.display = 'flex';
+    const intervalMs = Math.min(Math.max((viewerSettings?.live_poll_interval_sec ?? 10) * 1000, 5000), 120000);
     pollIntervalId = setInterval(async () => {
       if (!TOKEN) return;
       try {
@@ -8863,7 +9364,7 @@ function viewerHtml(): string {
         }
         lastPollSig = sig;
       } catch {}
-    }, 10000);
+    }, intervalMs);
   }
 
   function syncGraphToolbarState() {
@@ -9011,7 +9512,7 @@ function viewerHtml(): string {
 
     try {
       const r = await apiFetch(BASE + '/api/graph');
-      if (r.status === 401) { doLogout(); return; }
+      if (r.status === 401) { doLogout(true); return; }
       if (!r.ok) throw new Error('failed');
       const data = await r.json();
       lastGraphData = {
@@ -9290,6 +9791,9 @@ function viewerHtml(): string {
       .text(d => (d.title || d.key || d.content || '').slice(0, isMobile ? 18 : 24));
 
     const applyGraphFocus = (focusId) => {
+      if (viewerSettings && viewerSettings.graph_focus_highlight === false) {
+        focusId = '';
+      }
       if (!focusId) {
         link.attr('stroke-opacity', linkOpacity);
         linkLabel.style('opacity', (d) => linkOpacity(d) >= 0.5 ? 1 : 0);
@@ -9406,6 +9910,7 @@ function viewerHtml(): string {
   document.addEventListener('keydown', e => {
     const key = String(e.key || '').toLowerCase();
     const shortcutsOpen = document.getElementById('shortcuts-overlay').classList.contains('open');
+    const settingsOpen = document.getElementById('settings-overlay').classList.contains('open');
     const expandOpen = document.getElementById('expand-overlay').classList.contains('open');
     const typing = isTypingTarget(e.target);
 
@@ -9428,6 +9933,14 @@ function viewerHtml(): string {
       if (key === 'escape') {
         e.preventDefault();
         closeShortcutsOverlay();
+      }
+      return;
+    }
+
+    if (settingsOpen) {
+      if (key === 'escape') {
+        e.preventDefault();
+        closeSettingsOverlay();
       }
       return;
     }
@@ -9458,6 +9971,11 @@ function viewerHtml(): string {
     if (key === 'g') {
       e.preventDefault();
       showGraph();
+      return;
+    }
+    if (key === 's') {
+      e.preventDefault();
+      openSettingsOverlay();
       return;
     }
     if (key === 'r') {
