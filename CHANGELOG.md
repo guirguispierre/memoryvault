@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Browser-friendly endpoint guides for `/mcp` and machine endpoints (`/auth/*`, `/api/*`, `/register`, `/token`, and `/.well-known/*`) when opened via normal browser navigation.
+- Human-readable `/mcp` landing page explaining MCP purpose, connection steps, and key discovery URLs.
+
+### Fixed
+- OAuth `/authorize` requests that include authorization flow parameters now correctly render the login/sign-up authorization screen instead of the generic endpoint guide page.
+
 ## [1.7.1] - 2026-02-27
 
 ### Added

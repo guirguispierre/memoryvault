@@ -4983,6 +4983,29 @@ function isLikelyMcpRootRequest(request: Request): boolean {
   return false;
 }
 
+function isBrowserDocumentRequest(request: Request): boolean {
+  if (request.method !== 'GET') return false;
+  const accept = (request.headers.get('Accept') ?? '').toLowerCase();
+  if (accept.includes('text/event-stream')) return false;
+  if (request.headers.has('MCP-Protocol-Version') || request.headers.has('mcp-protocol-version')) return false;
+  const fetchDest = (request.headers.get('Sec-Fetch-Dest') ?? '').toLowerCase();
+  const fetchMode = (request.headers.get('Sec-Fetch-Mode') ?? '').toLowerCase();
+  if (fetchDest === 'document' || fetchMode === 'navigate') return true;
+  return accept.includes('text/html');
+}
+
+function isOAuthAuthorizeNavigation(url: URL): boolean {
+  if (url.pathname !== '/authorize') return false;
+  const q = url.searchParams;
+  return q.has('response_type')
+    || q.has('client_id')
+    || q.has('redirect_uri')
+    || q.has('code_challenge')
+    || q.has('state')
+    || q.has('scope')
+    || q.has('resource');
+}
+
 async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const body = await request.json();
@@ -8356,11 +8379,569 @@ function viewerHtml(): string {
 </html>`;
 }
 
+function mcpLandingHtml(url: URL): string {
+  const origin = url.origin;
+  const mcpEndpoint = `${origin}/mcp`;
+  const viewerEndpoint = `${origin}/view`;
+  const authzMetadata = `${origin}/.well-known/oauth-authorization-server`;
+  const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemoryVault MCP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #070b10;
+    --bg2: #101824;
+    --line: #234061;
+    --text: #d8e8f8;
+    --dim: #6f8ea9;
+    --amber: #f0a500;
+    --teal: #00c8b4;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--mono);
+    color: var(--text);
+    background:
+      radial-gradient(70% 50% at 12% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
+      radial-gradient(60% 60% at 100% 100%, rgba(240, 165, 0, 0.12), transparent 70%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2rem 1.2rem 2.6rem;
+  }
+  .title {
+    font-family: var(--sans);
+    font-size: clamp(1.55rem, 3vw, 2.5rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.35rem;
+  }
+  .title span { color: var(--amber); }
+  .sub {
+    margin: 0 0 1.4rem;
+    color: var(--dim);
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 1rem;
+  }
+  .card {
+    border: 1px solid var(--line);
+    background: rgba(16, 24, 36, 0.88);
+    padding: 1rem 1rem 0.95rem;
+  }
+  .card h2 {
+    margin: 0 0 0.65rem;
+    color: var(--amber);
+    font-size: 0.8rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  p, li {
+    margin: 0;
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 0.86rem;
+  }
+  ul, ol {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: 0.45rem;
+  }
+  .actions {
+    margin-top: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+  .btn {
+    border: 1px solid var(--line);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.72rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    padding: 0.48rem 0.62rem;
+    display: inline-block;
+  }
+  .btn.primary {
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .endpoint {
+    margin-top: 0.5rem;
+    display: block;
+    color: var(--teal);
+    background: rgba(7, 11, 16, 0.85);
+    border: 1px solid var(--line);
+    padding: 0.45rem 0.5rem;
+    font-size: 0.76rem;
+    overflow-wrap: anywhere;
+  }
+  .small { color: var(--dim); font-size: 0.72rem; }
+  code {
+    font-family: var(--mono);
+    color: var(--teal);
+    font-size: 0.8rem;
+  }
+  @media (max-width: 860px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <h1 class="title">MEMORY<span>VAULT</span> MCP</h1>
+    <p class="sub">Human Guide For The MCP Endpoint</p>
+
+    <div class="grid">
+      <section class="card">
+        <h2>What This MCP Does</h2>
+        <p>This server is a personal memory graph for AI clients. It stores memories (notes, facts, journal entries), links related memories, scores confidence/importance, supports snapshots, and exposes these capabilities as MCP tools.</p>
+        <div class="actions">
+          <a class="btn primary" href="${viewerEndpoint}">Open Web Viewer</a>
+          <a class="btn" href="${authzMetadata}">OAuth Metadata</a>
+          <a class="btn" href="${resourceMetadata}">Resource Metadata</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Connect From AI Tools</h2>
+        <ol>
+          <li>Set your MCP server URL to <code>${mcpEndpoint}</code>.</li>
+          <li>Leave API key blank to use OAuth sign-in.</li>
+          <li>Authorize once; your client receives access/refresh tokens.</li>
+          <li>Call MCP methods like <code>tools/list</code> and <code>tools/call</code>.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2>Direct Endpoints</h2>
+        <p class="small">MCP endpoint (JSON-RPC / SSE):</p>
+        <a class="endpoint" href="${mcpEndpoint}">${mcpEndpoint}</a>
+        <p class="small" style="margin-top:0.7rem">Viewer UI:</p>
+        <a class="endpoint" href="${viewerEndpoint}">${viewerEndpoint}</a>
+      </section>
+
+      <section class="card">
+        <h2>Why You See This Page</h2>
+        <p>Browser navigation to <code>/mcp</code> now shows this guide. Programmatic MCP requests still receive OAuth challenge/auth-required responses unless authorized.</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+type EndpointGuide = {
+  title: string;
+  subtitle: string;
+  endpointPath: string;
+  methods: string;
+  auth: string;
+  details: string[];
+};
+
+function endpointGuideForPath(pathname: string): EndpointGuide | null {
+  if (pathname === '/register') {
+    return {
+      title: 'OAuth Client Registration',
+      subtitle: 'Dynamic client registration endpoint',
+      endpointPath: '/register',
+      methods: 'POST',
+      auth: 'No bearer token required.',
+      details: [
+        'Registers an OAuth client for MCP access.',
+        'Expected body includes redirect_uris and token_endpoint_auth_method.',
+        'Returns client_id and optional client_secret metadata.',
+      ],
+    };
+  }
+  if (pathname === '/authorize') {
+    return {
+      title: 'OAuth Authorization',
+      subtitle: 'Authorization code + PKCE entry point',
+      endpointPath: '/authorize',
+      methods: 'GET, POST',
+      auth: 'User authentication is performed here (signup/login/token mode).',
+      details: [
+        'Starts or completes the OAuth authorization flow.',
+        'Returns an authorization code via redirect_uri.',
+        'Used by MCP clients during first-time connection.',
+      ],
+    };
+  }
+  if (pathname === '/token') {
+    return {
+      title: 'OAuth Token Exchange',
+      subtitle: 'Authorization code / refresh token exchange',
+      endpointPath: '/token',
+      methods: 'POST',
+      auth: 'Client credentials vary by client type; PKCE is required for authorization_code.',
+      details: [
+        'Exchanges authorization codes for access and refresh tokens.',
+        'Also rotates refresh tokens using grant_type=refresh_token.',
+        'Returns OAuth-compliant token responses in JSON.',
+      ],
+    };
+  }
+  if (pathname === '/.well-known/oauth-authorization-server' || pathname === '/.well-known/openid-configuration') {
+    return {
+      title: 'Authorization Server Metadata',
+      subtitle: 'OAuth discovery document',
+      endpointPath: '/.well-known/oauth-authorization-server',
+      methods: 'GET',
+      auth: 'Public metadata endpoint.',
+      details: [
+        'Advertises authorization, token, and registration endpoints.',
+        'Used by MCP and OAuth clients for auto-discovery.',
+        'Includes supported grants, auth methods, and code challenge methods.',
+      ],
+    };
+  }
+  if (pathname === '/.well-known/oauth-protected-resource' || pathname.startsWith('/.well-known/oauth-protected-resource/')) {
+    return {
+      title: 'Protected Resource Metadata',
+      subtitle: 'Resource metadata for MCP protected endpoints',
+      endpointPath: '/.well-known/oauth-protected-resource',
+      methods: 'GET',
+      auth: 'Public metadata endpoint.',
+      details: [
+        'Describes which authorization server protects this resource.',
+        'Used in WWW-Authenticate challenges for MCP endpoints.',
+        'The /mcp-specific variant resolves metadata for that resource path.',
+      ],
+    };
+  }
+  if (pathname === '/auth/signup') {
+    return {
+      title: 'User Signup API',
+      subtitle: 'Create account + primary brain',
+      endpointPath: '/auth/signup',
+      methods: 'POST',
+      auth: 'No token required.',
+      details: [
+        'Creates a user account from email/password.',
+        'Optionally accepts brain_name for the initial memory brain.',
+        'Returns access_token and refresh_token on success.',
+      ],
+    };
+  }
+  if (pathname === '/auth/login') {
+    return {
+      title: 'User Login API',
+      subtitle: 'Credential login endpoint',
+      endpointPath: '/auth/login',
+      methods: 'POST',
+      auth: 'No token required.',
+      details: [
+        'Authenticates user email/password credentials.',
+        'Returns access_token and refresh_token.',
+        'Used by the web viewer and OAuth-assisted flows.',
+      ],
+    };
+  }
+  if (pathname === '/auth/refresh') {
+    return {
+      title: 'Token Refresh API',
+      subtitle: 'Rotate session using refresh token',
+      endpointPath: '/auth/refresh',
+      methods: 'POST',
+      auth: 'No access token required; requires refresh_token in body.',
+      details: [
+        'Issues new access and refresh tokens.',
+        'Revokes/replaces previous refresh token for session safety.',
+        'Used automatically by the web viewer when access token expires.',
+      ],
+    };
+  }
+  if (pathname === '/auth/logout') {
+    return {
+      title: 'Logout API',
+      subtitle: 'Revoke a refresh token session',
+      endpointPath: '/auth/logout',
+      methods: 'POST',
+      auth: 'No access token required; requires refresh_token in body.',
+      details: [
+        'Revokes session represented by the provided refresh token.',
+        'Used when user signs out from the web viewer.',
+      ],
+    };
+  }
+  if (pathname === '/auth/me') {
+    return {
+      title: 'Current User API',
+      subtitle: 'Returns authenticated user + brain context',
+      endpointPath: '/auth/me',
+      methods: 'GET',
+      auth: 'Requires Authorization: Bearer <access_token>.',
+      details: [
+        'Validates current access token.',
+        'Returns session-scoped identity and current brain context.',
+      ],
+    };
+  }
+  if (pathname === '/auth/sessions') {
+    return {
+      title: 'Session List API',
+      subtitle: 'List active sessions for the current user',
+      endpointPath: '/auth/sessions',
+      methods: 'GET',
+      auth: 'Requires Authorization: Bearer <access_token>.',
+      details: [
+        'Returns active sessions bound to the authenticated user.',
+        'Used for account/session management and audit.',
+      ],
+    };
+  }
+  if (pathname === '/auth/sessions/revoke') {
+    return {
+      title: 'Session Revoke API',
+      subtitle: 'Revoke one or more active sessions',
+      endpointPath: '/auth/sessions/revoke',
+      methods: 'POST',
+      auth: 'Requires Authorization: Bearer <access_token>.',
+      details: [
+        'Revokes target session(s), including all-other-sessions mode.',
+        'Used to lock out stale or compromised sessions.',
+      ],
+    };
+  }
+  if (pathname === '/api/memories') {
+    return {
+      title: 'Memories API',
+      subtitle: 'List/search/create memory records',
+      endpointPath: '/api/memories',
+      methods: 'GET, POST',
+      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      details: [
+        'Returns memory records scoped to your brain.',
+        'Supports type and search filtering via query params.',
+        'Backs both web UI and MCP tool operations.',
+      ],
+    };
+  }
+  if (pathname === '/api/tools') {
+    return {
+      title: 'Tool Catalog API',
+      subtitle: 'List MCP tools exposed by this server',
+      endpointPath: '/api/tools',
+      methods: 'GET',
+      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      details: [
+        'Returns the tool metadata available to MCP clients.',
+        'Primarily useful for diagnostics and integration checks.',
+      ],
+    };
+  }
+  if (pathname === '/api/graph') {
+    return {
+      title: 'Memory Graph API',
+      subtitle: 'Graph nodes + explicit/inferred links',
+      endpointPath: '/api/graph',
+      methods: 'GET',
+      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      details: [
+        'Returns graph nodes, explicit edges, and inferred edges.',
+        'Used by the graph visualization in /view.',
+      ],
+    };
+  }
+  if (pathname.startsWith('/api/links/')) {
+    return {
+      title: 'Memory Links API',
+      subtitle: 'Get links for a specific memory id',
+      endpointPath: '/api/links/:memoryId',
+      methods: 'GET',
+      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      details: [
+        'Returns outbound/inbound links for one memory.',
+        'Path parameter is the target memory id.',
+      ],
+    };
+  }
+  return null;
+}
+
+function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
+  const origin = url.origin;
+  const mcpEndpoint = `${origin}/mcp`;
+  const viewerEndpoint = `${origin}/view`;
+  const endpointUrl = guide.endpointPath.includes(':')
+    ? `${origin}${guide.endpointPath}`
+    : `${origin}${guide.endpointPath}`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${guide.title} · MemoryVault</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #070b10;
+    --bg2: #101824;
+    --line: #234061;
+    --text: #d8e8f8;
+    --dim: #6f8ea9;
+    --amber: #f0a500;
+    --teal: #00c8b4;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--mono);
+    color: var(--text);
+    background:
+      radial-gradient(70% 50% at 12% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
+      radial-gradient(60% 60% at 100% 100%, rgba(240, 165, 0, 0.12), transparent 70%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  .wrap {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2rem 1.2rem 2.6rem;
+  }
+  .title {
+    font-family: var(--sans);
+    font-size: clamp(1.4rem, 3vw, 2.2rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+  .title span { color: var(--amber); }
+  .sub {
+    margin: 0.35rem 0 1.2rem;
+    color: var(--dim);
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.95rem;
+  }
+  .card {
+    border: 1px solid var(--line);
+    background: rgba(16, 24, 36, 0.88);
+    padding: 0.95rem 1rem;
+  }
+  .span-2 { grid-column: 1 / -1; }
+  .label {
+    color: var(--amber);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin: 0 0 0.45rem;
+  }
+  p, li {
+    margin: 0;
+    line-height: 1.6;
+    font-size: 0.84rem;
+  }
+  ul {
+    margin: 0;
+    padding-left: 1.05rem;
+    display: grid;
+    gap: 0.4rem;
+  }
+  .endpoint {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--teal);
+    background: rgba(7, 11, 16, 0.85);
+    border: 1px solid var(--line);
+    padding: 0.45rem 0.5rem;
+    font-size: 0.76rem;
+    overflow-wrap: anywhere;
+    text-decoration: none;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    margin-top: 0.8rem;
+  }
+  .btn {
+    border: 1px solid var(--line);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.45rem 0.6rem;
+  }
+  .btn.primary { border-color: var(--amber); color: var(--amber); }
+  code { color: var(--teal); }
+  @media (max-width: 800px) {
+    .grid { grid-template-columns: 1fr; }
+    .span-2 { grid-column: auto; }
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <h1 class="title">MEMORY<span>VAULT</span> Endpoint Guide</h1>
+    <p class="sub">${guide.title}</p>
+    <div class="grid">
+      <section class="card span-2">
+        <p class="label">Purpose</p>
+        <p>${guide.subtitle}</p>
+      </section>
+      <section class="card">
+        <p class="label">Endpoint</p>
+        <a class="endpoint" href="${endpointUrl}">${endpointUrl}</a>
+      </section>
+      <section class="card">
+        <p class="label">Methods</p>
+        <p><code>${guide.methods}</code></p>
+        <p class="label" style="margin-top:0.7rem">Auth</p>
+        <p>${guide.auth}</p>
+      </section>
+      <section class="card span-2">
+        <p class="label">How To Use</p>
+        <ul>
+          ${guide.details.map((item) => `<li>${item}</li>`).join('')}
+        </ul>
+        <div class="actions">
+          <a class="btn primary" href="${mcpEndpoint}">MCP Guide</a>
+          <a class="btn" href="${viewerEndpoint}">Open Viewer</a>
+          <a class="btn" href="${origin}/.well-known/oauth-authorization-server">OAuth Metadata</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/mcp/')) {
-      url.pathname = url.pathname.slice('/mcp'.length) || '/';
+      url.pathname = url.pathname === '/mcp/' ? '/mcp' : (url.pathname.slice('/mcp'.length) || '/');
     }
 
     if (request.method === 'OPTIONS') {
@@ -8385,6 +8966,22 @@ export default {
       return new Response(viewerHtml(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
+    }
+
+    if (isBrowserDocumentRequest(request)) {
+      if (url.pathname === '/mcp') {
+        return new Response(mcpLandingHtml(url), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+      if (!isOAuthAuthorizeNavigation(url)) {
+        const guide = endpointGuideForPath(url.pathname);
+        if (guide) {
+          return new Response(endpointGuideHtml(url, guide), {
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          });
+        }
+      }
     }
 
     if (url.pathname === '/.well-known/oauth-authorization-server' || url.pathname === '/.well-known/openid-configuration') {
