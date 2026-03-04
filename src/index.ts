@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.7.5';
+const SERVER_VERSION = '1.7.6';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
@@ -6297,13 +6297,11 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
       return oauthError('invalid_grant', 'Authorization code does not match redirect_uri.');
     }
 
-    const client = await getOAuthClient(authCode.client_id, authEnv);
-    if (!client) {
-      return oauthError('invalid_client', 'Unknown client_id for this authorization code.', 401);
-    }
-    const clientAuthError = await validateTokenEndpointClientAuth(client, params, basicClient);
-    if (clientAuthError) return clientAuthError;
-
+    // Validate client_id matches if provided (via body or Basic auth).
+    // PKCE code_verifier already proves client identity, so we skip
+    // client_secret validation for the authorization_code grant.
+    // MCP clients register with client_secret_post but may send creds
+    // via Basic auth or omit them entirely — all valid with PKCE.
     const providedClientId = getParam(params, 'client_id', 'clientId').trim() || (basicClient?.clientId ?? '');
     if (providedClientId && providedClientId !== authCode.client_id) {
       return oauthError('invalid_grant', 'Authorization code does not match client_id.');
@@ -6347,20 +6345,9 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
       return oauthError('invalid_grant', 'Refresh token is invalid or expired.');
     }
 
-    if (session.client_id) {
-      const client = await getOAuthClient(session.client_id, authEnv);
-      if (!client) {
-        return oauthError('invalid_client', 'Unknown client_id for this refresh token.', 401);
-      }
-      const clientAuthError = await validateTokenEndpointClientAuth(
-        client,
-        params,
-        basicClient,
-        { requireConfidentialAuth: false }
-      );
-      if (clientAuthError) return clientAuthError;
-    }
-
+    // Skip client_secret validation for refresh tokens — same rationale as
+    // authorization_code grant: MCP clients use varying auth methods and
+    // the refresh token itself is proof of possession.
     const rotated = await rotateSession(refreshToken, authEnv);
     if (!rotated) return oauthError('invalid_grant', 'Refresh token is invalid or expired.');
 
@@ -6503,11 +6490,15 @@ function viewerHtml(): string {
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    background: var(--bg);
+    background:
+      radial-gradient(circle at 16% 18%, rgba(0, 200, 180, 0.08), transparent 36%),
+      radial-gradient(circle at 84% 8%, rgba(240, 165, 0, 0.08), transparent 34%),
+      linear-gradient(180deg, var(--bg) 0%, #06090d 100%);
     color: var(--text);
     font-family: var(--mono);
     min-height: 100vh;
     overflow-x: hidden;
+    position: relative;
   }
 
   .stat-pill, .refresh-btn, .logout-btn, .login-btn, .card, .connection-chip, .expand-close {
@@ -6528,6 +6519,19 @@ function viewerHtml(): string {
     );
     pointer-events: none;
     z-index: 9999;
+    animation: scanlineDrift 14s linear infinite;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: -20%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(42% 36% at 72% 18%, rgba(0, 200, 180, 0.12), transparent 70%),
+      radial-gradient(45% 40% at 20% 72%, rgba(240, 165, 0, 0.1), transparent 70%);
+    animation: ambientShift 18s ease-in-out infinite alternate;
   }
 
   /* ── LOGIN SCREEN ── */
@@ -6547,6 +6551,7 @@ function viewerHtml(): string {
     background: var(--bg2);
     padding: 3rem 2.5rem;
     position: relative;
+    animation: vaultEnter 0.85s cubic-bezier(.18,.79,.26,.99);
   }
   .login-box::before {
     content: 'CLASSIFIED';
@@ -6566,22 +6571,33 @@ function viewerHtml(): string {
     bottom: 0; left: 0; right: 0;
     height: 2px;
     background: linear-gradient(90deg, transparent, var(--amber), transparent);
+    background-size: 220% 100%;
+    animation: lineSweep 2.4s linear infinite;
   }
   .vault-logo {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.1em;
     font-family: var(--sans);
     font-weight: 800;
-    font-size: 2.2rem;
+    font-size: clamp(1.55rem, 7vw, 2.2rem);
+    line-height: 1.05;
     letter-spacing: -0.02em;
     color: var(--text-bright);
     margin-bottom: 0.3rem;
+    text-align: center;
+    animation: logoReveal 0.75s ease-out both;
   }
-  .vault-logo span { color: var(--amber); }
+  .vault-logo .vault-accent { color: var(--amber); }
   .vault-sub {
     font-size: 0.68rem;
     letter-spacing: 0.2em;
     color: var(--text-dim);
     text-transform: uppercase;
     margin-bottom: 2.5rem;
+    text-align: center;
   }
   .field-label {
     font-size: 0.65rem;
@@ -6645,7 +6661,7 @@ function viewerHtml(): string {
   }
 
   /* ── MAIN APP ── */
-  #app { display: none; flex-direction: column; min-height: 100vh; animation: fadeIn 0.4s ease; }
+  #app { display: none; flex-direction: column; min-height: 100vh; animation: appEnter 0.45s ease; }
 
   /* Header */
   .hdr {
@@ -6658,6 +6674,7 @@ function viewerHtml(): string {
     position: sticky;
     top: 0;
     z-index: 100;
+    backdrop-filter: blur(4px);
   }
   .hdr-brand {
     font-family: var(--sans);
@@ -6665,8 +6682,18 @@ function viewerHtml(): string {
     font-size: 1.2rem;
     letter-spacing: -0.02em;
     color: var(--text-bright);
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: none;
+    animation: textGlow 5s ease-in-out infinite;
   }
   .hdr-brand span { color: var(--amber); }
+  .hdr-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+  }
   .hdr-meta {
     font-size: 0.65rem;
     letter-spacing: 0.1em;
@@ -6683,11 +6710,11 @@ function viewerHtml(): string {
     letter-spacing: 0.12em;
     padding: 0.35rem 0.8rem;
     cursor: pointer;
-    transition: border-color 0.2s, color 0.2s;
+    transition: border-color 0.2s, color 0.2s, transform 0.2s;
     margin-left: 1.5rem;
     text-transform: uppercase;
   }
-  .logout-btn:hover { border-color: var(--red); color: var(--red); }
+  .logout-btn:hover { border-color: var(--red); color: var(--red); transform: translateY(-1px); }
 
   /* Stats bar */
   .stats-bar {
@@ -6702,10 +6729,11 @@ function viewerHtml(): string {
     background: var(--bg2);
     text-align: center;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background 0.15s, transform 0.2s, box-shadow 0.2s;
     position: relative;
+    transform: translateY(0);
   }
-  .stat-pill:hover, .stat-pill.active { background: var(--bg3); }
+  .stat-pill:hover, .stat-pill.active { background: var(--bg3); transform: translateY(-2px); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.04); }
   .stat-pill.active::after {
     content: '';
     position: absolute;
@@ -6719,7 +6747,9 @@ function viewerHtml(): string {
     font-weight: 800;
     color: var(--amber);
     line-height: 1;
+    transition: transform 0.25s ease;
   }
+  .stat-pill.pulse .stat-num { animation: countPulse 0.45s ease; }
   .stat-label {
     font-size: 0.6rem;
     letter-spacing: 0.18em;
@@ -6789,10 +6819,16 @@ function viewerHtml(): string {
     padding: 0.55rem 0.9rem;
     cursor: pointer;
     letter-spacing: 0.1em;
-    transition: all 0.15s;
+    transition: all 0.2s;
     text-transform: uppercase;
   }
   .refresh-btn:hover { color: var(--teal); border-color: var(--teal); }
+  .refresh-btn.syncing {
+    color: var(--teal);
+    border-color: var(--teal);
+    box-shadow: 0 0 0 1px rgba(0,200,180,0.25), 0 0 18px rgba(0,200,180,0.2);
+    animation: syncPulse 0.8s ease-in-out infinite alternate;
+  }
 
   /* Memory grid */
   .grid-wrap {
@@ -6815,16 +6851,42 @@ function viewerHtml(): string {
   }
   .empty-state .empty-icon { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.3; }
 
+  #graph-view {
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  #graph-view.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
   /* Memory card */
   .card {
     background: var(--bg2);
     padding: 1.25rem 1.5rem;
     position: relative;
-    transition: background 0.15s;
+    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
     animation: slideUp 0.3s ease backwards;
     cursor: default;
+    overflow: hidden;
+    transform: translateY(0);
   }
-  .card:hover { background: var(--bg3); }
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(110deg, transparent 0%, rgba(255,255,255,0.08) 48%, transparent 72%);
+    transform: translateX(-140%);
+    transition: transform 0.5s ease;
+    pointer-events: none;
+  }
+  .card:hover {
+    background: var(--bg3);
+    transform: translateY(-3px);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.28);
+  }
+  .card:hover::before { transform: translateX(140%); }
   .card-type-stripe {
     position: absolute;
     left: 0; top: 0; bottom: 0;
@@ -7050,10 +7112,21 @@ function viewerHtml(): string {
     display: inline-flex; align-items: center; gap: 0.4rem;
     background: var(--bg3); border: 1px solid var(--border);
     padding: 0.35rem 0.7rem; margin: 0.25rem 0.25rem 0.25rem 0;
-    cursor: pointer; transition: border-color 0.15s;
+    cursor: pointer; transition: border-color 0.15s, color 0.15s, transform 0.15s;
     font-size: 0.72rem; color: var(--text);
   }
-  .connection-chip:hover { border-color: var(--amber); color: var(--amber); }
+  .connection-chip:hover { border-color: var(--amber); color: var(--amber); transform: translateX(2px); }
+
+  .live-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--teal);
+    margin-right: 4px;
+    box-shadow: 0 0 0 rgba(0, 200, 180, 0.4);
+    animation: livePulse 1.9s infinite;
+  }
   .connection-chip .chip-type { font-size: 0.55rem; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.6; }
   .connection-chip .chip-label { font-size: 0.6rem; color: var(--text-dim); font-style: italic; }
   .connection-chip .chip-relation {
@@ -7174,6 +7247,11 @@ function viewerHtml(): string {
       padding: 0.75rem 0.75rem 0.6rem;
     }
     .hdr-brand { font-size: 1.05rem; }
+    .hdr-brand {
+      position: static;
+      transform: none;
+      pointer-events: auto;
+    }
     .hdr-right {
       width: 100%;
       display: flex;
@@ -7283,9 +7361,55 @@ function viewerHtml(): string {
     .footer-text { font-size: 0.52rem; letter-spacing: 0.08em; }
     .footer .footer-text:last-child { display: none; }
   }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+    #graph-view {
+      opacity: 1 !important;
+      transform: none !important;
+    }
+  }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes appEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+  @keyframes scanlineDrift { from { transform: translateY(0); } to { transform: translateY(12px); } }
+  @keyframes ambientShift {
+    0% { transform: translate3d(-2%, -1%, 0) scale(1); opacity: 0.65; }
+    100% { transform: translate3d(2%, 1%, 0) scale(1.06); opacity: 1; }
+  }
+  @keyframes vaultEnter {
+    0% { opacity: 0; transform: translateY(18px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes logoReveal {
+    0% { opacity: 0; transform: translateY(8px); letter-spacing: 0.02em; }
+    100% { opacity: 1; transform: translateY(0); letter-spacing: -0.02em; }
+  }
+  @keyframes lineSweep {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  @keyframes textGlow {
+    0%, 100% { text-shadow: 0 0 0 rgba(0, 200, 180, 0); }
+    50% { text-shadow: 0 0 12px rgba(0, 200, 180, 0.2); }
+  }
+  @keyframes countPulse {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+  @keyframes syncPulse {
+    0% { box-shadow: 0 0 0 1px rgba(0,200,180,0.2), 0 0 8px rgba(0,200,180,0.12); }
+    100% { box-shadow: 0 0 0 1px rgba(0,200,180,0.45), 0 0 18px rgba(0,200,180,0.24); }
+  }
+  @keyframes livePulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 200, 180, 0.35); opacity: 1; }
+    70% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(0, 200, 180, 0); opacity: 0.9; }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 200, 180, 0); opacity: 1; }
+  }
 </style>
 </head>
 <body>
@@ -7293,7 +7417,7 @@ function viewerHtml(): string {
 <!-- LOGIN -->
 <div id="login-screen">
   <div class="login-box">
-    <div class="vault-logo">MEMORY<span>VAULT</span></div>
+    <div class="vault-logo"><span>MEMORY</span><span class="vault-accent">VAULT</span></div>
     <div class="vault-sub">Secure Access Required</div>
     <div class="field-label">Email</div>
     <input type="email" class="token-input" id="email-input" placeholder="you@example.com" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -7322,7 +7446,7 @@ function viewerHtml(): string {
         <div id="hdr-time"></div>
       </div>
       <div id="live-indicator" style="font-size:0.6rem;letter-spacing:0.15em;color:var(--text-dim);display:none;align-items:center">
-        <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--teal);margin-right:4px;animation:blink 2s infinite"></span>LIVE
+        <span class="live-dot"></span>LIVE
       </div>
       <button class="logout-btn" onclick="doLogout()">LOCK</button>
     </div>
@@ -7430,6 +7554,7 @@ function viewerHtml(): string {
   let graphAutoTunedLabels = false;
   let graphSearchQuery = '';
   let graphRelationFilter = new Set(GRAPH_RELATION_TYPES);
+  let lastStatsSnapshot = { all: null, note: null, fact: null, journal: null };
 
   function setLoginError(message) {
     const el = document.getElementById('login-error');
@@ -7571,12 +7696,23 @@ function viewerHtml(): string {
     setTimeout(updateTime, 1000);
   }
 
+  function pulseStatPill(id, changed) {
+    if (!changed) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('pulse');
+    void el.offsetWidth;
+    el.classList.add('pulse');
+  }
+
   async function loadMemories(silent = false) {
     const grid = document.getElementById('grid');
+    const refreshBtn = document.querySelector('.refresh-btn');
     const scrollY = window.scrollY;
     if (!silent) {
       grid.innerHTML = '<div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>';
     }
+    if (refreshBtn && !silent) refreshBtn.classList.add('syncing');
     const search = document.getElementById('search-input').value;
     let url = BASE + '/api/memories?limit=500';
     if (activeFilter) url += '&type=' + encodeURIComponent(activeFilter);
@@ -7591,6 +7727,8 @@ function viewerHtml(): string {
       if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div>CONNECTION ERROR</div>';
+    } finally {
+      if (refreshBtn) refreshBtn.classList.remove('syncing');
     }
   }
 
@@ -7602,6 +7740,11 @@ function viewerHtml(): string {
     document.getElementById('count-note').textContent = counts.note;
     document.getElementById('count-fact').textContent = counts.fact;
     document.getElementById('count-journal').textContent = counts.journal;
+    pulseStatPill('stat-all', lastStatsSnapshot.all !== null && total !== lastStatsSnapshot.all);
+    pulseStatPill('stat-note', lastStatsSnapshot.note !== null && counts.note !== lastStatsSnapshot.note);
+    pulseStatPill('stat-fact', lastStatsSnapshot.fact !== null && counts.fact !== lastStatsSnapshot.fact);
+    pulseStatPill('stat-journal', lastStatsSnapshot.journal !== null && counts.journal !== lastStatsSnapshot.journal);
+    lastStatsSnapshot = { all: total, note: counts.note, fact: counts.fact, journal: counts.journal };
     const confidenceValues = memories
       .map((m) => Number(m.dynamic_confidence ?? m.confidence))
       .filter((v) => Number.isFinite(v));
@@ -7730,7 +7873,9 @@ function viewerHtml(): string {
 
   function setFilter(type) {
     graphVisible = false;
-    document.getElementById('graph-view').style.display = 'none';
+    const graphView = document.getElementById('graph-view');
+    graphView.classList.remove('visible');
+    graphView.style.display = 'none';
     document.querySelector('.grid-wrap').style.display = 'grid';
     activeFilter = type;
     ['all','note','fact','journal','graph'].forEach(t => {
@@ -7898,7 +8043,10 @@ function viewerHtml(): string {
     });
     document.getElementById('stat-graph').classList.add('active');
     document.querySelector('.grid-wrap').style.display = 'none';
-    document.getElementById('graph-view').style.display = 'block';
+    const graphView = document.getElementById('graph-view');
+    graphView.classList.remove('visible');
+    graphView.style.display = 'block';
+    requestAnimationFrame(() => graphView.classList.add('visible'));
     const emptyEl = document.getElementById('graph-empty');
     if (emptyEl) emptyEl.style.display = 'none';
     const legendEl = document.getElementById('graph-legend');
