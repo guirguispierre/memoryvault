@@ -4,7 +4,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.8.0';
+const SERVER_VERSION = '1.8.1';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
@@ -1478,6 +1478,26 @@ const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
 };
 
 const TOOL_CHANGELOG: ToolChangelogEntry[] = [
+  {
+    id: 'release-1.8.1',
+    version: '1.8.1',
+    released_at: 1772666466,
+    summary: 'Viewer release: settings version/changelog plus stricter write permissions.',
+    changes: [
+      {
+        type: 'updated',
+        target: 'auth',
+        name: 'Read-only human sessions',
+        description: 'Human email/password sessions are now read-only for memory mutations; AI-agent OAuth sessions retain write access.',
+      },
+      {
+        type: 'updated',
+        target: 'endpoint',
+        name: 'GET /view settings',
+        description: 'Added in-settings version badge and in-app changelog modal powered by tool_changelog.',
+      },
+    ],
+  },
   {
     id: 'graph-tools-1.8.0',
     version: '1.8.0',

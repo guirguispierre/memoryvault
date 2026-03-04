@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-03-04
+
 ### Added
 - Human-friendly root landing page at `/` for browser navigation.
 - New **Dev Section** on the root page that lists sub-sites and endpoint surfaces with method/auth summaries.
