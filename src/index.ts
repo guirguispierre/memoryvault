@@ -78,6 +78,7 @@ type AuthContext = {
   brainId: string;
   userId: string | null;
   sessionId: string | null;
+  clientId: string | null;
 };
 
 type AccessTokenPayload = {
@@ -88,6 +89,11 @@ type AccessTokenPayload = {
   iat: number;
   exp: number;
 };
+
+function canMutateMemories(authCtx: AuthContext): boolean {
+  if (authCtx.kind === 'legacy') return true;
+  return typeof authCtx.clientId === 'string' && authCtx.clientId.trim().length > 0;
+}
 
 function parseBearerToken(request: Request): string | null {
   const auth = request.headers.get('Authorization');
@@ -294,7 +300,7 @@ async function authenticateRequest(request: Request, env: Env): Promise<AuthCont
   const token = parseBearerToken(request);
   if (!token) return null;
   if (token === env.AUTH_SECRET) {
-    return { kind: 'legacy', brainId: LEGACY_BRAIN_ID, userId: null, sessionId: null };
+    return { kind: 'legacy', brainId: LEGACY_BRAIN_ID, userId: null, sessionId: null, clientId: 'legacy_auth_secret' };
   }
 
   const authEnv = withPrimaryDbEnv(env);
@@ -302,7 +308,7 @@ async function authenticateRequest(request: Request, env: Env): Promise<AuthCont
   if (!payload) return null;
   const ts = now();
   const row = await authEnv.DB.prepare(
-    `SELECT s.id, s.user_id, s.brain_id
+    `SELECT s.id, s.user_id, s.brain_id, s.client_id
      FROM auth_sessions s
      JOIN brain_memberships bm ON bm.user_id = s.user_id AND bm.brain_id = s.brain_id
      WHERE s.id = ?
@@ -311,10 +317,10 @@ async function authenticateRequest(request: Request, env: Env): Promise<AuthCont
        AND s.expires_at > ?
        AND s.revoked_at IS NULL
      LIMIT 1`
-  ).bind(payload.sid, payload.sub, payload.bid, ts).first<{ id: string; user_id: string; brain_id: string }>();
+  ).bind(payload.sid, payload.sub, payload.bid, ts).first<{ id: string; user_id: string; brain_id: string; client_id: string | null }>();
   if (!row) return null;
   await authEnv.DB.prepare('UPDATE auth_sessions SET used_at = ? WHERE id = ?').bind(ts, row.id).run();
-  return { kind: 'user', brainId: row.brain_id, userId: row.user_id, sessionId: row.id };
+  return { kind: 'user', brainId: row.brain_id, userId: row.user_id, sessionId: row.id, clientId: row.client_id ?? null };
 }
 
 async function isRateLimited(ip: string, env: Env, limit = 10): Promise<boolean> {
@@ -2155,6 +2161,30 @@ const TOOLS: ToolDefinition[] = [
     },
   },
 ];
+
+const MUTATING_TOOL_NAMES = new Set<string>([
+  'memory_save',
+  'memory_update',
+  'memory_delete',
+  'memory_link',
+  'memory_unlink',
+  'memory_consolidate',
+  'memory_forget',
+  'memory_reinforce',
+  'memory_decay',
+  'objective_set',
+  'memory_conflict_resolve',
+  'memory_entity_resolve',
+  'memory_source_trust_set',
+  'brain_policy_set',
+  'brain_snapshot_create',
+  'brain_snapshot_restore',
+  'memory_watch',
+]);
+
+function isMutatingTool(toolName: string): boolean {
+  return MUTATING_TOOL_NAMES.has(toolName);
+}
 
 type MemoryGraphNode = {
   id: string;
@@ -5456,11 +5486,31 @@ async function processMcpBody(
   }
 
   if (method === 'tools/list') {
-    return { jsonrpc: '2.0', id, result: { tools: TOOLS } };
+    const tools = canMutateMemories(authCtx)
+      ? TOOLS
+      : TOOLS.filter((tool) => !isMutatingTool(tool.name));
+    return { jsonrpc: '2.0', id, result: { tools } };
   }
 
   if (method === 'tools/call') {
-    const { name, arguments: toolArgs = {} } = params as { name: string; arguments?: ToolArgs };
+    const { name, arguments: toolArgs = {} } = params as { name?: unknown; arguments?: ToolArgs };
+    if (typeof name !== 'string' || !name.trim()) {
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32602, message: 'Invalid params: tool name is required.' },
+      };
+    }
+    if (!canMutateMemories(authCtx) && isMutatingTool(name)) {
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: {
+          code: -32003,
+          message: 'Forbidden: this session is read-only. Use an OAuth agent session to modify memories.',
+        },
+      };
+    }
     const result = await callTool(name, toolArgs, env, authCtx.brainId);
     return { jsonrpc: '2.0', id, result };
   }
@@ -5781,11 +5831,14 @@ async function handleApiGraph(env: Env, brainId: string): Promise<Response> {
   });
 }
 
-function handleApiTools(): Response {
+function handleApiTools(authCtx: AuthContext): Response {
+  const tools = canMutateMemories(authCtx)
+    ? TOOLS
+    : TOOLS.filter((tool) => !isMutatingTool(tool.name));
   return new Response(JSON.stringify({
     server: { name: SERVER_NAME, version: SERVER_VERSION },
-    tool_count: TOOLS.length,
-    tool_names: TOOLS.map((t) => t.name),
+    tool_count: tools.length,
+    tool_names: tools.map((t) => t.name),
     relation_types: RELATION_TYPES,
   }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -5984,9 +6037,11 @@ async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
+  const memoryWrite = canMutateMemories(authCtx);
   if (authCtx.kind === 'legacy') {
     return corsJsonResponse({
       kind: 'legacy',
+      client_id: authCtx.clientId,
       user: null,
       active_brain: {
         id: LEGACY_BRAIN_ID,
@@ -5998,6 +6053,12 @@ async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
         name: 'Legacy Shared Brain',
         role: 'legacy',
       }],
+      permissions: {
+        memories: {
+          read: true,
+          write: memoryWrite,
+        },
+      },
     });
   }
   if (!authCtx.userId) return corsJsonResponse({ error: 'Unauthorized' }, 401);
@@ -6013,9 +6074,16 @@ async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
 
   return corsJsonResponse({
     kind: 'user',
+    client_id: authCtx.clientId,
     user: userPayload(user),
     active_brain: activeBrain,
     brains,
+    permissions: {
+      memories: {
+        read: true,
+        write: memoryWrite,
+      },
+    },
   });
 }
 
@@ -11024,7 +11092,7 @@ export default {
         return unauthorized(url);
       }
       await clearRateLimit(ip, env);
-      return handleApiTools();
+      return handleApiTools(authCtx);
     }
 
     if (url.pathname === '/mcp') {

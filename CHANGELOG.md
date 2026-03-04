@@ -16,6 +16,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Viewer settings panel for user preferences (live polling, time mode, compact cards, graph defaults, auto-open graph, toast toggle), persisted in local storage.
 - Expanded viewer settings with startup filter, search debounce, toast duration, logout confirmation, graph hover-focus toggle, scanline toggle, and reduced-motion mode.
 
+### Changed
+- MCP auth now distinguishes read-only human sessions from writable AI-agent sessions using OAuth `client_id` context.
+- `tools/list` now hides mutating tools for read-only sessions.
+
+### Fixed
+- Human email/password sessions can no longer modify memories via mutating MCP tools; writes are restricted to OAuth agent or legacy-token sessions.
+
 ## [1.8.0] - 2026-03-04
 
 ### Added
