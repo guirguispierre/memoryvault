@@ -10,6 +10,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 - Human-friendly root landing page at `/` for browser navigation.
 - New **Dev Section** on the root page that lists sub-sites and endpoint surfaces with method/auth summaries.
+- Viewer command palette (`Ctrl/Cmd+K`) for quick actions (refresh, graph, toggles, focus, logout).
+- Viewer keyboard shortcuts overlay (`?`) with inline key reference.
+- Viewer toast notifications for auth, graph, and sync actions.
 
 ## [1.8.0] - 2026-03-04
 

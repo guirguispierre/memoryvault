@@ -7273,6 +7273,14 @@ function viewerHtml(): string {
     box-shadow: 0 0 0 1px rgba(0,200,180,0.25), 0 0 18px rgba(0,200,180,0.2);
     animation: syncPulse 0.8s ease-in-out infinite alternate;
   }
+  .utility-btn {
+    border-color: var(--border);
+    color: var(--text-dim);
+  }
+  .utility-btn:hover {
+    border-color: var(--amber);
+    color: var(--amber);
+  }
 
   /* Memory grid */
   .grid-wrap {
@@ -7666,6 +7674,183 @@ function viewerHtml(): string {
     color: var(--text-dim);
     padding: 0.2rem 0.45rem;
   }
+  .toast-wrap {
+    position: fixed;
+    right: 0.85rem;
+    bottom: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    z-index: 320;
+    pointer-events: none;
+  }
+  .toast {
+    border: 1px solid var(--border-bright);
+    background: rgba(13, 18, 25, 0.96);
+    color: var(--text);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.45rem 0.6rem;
+    min-width: 190px;
+    max-width: min(80vw, 420px);
+    line-height: 1.45;
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28);
+    animation: toastIn 0.2s ease;
+  }
+  .toast.info { border-color: var(--border-bright); color: var(--text); }
+  .toast.success { border-color: var(--teal); color: var(--teal); }
+  .toast.error { border-color: var(--red); color: var(--red); }
+  .toast.hide { animation: toastOut 0.2s ease forwards; }
+  .cmd-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    background: rgba(6, 10, 15, 0.86);
+    padding: 6vh 1rem 1rem;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .cmd-overlay.open { display: flex; }
+  .cmd-box {
+    width: min(700px, 100%);
+    border: 1px solid var(--border-bright);
+    background: rgba(13, 18, 25, 0.98);
+    box-shadow: 0 26px 50px rgba(0, 0, 0, 0.45);
+  }
+  .cmd-head {
+    padding: 0.8rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .cmd-input {
+    width: 100%;
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    color: var(--teal);
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    letter-spacing: 0.06em;
+    padding: 0.6rem 0.72rem;
+    outline: none;
+  }
+  .cmd-input:focus { border-color: var(--amber); }
+  .cmd-input::placeholder { color: var(--text-dim); }
+  .cmd-hint {
+    color: var(--text-dim);
+    font-size: 0.56rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .cmd-list {
+    max-height: min(62vh, 480px);
+    overflow-y: auto;
+  }
+  .cmd-item {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    padding: 0.66rem 0.82rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.65rem;
+    font-family: var(--mono);
+  }
+  .cmd-item:hover, .cmd-item.active {
+    background: rgba(240, 165, 0, 0.1);
+  }
+  .cmd-item-label {
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    color: var(--text-bright);
+  }
+  .cmd-item-detail {
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: right;
+  }
+  .cmd-empty {
+    color: var(--text-dim);
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.85rem;
+  }
+  .shortcuts-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 290;
+    background: rgba(6, 10, 15, 0.84);
+    padding: 8vh 1rem 1rem;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .shortcuts-overlay.open { display: flex; }
+  .shortcuts-box {
+    width: min(620px, 100%);
+    border: 1px solid var(--border-bright);
+    background: rgba(13, 18, 25, 0.98);
+    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.42);
+    padding: 0.9rem;
+  }
+  .shortcuts-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    margin-bottom: 0.8rem;
+  }
+  .shortcuts-head h3 {
+    color: var(--amber);
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .shortcuts-close {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.48rem;
+    cursor: pointer;
+  }
+  .shortcuts-close:hover { border-color: var(--amber); color: var(--amber); }
+  .shortcuts-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 0.8rem;
+    align-items: center;
+  }
+  .shortcut-key {
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    color: var(--teal);
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.36rem;
+    min-width: 88px;
+    text-align: center;
+  }
+  .shortcut-desc {
+    color: var(--text);
+    font-size: 0.72rem;
+    line-height: 1.45;
+  }
 
   @media (max-width: 900px) {
     .hdr { padding: 0.85rem 1rem; }
@@ -7739,6 +7924,7 @@ function viewerHtml(): string {
       min-height: 42px;
       font-size: 0.62rem;
     }
+    .utility-btn { width: 100%; }
 
     #graph-view { min-height: 54vh !important; }
     #graph-svg { min-height: 54vh !important; height: 54vh !important; }
@@ -7805,6 +7991,17 @@ function viewerHtml(): string {
     .footer { padding: 0.55rem 0.75rem; }
     .footer-text { font-size: 0.52rem; letter-spacing: 0.08em; }
     .footer .footer-text:last-child { display: none; }
+    .toast-wrap { left: 0.65rem; right: 0.65rem; bottom: 0.65rem; }
+    .toast { max-width: none; }
+    .cmd-overlay { padding-top: 3vh; }
+    .cmd-head { padding: 0.62rem; }
+    .cmd-item { padding: 0.54rem 0.62rem; }
+    .cmd-item-label { font-size: 0.68rem; }
+    .cmd-item-detail { font-size: 0.56rem; }
+    .shortcuts-overlay { padding-top: 5vh; }
+    .shortcuts-box { padding: 0.62rem; }
+    .shortcut-key { min-width: 74px; }
+    .shortcut-desc { font-size: 0.68rem; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -7854,6 +8051,14 @@ function viewerHtml(): string {
     0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 200, 180, 0.35); opacity: 1; }
     70% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(0, 200, 180, 0); opacity: 0.9; }
     100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 200, 180, 0); opacity: 1; }
+  }
+  @keyframes toastIn {
+    0% { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes toastOut {
+    0% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(8px); }
   }
 </style>
 </head>
@@ -7925,6 +8130,8 @@ function viewerHtml(): string {
       <input type="text" class="search-input" id="search-input" placeholder="Search by name, id, key, or text..." inputmode="search" oninput="onSearch(this.value)">
     </div>
     <button class="refresh-btn" onclick="loadMemories()">↻ REFRESH</button>
+    <button class="refresh-btn utility-btn" onclick="openCommandPalette()">COMMAND</button>
+    <button class="refresh-btn utility-btn" onclick="toggleShortcutsOverlay()">SHORTCUTS</button>
   </div>
 
   <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--bg);min-height:600px">
@@ -7972,6 +8179,36 @@ function viewerHtml(): string {
   </div>
 </div>
 
+<div class="cmd-overlay" id="cmd-overlay" onclick="closeCommandPalette(event)">
+  <div class="cmd-box" onclick="event.stopPropagation()">
+    <div class="cmd-head">
+      <input type="text" class="cmd-input" id="cmd-input" placeholder="Run an action..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="onCommandFilter(this.value)">
+      <div class="cmd-hint">enter run - esc close - arrows move</div>
+    </div>
+    <div class="cmd-list" id="cmd-list"></div>
+  </div>
+</div>
+
+<div class="shortcuts-overlay" id="shortcuts-overlay" onclick="closeShortcutsOverlay(event)">
+  <div class="shortcuts-box" onclick="event.stopPropagation()">
+    <div class="shortcuts-head">
+      <h3>Keyboard Shortcuts</h3>
+      <button class="shortcuts-close" onclick="closeShortcutsOverlay()">Close</button>
+    </div>
+    <div class="shortcuts-grid">
+      <span class="shortcut-key">Ctrl/Cmd+K</span><span class="shortcut-desc">Open command palette</span>
+      <span class="shortcut-key">?</span><span class="shortcut-desc">Open this shortcuts panel</span>
+      <span class="shortcut-key">/</span><span class="shortcut-desc">Focus search input</span>
+      <span class="shortcut-key">G</span><span class="shortcut-desc">Open graph view</span>
+      <span class="shortcut-key">R</span><span class="shortcut-desc">Refresh memories</span>
+      <span class="shortcut-key">Esc</span><span class="shortcut-desc">Close overlays or modal cards</span>
+      <span class="shortcut-key">Enter</span><span class="shortcut-desc">Run selected command in command palette</span>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
 <script>
   const BASE = location.origin;
   const GRAPH_RELATION_TYPES = ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'];
@@ -8003,6 +8240,11 @@ function viewerHtml(): string {
   let graphRelationFilter = new Set(GRAPH_RELATION_TYPES);
   let graphPhysicsEnabled = true;
   let lastStatsSnapshot = { all: null, note: null, fact: null, journal: null };
+  let commandPaletteOpen = false;
+  let commandQuery = '';
+  let commandVisibleActions = [];
+  let commandActiveIndex = 0;
+  let toastCounter = 0;
 
   function setLoginError(message) {
     const el = document.getElementById('login-error');
@@ -8017,6 +8259,31 @@ function viewerHtml(): string {
     el.style.display = 'none';
   }
 
+  function isTypingTarget(target) {
+    const el = target instanceof HTMLElement ? target : null;
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    return false;
+  }
+
+  function showToast(message, tone = 'info') {
+    const text = String(message || '').trim();
+    const wrap = document.getElementById('toast-wrap');
+    if (!text || !wrap) return;
+    const toast = document.createElement('div');
+    const safeTone = ['info', 'success', 'error'].includes(tone) ? tone : 'info';
+    toast.className = 'toast ' + safeTone;
+    toast.dataset.toastId = String(++toastCounter);
+    toast.textContent = text;
+    wrap.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add('hide');
+      setTimeout(() => toast.remove(), 220);
+    }, 2300);
+  }
+
   function enterApp() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
@@ -8024,6 +8291,7 @@ function viewerHtml(): string {
     updateTime();
     loadMemories();
     startLivePolling();
+    showToast('Session active. Loading memory stream.', 'success');
   }
 
   async function tryRefreshSession() {
@@ -8075,8 +8343,10 @@ function viewerHtml(): string {
       REFRESH_TOKEN = '';
       SESSION_MODE = 'legacy';
       enterApp();
+      showToast('Legacy token accepted.', 'success');
     } catch {
       setLoginError('⚠ NETWORK ERROR');
+      showToast('Network error while validating token.', 'error');
     }
   }
 
@@ -8113,8 +8383,10 @@ function viewerHtml(): string {
         return;
       }
       enterApp();
+      showToast(mode === 'signup' ? 'Account created and signed in.' : 'Signed in successfully.', 'success');
     } catch {
       setLoginError('⚠ NETWORK ERROR');
+      showToast('Network error during authentication.', 'error');
     }
   }
 
@@ -8175,6 +8447,7 @@ function viewerHtml(): string {
       if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div>CONNECTION ERROR</div>';
+      showToast('Connection error while loading memories.', 'error');
     } finally {
       if (refreshBtn) refreshBtn.classList.remove('syncing');
     }
@@ -8317,6 +8590,215 @@ function viewerHtml(): string {
   function closeExpandBtn() {
     document.getElementById('expand-overlay').classList.remove('open');
     document.body.style.overflow = '';
+  }
+
+  function appIsVisible() {
+    const app = document.getElementById('app');
+    if (!app) return false;
+    return window.getComputedStyle(app).display !== 'none';
+  }
+
+  function ensureAppReady(actionLabel = 'This action') {
+    if (TOKEN && appIsVisible()) return true;
+    showToast(actionLabel + ' is available after sign in.', 'info');
+    return false;
+  }
+
+  function getCommandPaletteActions() {
+    return [
+      {
+        label: 'Refresh memories',
+        detail: 'Reload data from API',
+        run: () => {
+          if (!ensureAppReady('Refresh')) return;
+          loadMemories();
+          showToast('Refreshing memories...', 'info');
+        },
+      },
+      {
+        label: 'Open graph view',
+        detail: 'Explore memory network',
+        run: async () => {
+          if (!ensureAppReady('Graph view')) return;
+          await showGraph();
+          showToast('Graph view opened.', 'success');
+        },
+      },
+      {
+        label: 'Show all memories',
+        detail: 'Clear type filter',
+        run: () => {
+          if (!ensureAppReady('Memory filter')) return;
+          setFilter('');
+          showToast('Showing all memory types.', 'info');
+        },
+      },
+      {
+        label: 'Focus search',
+        detail: 'Jump to primary search',
+        run: () => {
+          if (!ensureAppReady('Search focus')) return;
+          const input = document.getElementById('search-input');
+          if (!input) return;
+          input.focus();
+          input.select();
+          showToast('Search focused.', 'success');
+        },
+      },
+      {
+        label: 'Focus graph search',
+        detail: 'Node and edge query',
+        run: async () => {
+          if (!ensureAppReady('Graph search')) return;
+          if (!graphVisible) await showGraph();
+          const input = document.getElementById('graph-search-input');
+          if (!input) return;
+          input.focus();
+          input.select();
+          showToast('Graph search focused.', 'success');
+        },
+      },
+      {
+        label: graphShowInferred ? 'Disable inferred edges' : 'Enable inferred edges',
+        detail: graphShowInferred ? 'Currently ON' : 'Currently OFF',
+        run: async () => {
+          if (!ensureAppReady('Graph controls')) return;
+          if (!graphVisible) await showGraph();
+          toggleGraphInferred();
+        },
+      },
+      {
+        label: graphShowLabels ? 'Hide graph labels' : 'Show graph labels',
+        detail: graphShowLabels ? 'Currently ON' : 'Currently OFF',
+        run: async () => {
+          if (!ensureAppReady('Graph controls')) return;
+          if (!graphVisible) await showGraph();
+          toggleGraphLabels();
+        },
+      },
+      {
+        label: graphPhysicsEnabled ? 'Pause graph physics' : 'Resume graph physics',
+        detail: graphPhysicsEnabled ? 'Currently ON' : 'Currently OFF',
+        run: async () => {
+          if (!ensureAppReady('Graph controls')) return;
+          if (!graphVisible) await showGraph();
+          toggleGraphPhysics();
+        },
+      },
+      {
+        label: 'Open keyboard shortcuts',
+        detail: 'Help overlay',
+        run: () => toggleShortcutsOverlay(),
+      },
+      {
+        label: 'Lock session',
+        detail: 'Sign out',
+        run: () => {
+          if (!ensureAppReady('Logout')) return;
+          doLogout();
+        },
+      },
+    ];
+  }
+
+  function updateCommandActiveSelection() {
+    const list = document.getElementById('cmd-list');
+    if (!list) return;
+    list.querySelectorAll('.cmd-item').forEach((el, idx) => {
+      el.classList.toggle('active', idx === commandActiveIndex);
+    });
+  }
+
+  function renderCommandPalette() {
+    const list = document.getElementById('cmd-list');
+    if (!list) return;
+    const query = commandQuery.trim().toLowerCase();
+    const allActions = getCommandPaletteActions();
+    commandVisibleActions = allActions.filter((action) => {
+      if (!query) return true;
+      return (action.label + ' ' + action.detail).toLowerCase().includes(query);
+    });
+    if (commandActiveIndex >= commandVisibleActions.length) {
+      commandActiveIndex = Math.max(commandVisibleActions.length - 1, 0);
+    }
+
+    if (!commandVisibleActions.length) {
+      list.innerHTML = '<div class="cmd-empty">No matching actions</div>';
+      return;
+    }
+
+    list.innerHTML = commandVisibleActions.map((action, idx) =>
+      '<button type="button" class="cmd-item ' + (idx === commandActiveIndex ? 'active' : '') + '" data-command-index="' + idx + '">' +
+      '<span class="cmd-item-label">' + esc(action.label) + '</span>' +
+      '<span class="cmd-item-detail">' + esc(action.detail) + '</span>' +
+      '</button>'
+    ).join('');
+
+    list.querySelectorAll('.cmd-item').forEach((el) => {
+      const index = Number(el.getAttribute('data-command-index') || '0');
+      el.addEventListener('mouseenter', () => {
+        commandActiveIndex = index;
+        updateCommandActiveSelection();
+      });
+      el.addEventListener('click', () => runCommandAction(index));
+    });
+  }
+
+  function onCommandFilter(value) {
+    commandQuery = String(value || '');
+    commandActiveIndex = 0;
+    renderCommandPalette();
+  }
+
+  function moveCommandSelection(delta) {
+    if (!commandVisibleActions.length) return;
+    const next = commandActiveIndex + delta;
+    if (next < 0) commandActiveIndex = commandVisibleActions.length - 1;
+    else if (next >= commandVisibleActions.length) commandActiveIndex = 0;
+    else commandActiveIndex = next;
+    updateCommandActiveSelection();
+  }
+
+  function runCommandAction(index = commandActiveIndex) {
+    const action = commandVisibleActions[index];
+    if (!action) return;
+    closeCommandPalette();
+    Promise.resolve(action.run()).catch(() => showToast('Command failed.', 'error'));
+  }
+
+  function openCommandPalette() {
+    const overlay = document.getElementById('cmd-overlay');
+    const input = document.getElementById('cmd-input');
+    if (!overlay || !input) return;
+    commandPaletteOpen = true;
+    commandQuery = '';
+    commandActiveIndex = 0;
+    input.value = '';
+    overlay.classList.add('open');
+    renderCommandPalette();
+    setTimeout(() => input.focus(), 0);
+  }
+
+  function closeCommandPalette(event) {
+    const overlay = document.getElementById('cmd-overlay');
+    if (!overlay) return;
+    if (event && event.target !== overlay) return;
+    commandPaletteOpen = false;
+    overlay.classList.remove('open');
+  }
+
+  function closeShortcutsOverlay(event) {
+    const overlay = document.getElementById('shortcuts-overlay');
+    if (!overlay) return;
+    if (event && event.target !== overlay) return;
+    overlay.classList.remove('open');
+  }
+
+  function toggleShortcutsOverlay() {
+    const overlay = document.getElementById('shortcuts-overlay');
+    if (!overlay) return;
+    if (overlay.classList.contains('open')) overlay.classList.remove('open');
+    else overlay.classList.add('open');
   }
 
   function setFilter(type) {
@@ -8472,12 +8954,14 @@ function viewerHtml(): string {
     graphShowInferred = !graphShowInferred;
     syncGraphToolbarState();
     if (graphVisible) rerenderGraphFromCache();
+    showToast(graphShowInferred ? 'Inferred edges enabled.' : 'Inferred edges disabled.', 'info');
   }
 
   function toggleGraphLabels() {
     graphShowLabels = !graphShowLabels;
     syncGraphToolbarState();
     if (graphVisible) rerenderGraphFromCache();
+    showToast(graphShowLabels ? 'Graph labels enabled.' : 'Graph labels hidden.', 'info');
   }
 
   function toggleGraphPhysics() {
@@ -8489,6 +8973,7 @@ function viewerHtml(): string {
     } else {
       graphSimulation.stop();
     }
+    showToast(graphPhysicsEnabled ? 'Graph physics resumed.' : 'Graph physics paused.', 'info');
   }
 
   function resetGraphView() {
@@ -8501,6 +8986,7 @@ function viewerHtml(): string {
     if (graphPhysicsEnabled && graphSimulation) graphSimulation.alpha(0.45).restart();
     syncGraphToolbarState();
     rerenderGraphFromCache();
+    showToast('Graph view reset.', 'success');
   }
 
   async function showGraph() {
@@ -8539,8 +9025,10 @@ function viewerHtml(): string {
       }
       syncGraphToolbarState();
       rerenderGraphFromCache();
+      showToast('Graph loaded: ' + lastGraphData.nodes.length + ' nodes.', 'success');
     } catch(e) {
       document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--red);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">ERROR LOADING GRAPH</text>';
+      showToast('Graph load failed.', 'error');
     }
   }
 
@@ -8894,6 +9382,89 @@ function viewerHtml(): string {
   document.getElementById('email-input').addEventListener('keydown', e => { if (e.key === 'Enter') doCredentialAuth('login'); });
   document.getElementById('password-input').addEventListener('keydown', e => { if (e.key === 'Enter') doCredentialAuth('login'); });
   document.getElementById('brain-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') doCredentialAuth('signup'); });
+  document.getElementById('cmd-input').addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveCommandSelection(1);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveCommandSelection(-1);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runCommandAction();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCommandPalette();
+    }
+  });
+  document.addEventListener('keydown', e => {
+    const key = String(e.key || '').toLowerCase();
+    const shortcutsOpen = document.getElementById('shortcuts-overlay').classList.contains('open');
+    const expandOpen = document.getElementById('expand-overlay').classList.contains('open');
+    const typing = isTypingTarget(e.target);
+
+    if ((e.ctrlKey || e.metaKey) && key === 'k') {
+      e.preventDefault();
+      if (commandPaletteOpen) closeCommandPalette();
+      else openCommandPalette();
+      return;
+    }
+
+    if (commandPaletteOpen) {
+      if (key === 'escape') {
+        e.preventDefault();
+        closeCommandPalette();
+      }
+      return;
+    }
+
+    if (shortcutsOpen) {
+      if (key === 'escape') {
+        e.preventDefault();
+        closeShortcutsOverlay();
+      }
+      return;
+    }
+
+    if (e.key === '?' && !typing) {
+      e.preventDefault();
+      toggleShortcutsOverlay();
+      return;
+    }
+
+    if (key === 'escape' && expandOpen) {
+      e.preventDefault();
+      closeExpandBtn();
+      return;
+    }
+
+    if (typing) return;
+    if (!TOKEN || !appIsVisible()) return;
+
+    if (key === '/') {
+      e.preventDefault();
+      const input = document.getElementById('search-input');
+      if (!input) return;
+      input.focus();
+      input.select();
+      return;
+    }
+    if (key === 'g') {
+      e.preventDefault();
+      showGraph();
+      return;
+    }
+    if (key === 'r') {
+      e.preventDefault();
+      loadMemories();
+    }
+  });
 </script>
 </body>
 </html>`;
