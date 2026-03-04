@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Human-friendly root landing page at `/` for browser navigation.
+- New **Dev Section** on the root page that lists sub-sites and endpoint surfaces with method/auth summaries.
+
 ## [1.8.0] - 2026-03-04
 
 ### Added
@@ -14,15 +18,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `memory_graph_stats` MCP tool for graph topology metrics (density, components, relation counts, hubs, and top tags).
 - `memory_neighbors` MCP tool for seeded neighborhood traversal by memory `id` or `query`.
 - Graph toolbar physics toggle (`PHYSICS ON/OFF`) in the web viewer.
+- Browser-friendly endpoint guides for `/mcp` and machine endpoints (`/auth/*`, `/api/*`, `/register`, `/token`, and `/.well-known/*`) when opened via normal browser navigation.
+- Human-readable `/mcp` landing page explaining MCP purpose, connection steps, and key discovery URLs.
 
 ### Changed
 - Web graph exploration now supports hover neighborhood focus to spotlight a node and its immediate connections.
 - Graph node/link opacity behavior was refined for smoother search/focus transitions.
 - Server/tool version metadata bumped to `1.8.0`.
-
-### Added
-- Browser-friendly endpoint guides for `/mcp` and machine endpoints (`/auth/*`, `/api/*`, `/register`, `/token`, and `/.well-known/*`) when opened via normal browser navigation.
-- Human-readable `/mcp` landing page explaining MCP purpose, connection steps, and key discovery URLs.
 
 ### Fixed
 - OAuth `/authorize` requests that include authorization flow parameters now correctly render the login/sign-up authorization screen instead of the generic endpoint guide page.

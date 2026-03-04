@@ -8899,6 +8899,319 @@ function viewerHtml(): string {
 </html>`;
 }
 
+function rootLandingHtml(url: URL): string {
+  const origin = url.origin;
+  const mcpEndpoint = `${origin}/mcp`;
+  const viewerEndpoint = `${origin}/view`;
+  const authzMetadata = `${origin}/.well-known/oauth-authorization-server`;
+  const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
+  const envLabel = url.hostname.includes('-dev') ? 'Development Environment' : 'Production Environment';
+  const devEntries: Array<{ path: string; label: string }> = [
+    { path: '/mcp', label: '/mcp' },
+    { path: '/view', label: '/view' },
+    { path: '/register', label: '/register' },
+    { path: '/authorize', label: '/authorize' },
+    { path: '/token', label: '/token' },
+    { path: '/.well-known/oauth-authorization-server', label: '/.well-known/oauth-authorization-server' },
+    { path: '/.well-known/oauth-protected-resource', label: '/.well-known/oauth-protected-resource' },
+    { path: '/auth/signup', label: '/auth/signup' },
+    { path: '/auth/login', label: '/auth/login' },
+    { path: '/auth/refresh', label: '/auth/refresh' },
+    { path: '/auth/logout', label: '/auth/logout' },
+    { path: '/auth/me', label: '/auth/me' },
+    { path: '/auth/sessions', label: '/auth/sessions' },
+    { path: '/auth/sessions/revoke', label: '/auth/sessions/revoke' },
+    { path: '/api/memories', label: '/api/memories' },
+    { path: '/api/tools', label: '/api/tools' },
+    { path: '/api/graph', label: '/api/graph' },
+    { path: '/api/links/sample-memory-id', label: '/api/links/:memoryId' },
+  ];
+  const devRows = devEntries.map((entry) => {
+    const guide = endpointGuideForPath(entry.path);
+    const title = guide?.title
+      ?? (entry.path === '/mcp' ? 'MCP Endpoint' : (entry.path === '/view' ? 'Web Viewer' : 'Endpoint'));
+    const subtitle = guide?.subtitle
+      ?? (entry.path === '/mcp'
+        ? 'MCP JSON-RPC and SSE transport'
+        : (entry.path === '/view' ? 'Human memory dashboard + graph explorer' : 'Endpoint surface'));
+    const methods = guide?.methods ?? 'GET';
+    const auth = guide?.auth
+      ?? (entry.path === '/view'
+        ? 'Browser login available in-page.'
+        : (entry.path === '/mcp' ? 'Requires Bearer token/OAuth for tool calls.' : 'See endpoint guide.'));
+    const endpointUrl = `${origin}${entry.path}`;
+    return `<tr>
+      <td><a class="endpoint" href="${endpointUrl}">${escapeHtml(entry.label)}</a></td>
+      <td>${escapeHtml(title)}</td>
+      <td><code>${escapeHtml(methods)}</code></td>
+      <td>${escapeHtml(auth)}</td>
+      <td>${escapeHtml(subtitle)}</td>
+    </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemoryVault Dev Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060b12;
+    --bg2: #0f1927;
+    --line: #27466c;
+    --line-soft: #1c334c;
+    --text: #d6e5f4;
+    --dim: #7390aa;
+    --amber: #f0a500;
+    --teal: #00c8b4;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--mono);
+    color: var(--text);
+    background:
+      radial-gradient(78% 55% at 10% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
+      radial-gradient(70% 58% at 100% 100%, rgba(240, 165, 0, 0.1), transparent 72%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 2rem 1.1rem 2.6rem;
+  }
+  .title {
+    margin: 0;
+    font-family: var(--sans);
+    font-size: clamp(1.65rem, 3vw, 2.75rem);
+    letter-spacing: -0.02em;
+    font-weight: 800;
+    line-height: 1.05;
+  }
+  .title span { color: var(--amber); }
+  .sub {
+    margin: 0.5rem 0 1.2rem;
+    color: var(--dim);
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    background: rgba(15, 25, 39, 0.78);
+    color: var(--teal);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.55rem;
+    margin-bottom: 1rem;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    gap: 1rem;
+  }
+  .card {
+    border: 1px solid var(--line);
+    background: rgba(15, 25, 39, 0.84);
+    padding: 1rem 1rem 0.95rem;
+  }
+  .card h2 {
+    margin: 0 0 0.65rem;
+    color: var(--amber);
+    font-size: 0.79rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  p, li {
+    margin: 0;
+    line-height: 1.58;
+    font-size: 0.84rem;
+  }
+  ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: 0.45rem;
+  }
+  .metrics {
+    margin-top: 0.8rem;
+    display: flex;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+  }
+  .metric {
+    border: 1px solid var(--line-soft);
+    padding: 0.45rem 0.55rem;
+    min-width: 150px;
+    background: rgba(6, 11, 18, 0.68);
+  }
+  .metric .k {
+    color: var(--dim);
+    display: block;
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .metric .v {
+    color: var(--teal);
+    display: block;
+    margin-top: 0.3rem;
+    font-size: 0.84rem;
+  }
+  .actions {
+    margin-top: 0.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .btn {
+    border: 1px solid var(--line);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.7rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    padding: 0.46rem 0.62rem;
+    display: inline-block;
+  }
+  .btn.primary {
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .dev {
+    margin-top: 1rem;
+    border: 1px solid var(--line);
+    background: rgba(15, 25, 39, 0.84);
+    overflow: hidden;
+  }
+  .dev-head {
+    padding: 0.75rem 0.9rem;
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    gap: 0.5rem;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .dev-head h2 {
+    margin: 0;
+    color: var(--amber);
+    font-size: 0.8rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .dev-head p {
+    color: var(--dim);
+    font-size: 0.72rem;
+  }
+  .table-wrap { overflow-x: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 920px;
+  }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line-soft);
+    padding: 0.62rem 0.72rem;
+    font-size: 0.77rem;
+    line-height: 1.45;
+  }
+  th {
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.66rem;
+    position: sticky;
+    top: 0;
+    background: #0f1927;
+    z-index: 2;
+  }
+  td code {
+    color: var(--teal);
+    font-family: var(--mono);
+    font-size: 0.74rem;
+  }
+  .endpoint {
+    color: var(--teal);
+    text-decoration: none;
+    display: inline-block;
+    max-width: 320px;
+    overflow-wrap: anywhere;
+  }
+  @media (max-width: 930px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="pill">${escapeHtml(envLabel)}</div>
+    <h1 class="title">MEMORY<span>VAULT</span> Dev Portal</h1>
+    <p class="sub">Human-Friendly Landing Page For This MCP Host</p>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Overview</h2>
+        <p>This host serves the MemoryVault MCP, OAuth flow, web viewer, and diagnostic APIs. Use this page as the top-level map for all sub-sites and machine endpoints.</p>
+        <div class="metrics">
+          <div class="metric"><span class="k">Server</span><span class="v">${escapeHtml(SERVER_NAME)}</span></div>
+          <div class="metric"><span class="k">Version</span><span class="v">${escapeHtml(SERVER_VERSION)}</span></div>
+          <div class="metric"><span class="k">MCP Tools</span><span class="v">${TOOLS.length}</span></div>
+        </div>
+        <div class="actions">
+          <a class="btn primary" href="${mcpEndpoint}">MCP Guide</a>
+          <a class="btn" href="${viewerEndpoint}">Open Viewer</a>
+          <a class="btn" href="${authzMetadata}">OAuth Metadata</a>
+          <a class="btn" href="${resourceMetadata}">Resource Metadata</a>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Quick Dev Notes</h2>
+        <ul>
+          <li>Browser navigation shows human-readable guides for MCP and API routes.</li>
+          <li>Programmatic requests still receive OAuth challenge and normal JSON API behavior.</li>
+          <li><code>/mcp</code> is the MCP endpoint for AI clients (JSON-RPC + SSE).</li>
+          <li><code>/view</code> is the web UI for login, memory browsing, and graph exploration.</li>
+        </ul>
+      </section>
+    </div>
+
+    <section class="dev">
+      <div class="dev-head">
+        <h2>Dev Section: All Endpoints</h2>
+        <p>Open any path for a friendly guide page or direct endpoint behavior.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Surface</th>
+              <th>Methods</th>
+              <th>Auth</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>${devRows}</tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
 function mcpLandingHtml(url: URL): string {
   const origin = url.origin;
   const mcpEndpoint = `${origin}/mcp`;
@@ -9479,6 +9792,11 @@ export default {
     }
 
     if (url.pathname === '/') {
+      if (isBrowserDocumentRequest(request)) {
+        return new Response(rootLandingHtml(url), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
       return jsonResponse({ name: SERVER_NAME, version: SERVER_VERSION, status: 'ok', tools: TOOLS.length });
     }
 
