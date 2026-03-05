@@ -10,6 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 - `memory_reindex` now supports `wait_for_index` (default `true`) and `wait_timeout_seconds` (default `180`) so callers can block until semantic mutations are queryable.
 - `memory_reindex` response now includes semantic indexing readiness fields (`index_ready`, `mutation_count`, wait timing, and processed mutation markers).
+- `/view` settings now include Semantic Index Sync controls (limit, wait toggle, timeout, run button, and readiness status panel).
+- Command palette now includes a `Reindex semantic memory` action for in-app semantic maintenance.
 
 ## [1.9.0] - 2026-03-04
 

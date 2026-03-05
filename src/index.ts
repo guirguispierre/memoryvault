@@ -8865,6 +8865,7 @@ function viewerHtml(): string {
     justify-content: space-between;
     gap: 0.6rem;
   }
+  .setting-row.setting-span-2 { grid-column: 1 / -1; }
   .setting-row label,
   .setting-row .setting-label {
     color: var(--text);
@@ -8896,6 +8897,40 @@ function viewerHtml(): string {
     height: 18px;
     accent-color: var(--teal);
   }
+  .semantic-status-box {
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    padding: 0.55rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .semantic-status-line {
+    color: var(--text);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    line-height: 1.45;
+    word-break: break-word;
+  }
+  .semantic-status-line.error { color: var(--red); }
+  .semantic-status-line.dim { color: var(--text-dim); }
+  .semantic-status-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .semantic-status-pill {
+    border: 1px solid var(--border);
+    background: rgba(8, 12, 16, 0.78);
+    color: var(--teal);
+    font-size: 0.54rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.14rem 0.32rem;
+  }
+  .semantic-status-pill.ready { color: #2eca75; border-color: rgba(46, 202, 117, 0.45); }
+  .semantic-status-pill.not-ready { color: var(--amber); border-color: rgba(240, 165, 0, 0.45); }
+  .semantic-status-pill.running { color: #66a9ff; border-color: rgba(102, 169, 255, 0.45); }
   .settings-actions {
     display: flex;
     gap: 0.5rem;
@@ -9514,6 +9549,32 @@ function viewerHtml(): string {
         </div>
         <input type="checkbox" class="setting-check" id="settings-reduce-motion">
       </div>
+      <div class="setting-row setting-inline">
+        <div>
+          <div class="setting-label">Semantic Reindex Wait</div>
+          <div class="setting-help">Wait for Vectorize index readiness before reindex returns.</div>
+        </div>
+        <input type="checkbox" class="setting-check" id="settings-semantic-wait">
+      </div>
+      <div class="setting-row">
+        <label for="settings-semantic-timeout">Semantic Wait Timeout (sec)</label>
+        <input type="number" min="1" max="900" step="1" class="setting-input" id="settings-semantic-timeout">
+        <div class="setting-help">Used when Semantic Reindex Wait is enabled.</div>
+      </div>
+      <div class="setting-row">
+        <label for="settings-semantic-limit">Semantic Reindex Limit</label>
+        <input type="number" min="1" max="2000" step="1" class="setting-input" id="settings-semantic-limit">
+        <div class="setting-help">Maximum memories processed per reindex run.</div>
+      </div>
+      <div class="setting-row setting-span-2">
+        <div class="setting-label">Semantic Index Sync</div>
+        <div class="setting-help">Run <code>memory_reindex</code> from the viewer and inspect readiness output.</div>
+        <div class="semantic-status-box">
+          <div class="semantic-status-line dim" id="semantic-status-line">No semantic reindex run in this session.</div>
+          <div class="semantic-status-meta" id="semantic-status-meta"></div>
+          <button class="refresh-btn utility-btn" id="semantic-reindex-btn" onclick="runSemanticReindexFromSettings()">RUN SEMANTIC REINDEX</button>
+        </div>
+      </div>
     </div>
     <div class="settings-actions">
       <button class="refresh-btn utility-btn" onclick="openChangelogOverlay()">VIEW CHANGELOG</button>
@@ -9581,6 +9642,9 @@ function viewerHtml(): string {
   let clockIntervalId = null;
   const VIEWER_SETTINGS_KEY = 'memoryvault.viewer.settings.v1';
   let viewerSettings = null;
+  let semanticReindexRunning = false;
+  let semanticReindexLastResult = null;
+  let semanticReindexLastError = '';
 
   function buildDefaultViewerSettings() {
     return {
@@ -9600,6 +9664,9 @@ function viewerHtml(): string {
       confirm_logout: false,
       show_scanlines: true,
       reduce_motion: false,
+      semantic_reindex_wait_for_index: true,
+      semantic_reindex_wait_timeout_seconds: 180,
+      semantic_reindex_limit: 500,
     };
   }
 
@@ -9612,6 +9679,14 @@ function viewerHtml(): string {
     const searchDebounce = Number.isFinite(searchDebounceRaw) ? searchDebounceRaw : defaults.search_debounce_ms;
     const toastDurationRaw = Number(source.toast_duration_ms);
     const toastDuration = Number.isFinite(toastDurationRaw) ? toastDurationRaw : defaults.toast_duration_ms;
+    const semanticWaitTimeoutRaw = Number(source.semantic_reindex_wait_timeout_seconds);
+    const semanticWaitTimeout = Number.isFinite(semanticWaitTimeoutRaw)
+      ? semanticWaitTimeoutRaw
+      : defaults.semantic_reindex_wait_timeout_seconds;
+    const semanticReindexLimitRaw = Number(source.semantic_reindex_limit);
+    const semanticReindexLimit = Number.isFinite(semanticReindexLimitRaw)
+      ? semanticReindexLimitRaw
+      : defaults.semantic_reindex_limit;
     const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
       ? source.default_memory_filter
       : '';
@@ -9632,6 +9707,9 @@ function viewerHtml(): string {
       confirm_logout: source.confirm_logout === true,
       show_scanlines: source.show_scanlines !== false,
       reduce_motion: source.reduce_motion === true,
+      semantic_reindex_wait_for_index: source.semantic_reindex_wait_for_index !== false,
+      semantic_reindex_wait_timeout_seconds: Math.min(Math.max(Math.round(semanticWaitTimeout), 1), 900),
+      semantic_reindex_limit: Math.min(Math.max(Math.round(semanticReindexLimit), 1), 2000),
     };
   }
 
@@ -9677,6 +9755,7 @@ function viewerHtml(): string {
   }
 
   initializeViewerSettings();
+  fillSettingsForm();
 
   function setLoginError(message) {
     const el = document.getElementById('login-error');
@@ -9762,6 +9841,191 @@ function viewerHtml(): string {
       if (refreshed) return apiFetch(url, options, false);
     }
     return response;
+  }
+
+  async function callMcpTool(name, args = {}, requestId = '') {
+    const response = await apiFetch(BASE + '/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: requestId || ('viewer-' + name + '-' + Date.now()),
+        method: 'tools/call',
+        params: { name, arguments: args },
+      }),
+    });
+    if (response.status === 401) {
+      doLogout(true);
+      throw new Error('Session expired.');
+    }
+    if (!response.ok) {
+      throw new Error('MCP request failed (' + response.status + ').');
+    }
+    const rpc = await response.json();
+    if (rpc && rpc.error) {
+      const message = typeof rpc.error.message === 'string' && rpc.error.message.trim()
+        ? rpc.error.message.trim()
+        : 'MCP error.';
+      throw new Error(message);
+    }
+    const text = rpc?.result?.content?.[0]?.text;
+    if (typeof text !== 'string') {
+      throw new Error('Invalid MCP response.');
+    }
+    return text;
+  }
+
+  function formatDurationMs(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return 'n/a';
+    if (value < 1000) return Math.round(value) + 'ms';
+    return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 's';
+  }
+
+  function getSemanticReindexArgs() {
+    const defaultLimit = Number(viewerSettings?.semantic_reindex_limit ?? 500);
+    const defaultWait = viewerSettings?.semantic_reindex_wait_for_index !== false;
+    const defaultTimeout = Number(viewerSettings?.semantic_reindex_wait_timeout_seconds ?? 180);
+    const limitInput = document.getElementById('settings-semantic-limit');
+    const waitInput = document.getElementById('settings-semantic-wait');
+    const timeoutInput = document.getElementById('settings-semantic-timeout');
+
+    const rawLimit = Number(limitInput?.value);
+    const rawTimeout = Number(timeoutInput?.value);
+    const limit = Math.min(
+      Math.max(
+        Number.isFinite(rawLimit) && rawLimit > 0 ? Math.round(rawLimit) : Math.round(defaultLimit),
+        1
+      ),
+      2000
+    );
+    const waitTimeoutSeconds = Math.min(
+      Math.max(
+        Number.isFinite(rawTimeout) && rawTimeout > 0 ? Math.round(rawTimeout) : Math.round(defaultTimeout),
+        1
+      ),
+      900
+    );
+    const waitForIndex = waitInput ? waitInput.checked : defaultWait;
+
+    return {
+      limit,
+      wait_for_index: waitForIndex,
+      wait_timeout_seconds: waitTimeoutSeconds,
+    };
+  }
+
+  function renderSemanticReindexStatus() {
+    const lineEl = document.getElementById('semantic-status-line');
+    const metaEl = document.getElementById('semantic-status-meta');
+    const buttonEl = document.getElementById('semantic-reindex-btn');
+    if (!lineEl || !metaEl || !buttonEl) return;
+    buttonEl.disabled = semanticReindexRunning;
+    buttonEl.textContent = semanticReindexRunning ? 'RUNNING SEMANTIC REINDEX...' : 'RUN SEMANTIC REINDEX';
+    metaEl.innerHTML = '';
+
+    const addPill = (text, cls = '') => {
+      const pill = document.createElement('span');
+      pill.className = 'semantic-status-pill' + (cls ? (' ' + cls) : '');
+      pill.textContent = text;
+      metaEl.appendChild(pill);
+    };
+
+    if (semanticReindexRunning) {
+      lineEl.className = 'semantic-status-line';
+      lineEl.textContent = 'Semantic reindex is running. Waiting for MCP response...';
+      addPill('RUNNING', 'running');
+      return;
+    }
+
+    if (semanticReindexLastError) {
+      lineEl.className = 'semantic-status-line error';
+      lineEl.textContent = 'Last run failed: ' + semanticReindexLastError;
+      addPill('FAILED');
+      return;
+    }
+
+    if (!semanticReindexLastResult || typeof semanticReindexLastResult !== 'object') {
+      lineEl.className = 'semantic-status-line dim';
+      lineEl.textContent = 'No semantic reindex run in this session.';
+      return;
+    }
+
+    const result = semanticReindexLastResult;
+    const processed = Number.isFinite(Number(result.processed)) ? Number(result.processed) : 0;
+    const upserted = Number.isFinite(Number(result.upserted)) ? Number(result.upserted) : 0;
+    const deleted = Number.isFinite(Number(result.deleted)) ? Number(result.deleted) : 0;
+    const indexReady = result.index_ready;
+    const waitElapsedMs = Number(result.wait_elapsed_ms);
+    const waitForIndex = result.wait_for_index === true;
+
+    lineEl.className = 'semantic-status-line';
+    if (waitForIndex) {
+      const readyText = indexReady === true ? 'ready' : (indexReady === false ? 'not ready' : 'pending');
+      lineEl.textContent = 'Last run processed ' + processed + ' memories. Index status: ' + readyText + '.';
+    } else {
+      lineEl.textContent = 'Last run processed ' + processed + ' memories without readiness wait.';
+    }
+
+    addPill('UPSERTED ' + upserted);
+    addPill('DELETED ' + deleted);
+    if (waitForIndex) addPill('WAIT ' + formatDurationMs(waitElapsedMs));
+    if (indexReady === true) addPill('INDEX READY', 'ready');
+    if (indexReady === false) addPill('INDEX NOT READY', 'not-ready');
+  }
+
+  async function runSemanticReindex(source = 'settings') {
+    if (!ensureAppReady('Semantic reindex')) return null;
+    if (semanticReindexRunning) {
+      showToast('Semantic reindex already running.', 'info');
+      return null;
+    }
+    semanticReindexRunning = true;
+    semanticReindexLastError = '';
+    renderSemanticReindexStatus();
+
+    const args = getSemanticReindexArgs();
+
+    showToast(
+      'Semantic reindex started (limit ' + args.limit + ', wait ' + (args.wait_for_index ? 'on' : 'off') + ').',
+      'info'
+    );
+    try {
+      const text = await callMcpTool('memory_reindex', args, 'viewer-semantic-reindex');
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('Unexpected reindex response.');
+      }
+      semanticReindexLastResult = parsed;
+      semanticReindexLastError = '';
+      renderSemanticReindexStatus();
+
+      const indexReady = parsed.index_ready;
+      if (indexReady === true) {
+        showToast('Semantic reindex completed and index is ready.', 'success', true);
+      } else if (indexReady === false) {
+        showToast('Reindex completed but index is not fully ready yet.', 'info', true);
+      } else {
+        showToast('Reindex completed.', 'success', true);
+      }
+      if (source === 'settings') {
+        loadMemories(true);
+      }
+      return parsed;
+    } catch (err) {
+      semanticReindexLastResult = null;
+      semanticReindexLastError = err instanceof Error && err.message ? err.message : 'Semantic reindex failed.';
+      renderSemanticReindexStatus();
+      showToast(semanticReindexLastError, 'error', true);
+      return null;
+    } finally {
+      semanticReindexRunning = false;
+      renderSemanticReindexStatus();
+    }
+  }
+
+  function runSemanticReindexFromSettings() {
+    return runSemanticReindex('settings');
   }
 
   async function doTokenLogin() {
@@ -10155,6 +10419,15 @@ function viewerHtml(): string {
         run: () => toggleShortcutsOverlay(),
       },
       {
+        label: 'Reindex semantic memory',
+        detail: 'Limit ' + (viewerSettings?.semantic_reindex_limit ?? 500) +
+          ' · wait ' + ((viewerSettings?.semantic_reindex_wait_for_index ?? true) ? 'on' : 'off'),
+        run: async () => {
+          if (!ensureAppReady('Semantic reindex')) return;
+          await runSemanticReindex('command');
+        },
+      },
+      {
         label: 'Open settings',
         detail: 'Viewer preferences',
         run: () => openSettingsOverlay(),
@@ -10296,6 +10569,9 @@ function viewerHtml(): string {
     const confirmLogout = document.getElementById('settings-confirm-logout');
     const showScanlines = document.getElementById('settings-show-scanlines');
     const reduceMotion = document.getElementById('settings-reduce-motion');
+    const semanticWait = document.getElementById('settings-semantic-wait');
+    const semanticTimeout = document.getElementById('settings-semantic-timeout');
+    const semanticLimit = document.getElementById('settings-semantic-limit');
     if (livePollEnabled) livePollEnabled.checked = viewerSettings.live_poll_enabled;
     if (livePollInterval) livePollInterval.value = String(viewerSettings.live_poll_interval_sec);
     if (timeMode) timeMode.value = viewerSettings.time_mode;
@@ -10312,6 +10588,10 @@ function viewerHtml(): string {
     if (confirmLogout) confirmLogout.checked = viewerSettings.confirm_logout;
     if (showScanlines) showScanlines.checked = viewerSettings.show_scanlines;
     if (reduceMotion) reduceMotion.checked = viewerSettings.reduce_motion;
+    if (semanticWait) semanticWait.checked = viewerSettings.semantic_reindex_wait_for_index;
+    if (semanticTimeout) semanticTimeout.value = String(viewerSettings.semantic_reindex_wait_timeout_seconds);
+    if (semanticLimit) semanticLimit.value = String(viewerSettings.semantic_reindex_limit);
+    renderSemanticReindexStatus();
   }
 
   function readSettingsFromForm() {
@@ -10332,6 +10612,9 @@ function viewerHtml(): string {
       confirm_logout: document.getElementById('settings-confirm-logout')?.checked === true,
       show_scanlines: document.getElementById('settings-show-scanlines')?.checked !== false,
       reduce_motion: document.getElementById('settings-reduce-motion')?.checked === true,
+      semantic_reindex_wait_for_index: document.getElementById('settings-semantic-wait')?.checked !== false,
+      semantic_reindex_wait_timeout_seconds: Number(document.getElementById('settings-semantic-timeout')?.value ?? 180),
+      semantic_reindex_limit: Number(document.getElementById('settings-semantic-limit')?.value ?? 500),
     };
     return normalizeViewerSettings(raw);
   }

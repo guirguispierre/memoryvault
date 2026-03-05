@@ -9,6 +9,7 @@ It supports:
 - Hybrid lexical + semantic memory retrieval (D1 + Vectorize + Workers AI embeddings)
 - Memory graph tools (links, activation, reinforcement, decay, conflicts, objectives)
 - Web viewer at `/view`
+- In-view semantic sync controls (run `memory_reindex`, wait/readiness options, status feedback)
 
 Production URL:
 - `https://ai-memory-mcp.guirguispierre.workers.dev`
