@@ -8799,10 +8799,13 @@ function viewerHtml(): string {
   .settings-overlay.open { display: flex; }
   .settings-box {
     width: min(760px, 100%);
+    max-height: min(84vh, 820px);
     border: 1px solid var(--border-bright);
     background: rgba(13, 18, 25, 0.98);
     box-shadow: 0 20px 42px rgba(0, 0, 0, 0.42);
     padding: 0.9rem;
+    display: flex;
+    flex-direction: column;
   }
   .settings-head {
     display: flex;
@@ -8845,11 +8848,57 @@ function viewerHtml(): string {
     cursor: pointer;
   }
   .settings-close:hover { border-color: var(--amber); color: var(--amber); }
+  .settings-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 0.15rem;
+    margin-right: -0.15rem;
+  }
+  .settings-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+  .settings-folder {
+    border: 1px solid var(--border);
+    background: rgba(8, 12, 16, 0.64);
+  }
+  .settings-folder[open] {
+    border-color: var(--border-bright);
+    background: rgba(10, 15, 21, 0.8);
+  }
+  .settings-folder summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.5rem 0.62rem;
+    color: var(--teal);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+  .settings-folder summary::-webkit-details-marker { display: none; }
+  .settings-folder summary::after {
+    content: '+';
+    color: var(--amber);
+    font-size: 0.82rem;
+    line-height: 1;
+  }
+  .settings-folder[open] summary::after {
+    content: '-';
+  }
+  .settings-folder-body {
+    border-top: 1px solid var(--border);
+    padding: 0.55rem;
+  }
   .settings-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.5rem 0.75rem;
-    margin-bottom: 0.7rem;
   }
   .setting-row {
     border: 1px solid var(--border);
@@ -8936,6 +8985,7 @@ function viewerHtml(): string {
     gap: 0.5rem;
     justify-content: flex-end;
     flex-wrap: wrap;
+    margin-top: 0.7rem;
   }
   .changelog-overlay {
     display: none;
@@ -9214,7 +9264,8 @@ function viewerHtml(): string {
     .shortcut-key { min-width: 74px; }
     .shortcut-desc { font-size: 0.68rem; }
     .settings-overlay { padding-top: 5vh; }
-    .settings-box { padding: 0.62rem; }
+    .settings-box { padding: 0.62rem; max-height: 90vh; }
+    .settings-scroll { padding-right: 0; margin-right: 0; }
     .settings-grid { grid-template-columns: 1fr; }
     .settings-actions { justify-content: stretch; }
     .settings-actions .refresh-btn { width: 100%; }
@@ -9438,142 +9489,183 @@ function viewerHtml(): string {
       </div>
       <button class="settings-close" onclick="closeSettingsOverlay()">Close</button>
     </div>
-    <div class="settings-grid">
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Live Polling</div>
-          <div class="setting-help">Auto-refresh memory stats in background.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-live-poll-enabled">
-      </div>
-      <div class="setting-row">
-        <label for="settings-live-poll-interval">Polling Interval (sec)</label>
-        <input type="number" min="5" max="120" step="1" class="setting-input" id="settings-live-poll-interval">
-        <div class="setting-help">Lower is faster updates, higher is lighter load.</div>
-      </div>
-      <div class="setting-row">
-        <label for="settings-time-mode">Time Display</label>
-        <select class="setting-input" id="settings-time-mode">
-          <option value="utc">UTC</option>
-          <option value="local">Local</option>
-        </select>
-        <div class="setting-help">Header clock format mode.</div>
-      </div>
-      <div class="setting-row">
-        <label for="settings-default-filter">Default Startup Filter</label>
-        <select class="setting-input" id="settings-default-filter">
-          <option value="">All</option>
-          <option value="note">Notes</option>
-          <option value="fact">Facts</option>
-          <option value="journal">Journal</option>
-        </select>
-        <div class="setting-help">Initial list filter after sign-in.</div>
-      </div>
-      <div class="setting-row">
-        <label for="settings-search-debounce">Search Debounce (ms)</label>
-        <input type="number" min="120" max="1500" step="10" class="setting-input" id="settings-search-debounce">
-        <div class="setting-help">Delay before list search triggers.</div>
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Compact Cards</div>
-          <div class="setting-help">Fit more memory cards on screen.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-compact-cards">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Default Inferred Edges</div>
-          <div class="setting-help">Initial graph inferred-edge visibility.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-graph-inferred">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Default Graph Labels</div>
-          <div class="setting-help">Initial graph label visibility.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-graph-labels">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Default Graph Physics</div>
-          <div class="setting-help">Start graph simulation enabled.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-graph-physics">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Open Graph On Sign-in</div>
-          <div class="setting-help">Skip list view and jump to graph first.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-auto-open-graph">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Toast Notifications</div>
-          <div class="setting-help">In-app feedback for actions and errors.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-toasts-enabled">
-      </div>
-      <div class="setting-row">
-        <label for="settings-toast-duration">Toast Duration (ms)</label>
-        <input type="number" min="1200" max="8000" step="100" class="setting-input" id="settings-toast-duration">
-        <div class="setting-help">How long toast messages stay visible.</div>
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Confirm Before Lock</div>
-          <div class="setting-help">Prompt before manual logout/lock.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-confirm-logout">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Graph Hover Focus</div>
-          <div class="setting-help">Highlight node neighborhood on hover.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-graph-focus">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Show Scanlines</div>
-          <div class="setting-help">Enable CRT-style scanline overlay.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-show-scanlines">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Reduce Motion</div>
-          <div class="setting-help">Disable most transitions and animations.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-reduce-motion">
-      </div>
-      <div class="setting-row setting-inline">
-        <div>
-          <div class="setting-label">Semantic Reindex Wait</div>
-          <div class="setting-help">Wait for Vectorize index readiness before reindex returns.</div>
-        </div>
-        <input type="checkbox" class="setting-check" id="settings-semantic-wait">
-      </div>
-      <div class="setting-row">
-        <label for="settings-semantic-timeout">Semantic Wait Timeout (sec)</label>
-        <input type="number" min="1" max="900" step="1" class="setting-input" id="settings-semantic-timeout">
-        <div class="setting-help">Used when Semantic Reindex Wait is enabled.</div>
-      </div>
-      <div class="setting-row">
-        <label for="settings-semantic-limit">Semantic Reindex Limit</label>
-        <input type="number" min="1" max="2000" step="1" class="setting-input" id="settings-semantic-limit">
-        <div class="setting-help">Maximum memories processed per reindex run.</div>
-      </div>
-      <div class="setting-row setting-span-2">
-        <div class="setting-label">Semantic Index Sync</div>
-        <div class="setting-help">Run <code>memory_reindex</code> from the viewer and inspect readiness output.</div>
-        <div class="semantic-status-box">
-          <div class="semantic-status-line dim" id="semantic-status-line">No semantic reindex run in this session.</div>
-          <div class="semantic-status-meta" id="semantic-status-meta"></div>
-          <button class="refresh-btn utility-btn" id="semantic-reindex-btn" onclick="runSemanticReindexFromSettings()">RUN SEMANTIC REINDEX</button>
-        </div>
+    <div class="settings-scroll">
+      <div class="settings-sections">
+        <details class="settings-folder" open>
+          <summary>General & Search</summary>
+          <div class="settings-folder-body">
+            <div class="settings-grid">
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Live Polling</div>
+                  <div class="setting-help">Auto-refresh memory stats in background.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-live-poll-enabled">
+              </div>
+              <div class="setting-row">
+                <label for="settings-live-poll-interval">Polling Interval (sec)</label>
+                <input type="number" min="5" max="120" step="1" class="setting-input" id="settings-live-poll-interval">
+                <div class="setting-help">Lower is faster updates, higher is lighter load.</div>
+              </div>
+              <div class="setting-row">
+                <label for="settings-time-mode">Time Display</label>
+                <select class="setting-input" id="settings-time-mode">
+                  <option value="utc">UTC</option>
+                  <option value="local">Local</option>
+                </select>
+                <div class="setting-help">Header clock format mode.</div>
+              </div>
+              <div class="setting-row">
+                <label for="settings-default-filter">Default Startup Filter</label>
+                <select class="setting-input" id="settings-default-filter">
+                  <option value="">All</option>
+                  <option value="note">Notes</option>
+                  <option value="fact">Facts</option>
+                  <option value="journal">Journal</option>
+                </select>
+                <div class="setting-help">Initial list filter after sign-in.</div>
+              </div>
+              <div class="setting-row">
+                <label for="settings-search-debounce">Search Debounce (ms)</label>
+                <input type="number" min="120" max="1500" step="10" class="setting-input" id="settings-search-debounce">
+                <div class="setting-help">Delay before list search triggers.</div>
+              </div>
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Compact Cards</div>
+                  <div class="setting-help">Fit more memory cards on screen.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-compact-cards">
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="settings-folder">
+          <summary>Graph Defaults</summary>
+          <div class="settings-folder-body">
+            <div class="settings-grid">
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Default Inferred Edges</div>
+                  <div class="setting-help">Initial graph inferred-edge visibility.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-graph-inferred">
+              </div>
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Default Graph Labels</div>
+                  <div class="setting-help">Initial graph label visibility.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-graph-labels">
+              </div>
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Default Graph Physics</div>
+                  <div class="setting-help">Start graph simulation enabled.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-graph-physics">
+              </div>
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Open Graph On Sign-in</div>
+                  <div class="setting-help">Skip list view and jump to graph first.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-auto-open-graph">
+              </div>
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Graph Hover Focus</div>
+                  <div class="setting-help">Highlight node neighborhood on hover.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-graph-focus">
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="settings-folder">
+          <summary>Appearance & Session</summary>
+          <div class="settings-folder-body">
+            <div class="settings-grid">
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Show Scanlines</div>
+                  <div class="setting-help">Enable CRT-style scanline overlay.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-show-scanlines">
+              </div>
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Reduce Motion</div>
+                  <div class="setting-help">Disable most transitions and animations.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-reduce-motion">
+              </div>
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Confirm Before Lock</div>
+                  <div class="setting-help">Prompt before manual logout/lock.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-confirm-logout">
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="settings-folder">
+          <summary>Notifications</summary>
+          <div class="settings-folder-body">
+            <div class="settings-grid">
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Toast Notifications</div>
+                  <div class="setting-help">In-app feedback for actions and errors.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-toasts-enabled">
+              </div>
+              <div class="setting-row">
+                <label for="settings-toast-duration">Toast Duration (ms)</label>
+                <input type="number" min="1200" max="8000" step="100" class="setting-input" id="settings-toast-duration">
+                <div class="setting-help">How long toast messages stay visible.</div>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="settings-folder">
+          <summary>Semantic Index</summary>
+          <div class="settings-folder-body">
+            <div class="settings-grid">
+              <div class="setting-row setting-inline">
+                <div>
+                  <div class="setting-label">Semantic Reindex Wait</div>
+                  <div class="setting-help">Wait for Vectorize index readiness before reindex returns.</div>
+                </div>
+                <input type="checkbox" class="setting-check" id="settings-semantic-wait">
+              </div>
+              <div class="setting-row">
+                <label for="settings-semantic-timeout">Semantic Wait Timeout (sec)</label>
+                <input type="number" min="1" max="900" step="1" class="setting-input" id="settings-semantic-timeout">
+                <div class="setting-help">Used when Semantic Reindex Wait is enabled.</div>
+              </div>
+              <div class="setting-row">
+                <label for="settings-semantic-limit">Semantic Reindex Limit</label>
+                <input type="number" min="1" max="2000" step="1" class="setting-input" id="settings-semantic-limit">
+                <div class="setting-help">Maximum memories processed per reindex run.</div>
+              </div>
+              <div class="setting-row setting-span-2">
+                <div class="setting-label">Semantic Index Sync</div>
+                <div class="setting-help">Run <code>memory_reindex</code> from the viewer and inspect readiness output.</div>
+                <div class="semantic-status-box">
+                  <div class="semantic-status-line dim" id="semantic-status-line">No semantic reindex run in this session.</div>
+                  <div class="semantic-status-meta" id="semantic-status-meta"></div>
+                  <button class="refresh-btn utility-btn" id="semantic-reindex-btn" onclick="runSemanticReindexFromSettings()">RUN SEMANTIC REINDEX</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
     <div class="settings-actions">
