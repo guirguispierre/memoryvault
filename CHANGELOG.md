@@ -7,11 +7,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-### Changed
+### Added
+- Viewer settings panel now supports folder-style expandable sections (`General & Search`, `Graph Defaults`, `Appearance & Session`, `Notifications`, `Semantic Index`) to reduce visual overload.
+- Viewer settings now include a scrollable settings body so long configurations remain usable on smaller viewports while action buttons stay accessible.
 - `memory_reindex` now supports `wait_for_index` (default `true`) and `wait_timeout_seconds` (default `180`) so callers can block until semantic mutations are queryable.
 - `memory_reindex` response now includes semantic indexing readiness fields (`index_ready`, `mutation_count`, wait timing, and processed mutation markers).
-- `/view` settings now include Semantic Index Sync controls (limit, wait toggle, timeout, run button, and readiness status panel).
-- Command palette now includes a `Reindex semantic memory` action for in-app semantic maintenance.
+- `/view` settings include Semantic Index Sync controls (limit, wait toggle, timeout, run button, and readiness status panel).
+- Command palette includes a `Reindex semantic memory` action for in-app semantic maintenance.
+
+### Changed
+- Settings modal layout was refactored from a single long flat list into grouped sections using native expandable containers, while preserving all existing setting field IDs and persistence behavior.
+- Settings modal now uses a constrained-height container with internal scrolling (`max-height` + `overflow-y`) for better desktop and mobile usability.
+- Mobile settings presentation was tuned to keep section content readable and maintain full-width action buttons.
+- Semantic reindex workflow now surfaces readiness signals directly in the viewer status card, including mutation counters and completion state.
+- Semantic indexing mutation identifiers now use a parseable/stable format to improve cross-operation consistency between write paths and retrieval.
+
+### Fixed
+- Semantic retrieval failures caused by non-parseable vector record identifiers were resolved by switching to a parse-safe vector ID strategy.
+- Newly created memories now reliably participate in semantic retrieval flows after indexing operations.
+- Hybrid retrieval reliability improved by ensuring reindex completion can wait for Vectorize readiness before returning control to callers.
 
 ## [1.9.0] - 2026-03-04
 
