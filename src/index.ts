@@ -21,6 +21,8 @@ const EMBEDDING_BATCH_SIZE = 16;
 const MEMORY_SEARCH_FUSION_K = 60;
 const MEMORY_SEARCH_DEFAULT_LIMIT = 20;
 const MEMORY_SEARCH_MAX_LIMIT = 20;
+const VECTOR_ID_PREFIX = 'm:';
+const VECTOR_ID_MAX_MEMORY_ID_LENGTH = 62; // 2-byte prefix + 62-byte id = 64-byte vector id limit.
 
 type MemorySearchMode = 'lexical' | 'semantic' | 'hybrid';
 type SemanticMemoryCandidate = {
@@ -480,9 +482,22 @@ async function embedTexts(env: Env, texts: string[]): Promise<number[][]> {
   return extractEmbeddingList(result);
 }
 
-async function makeVectorId(brainId: string, memoryId: string): Promise<string> {
+async function makeLegacyVectorId(brainId: string, memoryId: string): Promise<string> {
   const digest = await sha256DigestBase64Url(`${brainId}:${memoryId}`);
   return `m_${digest}`;
+}
+
+async function makeVectorId(brainId: string, memoryId: string): Promise<string> {
+  const normalized = memoryId.trim();
+  if (normalized.length > 0 && normalized.length <= VECTOR_ID_MAX_MEMORY_ID_LENGTH) {
+    return `${VECTOR_ID_PREFIX}${normalized}`;
+  }
+  return makeLegacyVectorId(brainId, memoryId);
+}
+
+function parseMemoryIdFromVectorId(vectorId: string): string {
+  if (!vectorId.startsWith(VECTOR_ID_PREFIX)) return '';
+  return vectorId.slice(VECTOR_ID_PREFIX.length).trim();
 }
 
 function buildMemoryVectorMetadata(brainId: string, memory: Record<string, unknown>): Record<string, string | number | boolean> {
@@ -506,7 +521,9 @@ async function deleteMemoryVectors(env: Env, brainId: string, memoryIds: string[
   if (!hasSemanticSearchBindings(env)) return 0;
   const uniqueIds = Array.from(new Set(memoryIds.map((id) => id.trim()).filter(Boolean)));
   if (!uniqueIds.length) return 0;
-  const vectorIds = await Promise.all(uniqueIds.map((id) => makeVectorId(brainId, id)));
+  const vectorIdsCurrent = await Promise.all(uniqueIds.map((id) => makeVectorId(brainId, id)));
+  const vectorIdsLegacy = await Promise.all(uniqueIds.map((id) => makeLegacyVectorId(brainId, id)));
+  const vectorIds = Array.from(new Set([...vectorIdsCurrent, ...vectorIdsLegacy]));
   for (let i = 0; i < vectorIds.length; i += VECTORIZE_DELETE_BATCH_SIZE) {
     await env.MEMORY_INDEX.deleteByIds(vectorIds.slice(i, i + VECTORIZE_DELETE_BATCH_SIZE));
   }
@@ -564,12 +581,25 @@ async function syncMemoriesToVectorIndex(
     if (embeddings.length !== chunk.length) {
       throw new Error(`Embedding count mismatch. Expected ${chunk.length}, got ${embeddings.length}.`);
     }
-    const vectors = await Promise.all(chunk.map(async (entry, idx) => ({
-      id: await makeVectorId(brainId, entry.memory_id),
-      namespace: brainId,
-      values: embeddings[idx],
-      metadata: entry.metadata,
-    })));
+    const vectors: Array<{ id: string; namespace: string; values: number[]; metadata: Record<string, string | number | boolean> }> = [];
+    const legacyIdsToDelete: string[] = [];
+    for (let idx = 0; idx < chunk.length; idx++) {
+      const entry = chunk[idx];
+      const vectorId = await makeVectorId(brainId, entry.memory_id);
+      const legacyId = await makeLegacyVectorId(brainId, entry.memory_id);
+      if (legacyId !== vectorId) legacyIdsToDelete.push(legacyId);
+      vectors.push({
+        id: vectorId,
+        namespace: brainId,
+        values: embeddings[idx],
+        metadata: entry.metadata,
+      });
+    }
+    if (legacyIdsToDelete.length) {
+      for (let j = 0; j < legacyIdsToDelete.length; j += VECTORIZE_DELETE_BATCH_SIZE) {
+        await env.MEMORY_INDEX.deleteByIds(legacyIdsToDelete.slice(j, j + VECTORIZE_DELETE_BATCH_SIZE));
+      }
+    }
     for (let j = 0; j < vectors.length; j += VECTORIZE_UPSERT_BATCH_SIZE) {
       await env.MEMORY_INDEX.upsert(vectors.slice(j, j + VECTORIZE_UPSERT_BATCH_SIZE));
     }
@@ -624,10 +654,13 @@ async function querySemanticMemoryCandidates(
     rank += 1;
     const score = toFiniteNumber(match.score, 0);
     if (score < minScore) continue;
+    const vectorId = typeof match.id === 'string' ? match.id : '';
+    const fromVectorId = vectorId ? parseMemoryIdFromVectorId(vectorId) : '';
     const metadata = typeof match.metadata === 'object' && match.metadata !== null
       ? match.metadata as Record<string, unknown>
       : null;
-    const memoryId = typeof metadata?.memory_id === 'string' ? metadata.memory_id : '';
+    const fromMetadata = typeof metadata?.memory_id === 'string' ? metadata.memory_id.trim() : '';
+    const memoryId = fromVectorId || fromMetadata;
     if (!memoryId) continue;
     const existing = deduped.get(memoryId);
     if (!existing || score > existing.score) {
