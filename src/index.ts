@@ -17,6 +17,9 @@ const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5';
 const VECTORIZE_QUERY_TOP_K_MAX = 20;
 const VECTORIZE_UPSERT_BATCH_SIZE = 500;
 const VECTORIZE_DELETE_BATCH_SIZE = 500;
+const VECTORIZE_SETTLE_POLL_INTERVAL_MS = 3000;
+const VECTORIZE_REINDEX_WAIT_TIMEOUT_SECONDS = 180;
+const VECTORIZE_REINDEX_WAIT_TIMEOUT_SECONDS_MAX = 900;
 const EMBEDDING_BATCH_SIZE = 16;
 const MEMORY_SEARCH_FUSION_K = 60;
 const MEMORY_SEARCH_DEFAULT_LIMIT = 20;
@@ -29,6 +32,14 @@ type SemanticMemoryCandidate = {
   memory_id: string;
   score: number;
   rank: number;
+};
+
+type VectorSyncStats = {
+  upserted: number;
+  deleted: number;
+  skipped: number;
+  mutation_ids: string[];
+  probe_vector_id: string | null;
 };
 
 type SessionTokens = {
@@ -500,6 +511,10 @@ function parseMemoryIdFromVectorId(vectorId: string): string {
   return vectorId.slice(VECTOR_ID_PREFIX.length).trim();
 }
 
+function looksLikeMemoryId(value: string): boolean {
+  return /^[a-z0-9-]{16,}$/i.test(value.trim());
+}
+
 function buildMemoryVectorMetadata(brainId: string, memory: Record<string, unknown>): Record<string, string | number | boolean> {
   const memoryId = typeof memory.id === 'string' ? memory.id : '';
   const metadata: Record<string, string | number | boolean> = {
@@ -517,26 +532,137 @@ function buildMemoryVectorMetadata(brainId: string, memory: Record<string, unkno
   return metadata;
 }
 
-async function deleteMemoryVectors(env: Env, brainId: string, memoryIds: string[]): Promise<number> {
-  if (!hasSemanticSearchBindings(env)) return 0;
+function extractVectorMutationId(result: unknown): string {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return '';
+  const value = result as Record<string, unknown>;
+  if (typeof value.mutationId === 'string' && value.mutationId.trim()) return value.mutationId.trim();
+  if (typeof value.mutation_id === 'string' && value.mutation_id.trim()) return value.mutation_id.trim();
+  return '';
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readVectorizeProcessedMutation(env: Env): Promise<string> {
+  if (!env.MEMORY_INDEX) return '';
+  try {
+    const details = await env.MEMORY_INDEX.describe() as unknown as {
+      processedUpToMutation?: unknown;
+      processed_up_to_mutation?: unknown;
+    };
+    if (typeof details.processedUpToMutation === 'string') return details.processedUpToMutation.trim();
+    if (typeof details.processed_up_to_mutation === 'string') return details.processed_up_to_mutation.trim();
+    return '';
+  } catch (err) {
+    console.warn('[semantic-index:describe]', err);
+    return '';
+  }
+}
+
+async function waitForVectorMutationReady(
+  env: Env,
+  mutationId: string,
+  timeoutSeconds: number
+): Promise<{ ready: boolean; attempts: number; elapsed_ms: number; processed_up_to_mutation: string | null }> {
+  const target = mutationId.trim();
+  if (!target) {
+    return { ready: false, attempts: 0, elapsed_ms: 0, processed_up_to_mutation: null };
+  }
+  const timeoutMs = Math.max(1, Math.floor(timeoutSeconds * 1000));
+  const startedAt = Date.now();
+  let attempts = 0;
+  let processed = '';
+  while (Date.now() - startedAt <= timeoutMs) {
+    attempts += 1;
+    processed = await readVectorizeProcessedMutation(env);
+    if (processed === target) {
+      return { ready: true, attempts, elapsed_ms: Date.now() - startedAt, processed_up_to_mutation: processed || null };
+    }
+    if (Date.now() - startedAt >= timeoutMs) break;
+    await sleepMs(VECTORIZE_SETTLE_POLL_INTERVAL_MS);
+  }
+  return { ready: false, attempts, elapsed_ms: Date.now() - startedAt, processed_up_to_mutation: processed || null };
+}
+
+async function waitForVectorQueryReady(
+  env: Env,
+  brainId: string,
+  vectorId: string,
+  timeoutSeconds: number
+): Promise<{ ready: boolean; attempts: number; elapsed_ms: number; processed_up_to_mutation: string | null }> {
+  const targetVectorId = vectorId.trim();
+  if (!targetVectorId) {
+    return { ready: false, attempts: 0, elapsed_ms: 0, processed_up_to_mutation: null };
+  }
+  const indexMaybe = env.MEMORY_INDEX as unknown as {
+    queryById?: (vectorId: string, options?: Record<string, unknown>) => Promise<unknown>;
+  };
+  if (typeof indexMaybe.queryById !== 'function') {
+    return { ready: false, attempts: 0, elapsed_ms: 0, processed_up_to_mutation: null };
+  }
+  const timeoutMs = Math.max(1, Math.floor(timeoutSeconds * 1000));
+  const startedAt = Date.now();
+  let attempts = 0;
+  let processed = '';
+  while (Date.now() - startedAt <= timeoutMs) {
+    attempts += 1;
+    try {
+      const queryResult = await indexMaybe.queryById(targetVectorId, {
+        topK: 1,
+        namespace: brainId,
+        returnMetadata: 'none',
+        returnValues: false,
+      });
+      const payload = queryResult as { matches?: unknown[]; results?: unknown[] };
+      const matches = Array.isArray(payload.matches)
+        ? payload.matches
+        : (Array.isArray(payload.results) ? payload.results : []);
+      if (matches.length > 0) {
+        return {
+          ready: true,
+          attempts,
+          elapsed_ms: Date.now() - startedAt,
+          processed_up_to_mutation: processed || null,
+        };
+      }
+    } catch (err) {
+      console.warn('[semantic-index:query-by-id]', err);
+    }
+    processed = await readVectorizeProcessedMutation(env);
+    if (Date.now() - startedAt >= timeoutMs) break;
+    await sleepMs(VECTORIZE_SETTLE_POLL_INTERVAL_MS);
+  }
+  return { ready: false, attempts, elapsed_ms: Date.now() - startedAt, processed_up_to_mutation: processed || null };
+}
+
+async function deleteMemoryVectors(
+  env: Env,
+  brainId: string,
+  memoryIds: string[]
+): Promise<{ deleted: number; mutation_ids: string[] }> {
+  if (!hasSemanticSearchBindings(env)) return { deleted: 0, mutation_ids: [] };
   const uniqueIds = Array.from(new Set(memoryIds.map((id) => id.trim()).filter(Boolean)));
-  if (!uniqueIds.length) return 0;
+  if (!uniqueIds.length) return { deleted: 0, mutation_ids: [] };
   const vectorIdsCurrent = await Promise.all(uniqueIds.map((id) => makeVectorId(brainId, id)));
   const vectorIdsLegacy = await Promise.all(uniqueIds.map((id) => makeLegacyVectorId(brainId, id)));
   const vectorIds = Array.from(new Set([...vectorIdsCurrent, ...vectorIdsLegacy]));
+  const mutationIds: string[] = [];
   for (let i = 0; i < vectorIds.length; i += VECTORIZE_DELETE_BATCH_SIZE) {
-    await env.MEMORY_INDEX.deleteByIds(vectorIds.slice(i, i + VECTORIZE_DELETE_BATCH_SIZE));
+    const mutation = await env.MEMORY_INDEX.deleteByIds(vectorIds.slice(i, i + VECTORIZE_DELETE_BATCH_SIZE));
+    const mutationId = extractVectorMutationId(mutation);
+    if (mutationId) mutationIds.push(mutationId);
   }
-  return uniqueIds.length;
+  return { deleted: uniqueIds.length, mutation_ids: Array.from(new Set(mutationIds)) };
 }
 
 async function syncMemoriesToVectorIndex(
   env: Env,
   brainId: string,
   memories: Array<Record<string, unknown>>
-): Promise<{ upserted: number; deleted: number; skipped: number }> {
+): Promise<VectorSyncStats> {
   if (!hasSemanticSearchBindings(env) || !memories.length) {
-    return { upserted: 0, deleted: 0, skipped: memories.length };
+    return { upserted: 0, deleted: 0, skipped: memories.length, mutation_ids: [], probe_vector_id: null };
   }
 
   const toDeleteIds: string[] = [];
@@ -546,6 +672,8 @@ async function syncMemoriesToVectorIndex(
     metadata: Record<string, string | number | boolean>;
   }> = [];
   let skipped = 0;
+  const mutationIds: string[] = [];
+  let probeVectorId: string | null = null;
 
   for (const memory of memories) {
     const memoryId = typeof memory.id === 'string' ? memory.id.trim() : '';
@@ -571,7 +699,9 @@ async function syncMemoriesToVectorIndex(
 
   let deleted = 0;
   if (toDeleteIds.length) {
-    deleted = await deleteMemoryVectors(env, brainId, toDeleteIds);
+    const deleteStats = await deleteMemoryVectors(env, brainId, toDeleteIds);
+    deleted = deleteStats.deleted;
+    mutationIds.push(...deleteStats.mutation_ids);
   }
 
   let upserted = 0;
@@ -597,16 +727,29 @@ async function syncMemoriesToVectorIndex(
     }
     if (legacyIdsToDelete.length) {
       for (let j = 0; j < legacyIdsToDelete.length; j += VECTORIZE_DELETE_BATCH_SIZE) {
-        await env.MEMORY_INDEX.deleteByIds(legacyIdsToDelete.slice(j, j + VECTORIZE_DELETE_BATCH_SIZE));
+        const legacyDeleteMutation = await env.MEMORY_INDEX.deleteByIds(legacyIdsToDelete.slice(j, j + VECTORIZE_DELETE_BATCH_SIZE));
+        const legacyDeleteMutationId = extractVectorMutationId(legacyDeleteMutation);
+        if (legacyDeleteMutationId) mutationIds.push(legacyDeleteMutationId);
       }
     }
     for (let j = 0; j < vectors.length; j += VECTORIZE_UPSERT_BATCH_SIZE) {
-      await env.MEMORY_INDEX.upsert(vectors.slice(j, j + VECTORIZE_UPSERT_BATCH_SIZE));
+      const upsertChunk = vectors.slice(j, j + VECTORIZE_UPSERT_BATCH_SIZE);
+      const upsertMutation = await env.MEMORY_INDEX.upsert(upsertChunk);
+      const upsertMutationId = extractVectorMutationId(upsertMutation);
+      if (upsertMutationId) mutationIds.push(upsertMutationId);
+      const lastVector = upsertChunk[upsertChunk.length - 1];
+      if (lastVector?.id) probeVectorId = lastVector.id;
     }
     upserted += vectors.length;
   }
 
-  return { upserted, deleted, skipped };
+  return {
+    upserted,
+    deleted,
+    skipped,
+    mutation_ids: Array.from(new Set(mutationIds)),
+    probe_vector_id: probeVectorId,
+  };
 }
 
 async function safeSyncMemoriesToVectorIndex(
@@ -648,20 +791,41 @@ async function querySemanticMemoryCandidates(
     returnMetadata: 'all',
     returnValues: false,
   });
+  const matchesAny = matches as unknown as { matches?: unknown[]; results?: unknown[] };
+  const matchesArray = Array.isArray(matchesAny.matches)
+    ? matchesAny.matches
+    : (Array.isArray(matchesAny.results) ? matchesAny.results : []);
   const deduped = new Map<string, SemanticMemoryCandidate>();
   let rank = 0;
-  for (const match of matches.matches ?? []) {
+  for (const rawMatch of matchesArray) {
+    if (!rawMatch || typeof rawMatch !== 'object' || Array.isArray(rawMatch)) continue;
+    const match = rawMatch as Record<string, unknown>;
     rank += 1;
-    const score = toFiniteNumber(match.score, 0);
+    const score = toFiniteNumber(match.score ?? match.similarity ?? match.distance, 0);
     if (score < minScore) continue;
-    const vectorId = typeof match.id === 'string' ? match.id : '';
+    const vectorId = typeof match.id === 'string'
+      ? match.id
+      : (typeof match.vectorId === 'string'
+        ? match.vectorId
+        : (typeof match.vector_id === 'string' ? match.vector_id : ''));
     const fromVectorId = vectorId ? parseMemoryIdFromVectorId(vectorId) : '';
     const metadata = typeof match.metadata === 'object' && match.metadata !== null
       ? match.metadata as Record<string, unknown>
-      : null;
-    const fromMetadata = typeof metadata?.memory_id === 'string' ? metadata.memory_id.trim() : '';
-    const memoryId = fromVectorId || fromMetadata;
+      : (typeof match.meta === 'object' && match.meta !== null
+        ? match.meta as Record<string, unknown>
+        : null);
+    const fromMetadata = metadata && typeof metadata.memory_id === 'string'
+      ? metadata.memory_id.trim()
+      : (metadata && typeof metadata.memoryId === 'string' ? metadata.memoryId.trim() : '');
+    const fromRawVectorId = fromVectorId
+      ? fromVectorId
+      : (vectorId && looksLikeMemoryId(vectorId) ? vectorId.trim() : '');
+    const memoryId = fromRawVectorId || fromMetadata;
     if (!memoryId) continue;
+    const metadataBrainId = metadata && typeof metadata.brain_id === 'string'
+      ? metadata.brain_id.trim()
+      : (metadata && typeof metadata.brainId === 'string' ? metadata.brainId.trim() : '');
+    if (metadataBrainId && metadataBrainId !== brainId) continue;
     const existing = deduped.get(memoryId);
     if (!existing || score > existing.score) {
       deduped.set(memoryId, { memory_id: memoryId, score, rank });
@@ -707,16 +871,51 @@ async function runLexicalMemorySearch(
   typeFilter: MemoryType | undefined,
   limit: number
 ): Promise<Record<string, unknown>[]> {
-  const like = `%${query.trim()}%`;
+  const trimmedQuery = query.trim();
+  const fields = ['id', 'content', 'title', 'key', 'source', 'tags'];
+  const phraseLike = `%${trimmedQuery}%`;
+  const searchParams: unknown[] = [];
+  let where = `(${fields.map((field) => `${field} LIKE ?`).join(' OR ')})`;
+  searchParams.push(...fields.map(() => phraseLike));
+
+  const tokens = Array.from(new Set(
+    trimmedQuery
+      .toLowerCase()
+      .split(/[^a-z0-9]+/g)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3)
+  ));
+  const meaningfulTokens = tokens.filter((token) => token !== trimmedQuery.toLowerCase());
+  if (meaningfulTokens.length) {
+    const tokenClauses: string[] = [];
+    for (const token of meaningfulTokens) {
+      tokenClauses.push(`(${fields.map((field) => `${field} LIKE ?`).join(' OR ')})`);
+      const tokenLike = `%${token}%`;
+      searchParams.push(...fields.map(() => tokenLike));
+    }
+    where = `(${where} OR ${tokenClauses.join(' OR ')})`;
+  }
+
   if (typeFilter) {
     const results = await env.DB.prepare(
-      'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT ?'
-    ).bind(brainId, typeFilter, like, like, like, like, like, limit).all<Record<string, unknown>>();
+      `SELECT * FROM memories
+       WHERE brain_id = ?
+         AND archived_at IS NULL
+         AND type = ?
+         AND ${where}
+       ORDER BY created_at DESC
+       LIMIT ?`
+    ).bind(brainId, typeFilter, ...searchParams, limit).all<Record<string, unknown>>();
     return results.results;
   }
   const results = await env.DB.prepare(
-    'SELECT * FROM memories WHERE brain_id = ? AND archived_at IS NULL AND (id LIKE ? OR content LIKE ? OR title LIKE ? OR key LIKE ? OR source LIKE ?) ORDER BY created_at DESC LIMIT ?'
-  ).bind(brainId, like, like, like, like, like, limit).all<Record<string, unknown>>();
+    `SELECT * FROM memories
+     WHERE brain_id = ?
+       AND archived_at IS NULL
+       AND ${where}
+     ORDER BY created_at DESC
+     LIMIT ?`
+  ).bind(brainId, ...searchParams, limit).all<Record<string, unknown>>();
   return results.results;
 }
 
@@ -1822,7 +2021,7 @@ const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
   },
   memory_reindex: {
     introduced_in: '1.9.0',
-    notes: 'Backfill/repair semantic vector embeddings from D1 memories.',
+    notes: 'Backfill/repair semantic vector embeddings from D1 memories with optional readiness waiting.',
   },
   memory_link_suggest: {
     introduced_in: '1.7.0',
@@ -2124,12 +2323,14 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'memory_reindex',
-    description: 'Rebuild semantic vectors for recent memories in the current brain.',
+    description: 'Rebuild semantic vectors for recent memories in the current brain and optionally wait for Vectorize readiness.',
     inputSchema: {
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Max memories to process (1-2000, default 500)' },
         include_archived: { type: 'boolean', description: 'Also process archived memories (archived rows trigger vector deletion)' },
+        wait_for_index: { type: 'boolean', description: 'Wait for Vectorize mutation processing before returning (default true)' },
+        wait_timeout_seconds: { type: 'number', description: 'Max wait time when wait_for_index=true (1-900, default 180)' },
       },
       required: [],
     },
@@ -2941,12 +3142,25 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
     }
 
     case 'memory_reindex': {
-      const { limit: rawLimit, include_archived: rawIncludeArchived } = args as {
+      const {
+        limit: rawLimit,
+        include_archived: rawIncludeArchived,
+        wait_for_index: rawWaitForIndex,
+        wait_timeout_seconds: rawWaitTimeoutSeconds,
+      } = args as {
         limit?: unknown;
         include_archived?: unknown;
+        wait_for_index?: unknown;
+        wait_timeout_seconds?: unknown;
       };
       if (rawIncludeArchived !== undefined && typeof rawIncludeArchived !== 'boolean') {
         return { content: [{ type: 'text', text: 'include_archived must be a boolean when provided.' }] };
+      }
+      if (rawWaitForIndex !== undefined && typeof rawWaitForIndex !== 'boolean') {
+        return { content: [{ type: 'text', text: 'wait_for_index must be a boolean when provided.' }] };
+      }
+      if (rawWaitTimeoutSeconds !== undefined && !Number.isFinite(Number(rawWaitTimeoutSeconds))) {
+        return { content: [{ type: 'text', text: 'wait_timeout_seconds must be a finite number when provided.' }] };
       }
       if (!hasSemanticSearchBindings(env)) {
         return { content: [{ type: 'text', text: 'Semantic reindex unavailable: AI and MEMORY_INDEX bindings are not configured.' }] };
@@ -2956,6 +3170,16 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         2000
       );
       const includeArchived = rawIncludeArchived === true;
+      const waitForIndex = rawWaitForIndex !== false;
+      const waitTimeoutSeconds = Math.min(
+        Math.max(
+          Number.isFinite(Number(rawWaitTimeoutSeconds))
+            ? Math.floor(Number(rawWaitTimeoutSeconds))
+            : VECTORIZE_REINDEX_WAIT_TIMEOUT_SECONDS,
+          1
+        ),
+        VECTORIZE_REINDEX_WAIT_TIMEOUT_SECONDS_MAX
+      );
       let sql = `
         SELECT id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at
         FROM memories
@@ -2971,6 +3195,28 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
         return { content: [{ type: 'text', text: 'No memories available for reindex.' }] };
       }
       const stats = await syncMemoriesToVectorIndex(env, brainId, rows.results);
+      let indexReady: boolean | null = null;
+      let waitAttempts = 0;
+      let waitElapsedMs = 0;
+      let processedUpToMutation: string | null = null;
+      const waitedForMutationId = stats.mutation_ids.length ? stats.mutation_ids[stats.mutation_ids.length - 1] : null;
+      if (waitForIndex) {
+        if (!stats.mutation_ids.length) {
+          indexReady = true;
+        } else {
+          let waitResult = stats.probe_vector_id
+            ? await waitForVectorQueryReady(env, brainId, stats.probe_vector_id, waitTimeoutSeconds)
+            : await waitForVectorMutationReady(env, waitedForMutationId ?? '', waitTimeoutSeconds);
+          if (!waitResult.ready && waitedForMutationId && stats.probe_vector_id) {
+            const mutationWait = await waitForVectorMutationReady(env, waitedForMutationId, waitTimeoutSeconds);
+            waitResult = mutationWait.ready ? mutationWait : waitResult;
+          }
+          indexReady = waitResult.ready;
+          waitAttempts = waitResult.attempts;
+          waitElapsedMs = waitResult.elapsed_ms;
+          processedUpToMutation = waitResult.processed_up_to_mutation;
+        }
+      }
       return {
         content: [{
           type: 'text',
@@ -2980,6 +3226,15 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
             upserted: stats.upserted,
             deleted: stats.deleted,
             skipped: stats.skipped,
+            mutation_count: stats.mutation_ids.length,
+            probe_vector_id: stats.probe_vector_id,
+            wait_for_index: waitForIndex,
+            wait_timeout_seconds: waitTimeoutSeconds,
+            index_ready: indexReady,
+            wait_attempts: waitAttempts,
+            wait_elapsed_ms: waitElapsedMs,
+            waited_for_mutation_id: waitedForMutationId,
+            processed_up_to_mutation: processedUpToMutation,
           }, null, 2),
         }],
       };

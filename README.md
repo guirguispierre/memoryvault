@@ -56,6 +56,7 @@ npm run dev
 
 Notes:
 - Semantic search + reindex require Workers AI/Vectorize bindings and remote dev (`wrangler dev --remote`).
+- Vectorize mutations are asynchronous; `memory_reindex` defaults to waiting for index readiness (`wait_for_index=true`) before it returns.
 
 ## Deploy
 
@@ -129,7 +130,7 @@ Use this server URL:
 ## Available MCP Tools
 
 - `memory_save`, `memory_get`, `memory_get_fact`, `memory_search`, `memory_list`
-- `memory_reindex` (semantic backfill/repair)
+- `memory_reindex` (semantic backfill/repair, readiness wait controls)
 - `memory_update`, `memory_delete`, `memory_stats`
 - `memory_link`, `memory_unlink`, `memory_links`
 - `memory_consolidate`, `memory_forget`
