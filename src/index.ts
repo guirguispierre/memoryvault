@@ -19,7 +19,8 @@ const ACCESS_TOKEN_COOKIE_NAME = 'access_token';
 const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
 const ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS = 60 * 15; // 15 minutes
 const ACCESS_TOKEN_COOKIE_PATH = '/';
-const REFRESH_TOKEN_COOKIE_PATH = '/auth/refresh';
+const REFRESH_TOKEN_COOKIE_PATH = '/';
+const SESSION_COOKIE_SAME_SITE = 'Lax' as const;
 const LOGIN_RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 const PBKDF2_ITERATIONS = 100_000;
 const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5';
@@ -215,10 +216,12 @@ function buildSessionCookieHeaders(tokens: SessionTokens): string[] {
     serializeCookie(ACCESS_TOKEN_COOKIE_NAME, tokens.access_token, {
       maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS,
       path: ACCESS_TOKEN_COOKIE_PATH,
+      sameSite: SESSION_COOKIE_SAME_SITE,
     }),
     serializeCookie(REFRESH_TOKEN_COOKIE_NAME, tokens.refresh_token, {
       maxAge: REFRESH_TOKEN_TTL_SECONDS,
       path: REFRESH_TOKEN_COOKIE_PATH,
+      sameSite: SESSION_COOKIE_SAME_SITE,
     }),
   ];
 }
@@ -228,10 +231,12 @@ function clearSessionCookieHeaders(): string[] {
     serializeCookie(ACCESS_TOKEN_COOKIE_NAME, '', {
       maxAge: 0,
       path: ACCESS_TOKEN_COOKIE_PATH,
+      sameSite: SESSION_COOKIE_SAME_SITE,
     }),
     serializeCookie(REFRESH_TOKEN_COOKIE_NAME, '', {
       maxAge: 0,
       path: REFRESH_TOKEN_COOKIE_PATH,
+      sameSite: SESSION_COOKIE_SAME_SITE,
     }),
   ];
 }
@@ -7004,14 +7009,7 @@ async function handleAuthSignup(request: Request, env: Env): Promise<Response> {
   ).bind(brainId, userId, ts).run();
 
   const tokens = await createSessionTokens(userId, brainId, env);
-  const brains = await listBrainsForUser(userId, env);
-  const activeBrain = findActiveBrain(brains, brainId);
-
-  return corsJsonResponse({
-    user: userPayload({ id: userId, email, display_name: displayName, created_at: ts }),
-    active_brain: activeBrain,
-    brains,
-  }, 201, { cookies: buildSessionCookieHeaders(tokens) });
+  return corsJsonResponse({ ok: true }, 200, { cookies: buildSessionCookieHeaders(tokens) });
 }
 
 async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
@@ -7044,11 +7042,7 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   }
 
   const tokens = await createSessionTokens(user.id, activeBrain.id, env);
-  return corsJsonResponse({
-    user: userPayload(user),
-    active_brain: activeBrain,
-    brains,
-  }, 200, { cookies: buildSessionCookieHeaders(tokens) });
+  return corsJsonResponse({ ok: true }, 200, { cookies: buildSessionCookieHeaders(tokens) });
 }
 
 async function handleAuthRefresh(request: Request, env: Env): Promise<Response> {
@@ -7065,21 +7059,7 @@ async function handleAuthRefresh(request: Request, env: Env): Promise<Response> 
       cookies: clearSessionCookieHeaders(),
     });
   }
-
-  const user = await env.DB.prepare(
-    'SELECT id, email, display_name, created_at FROM users WHERE id = ? LIMIT 1'
-  ).bind(rotated.userId).first<{ id: string; email: string; display_name: string | null; created_at: number }>();
-  if (!user) return corsJsonResponse({ error: 'Session user not found.' }, 401);
-
-  const brains = await listBrainsForUser(rotated.userId, env);
-  const activeBrain = findActiveBrain(brains, rotated.brainId);
-  if (!activeBrain) return corsJsonResponse({ error: 'No brain membership found for session user.' }, 403);
-
-  return corsJsonResponse({
-    user: userPayload(user),
-    active_brain: activeBrain,
-    brains,
-  }, 200, { cookies: buildSessionCookieHeaders(rotated.tokens) });
+  return corsJsonResponse({ ok: true }, 200, { cookies: buildSessionCookieHeaders(rotated.tokens) });
 }
 
 async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
@@ -7093,58 +7073,11 @@ async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
       revoked = await revokeSessionById(authCtx.sessionId, env);
     }
   }
-  return corsJsonResponse({ ok: true, revoked }, 200, { cookies: clearSessionCookieHeaders() });
+  return corsJsonResponse({ ok: true }, 200, { cookies: clearSessionCookieHeaders() });
 }
 
-async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
-  const memoryWrite = canMutateMemories(authCtx);
-  if (authCtx.kind === 'legacy') {
-    return corsJsonResponse({
-      kind: 'legacy',
-      client_id: authCtx.clientId,
-      user: null,
-      active_brain: {
-        id: LEGACY_BRAIN_ID,
-        name: 'Legacy Shared Brain',
-        role: 'legacy',
-      },
-      brains: [{
-        id: LEGACY_BRAIN_ID,
-        name: 'Legacy Shared Brain',
-        role: 'legacy',
-      }],
-      permissions: {
-        memories: {
-          read: true,
-          write: memoryWrite,
-        },
-      },
-    });
-  }
-  if (!authCtx.userId) return corsJsonResponse({ error: 'Unauthorized' }, 401);
-
-  const user = await env.DB.prepare(
-    'SELECT id, email, display_name, created_at FROM users WHERE id = ? LIMIT 1'
-  ).bind(authCtx.userId).first<{ id: string; email: string; display_name: string | null; created_at: number }>();
-  if (!user) return corsJsonResponse({ error: 'User not found.' }, 401);
-
-  const brains = await listBrainsForUser(user.id, env);
-  const activeBrain = findActiveBrain(brains, authCtx.brainId);
-  if (!activeBrain) return corsJsonResponse({ error: 'No brain membership found for user.' }, 403);
-
-  return corsJsonResponse({
-    kind: 'user',
-    client_id: authCtx.clientId,
-    user: userPayload(user),
-    active_brain: activeBrain,
-    brains,
-    permissions: {
-      memories: {
-        read: true,
-        write: memoryWrite,
-      },
-    },
-  });
+async function handleAuthMe(_authCtx: AuthContext, _env: Env): Promise<Response> {
+  return corsJsonResponse({ ok: true });
 }
 
 type SessionSummary = {
@@ -12444,7 +12377,8 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       details: [
         'Creates a user account from email/password.',
         'Optionally accepts brain_name for the initial memory brain.',
-        'Sets httpOnly access_token and refresh_token cookies on success.',
+        'Sets httpOnly access_token and refresh_token cookies on success using SameSite=Lax.',
+        'Returns { ok: true } on success.',
       ],
     };
   }
@@ -12457,7 +12391,8 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       auth: 'No token required.',
       details: [
         'Authenticates user email/password credentials.',
-        'Sets httpOnly access_token and refresh_token cookies.',
+        'Sets httpOnly access_token and refresh_token cookies using SameSite=Lax.',
+        'Returns { ok: true } on success.',
         'Used by the web viewer and OAuth-assisted flows.',
       ],
     };
@@ -12470,9 +12405,10 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       methods: 'POST',
       auth: 'No access token required; requires refresh_token cookie.',
       details: [
-        'Issues new access and refresh tokens via httpOnly cookies.',
+        'Reads refresh_token from the Cookie header.',
+        'Issues new access and refresh tokens via httpOnly cookies using SameSite=Lax.',
         'Revokes/replaces previous refresh token for session safety.',
-        'Used automatically by the web viewer when access token expires.',
+        'Returns { ok: true } on success.',
       ],
     };
   }
@@ -12484,21 +12420,22 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       methods: 'POST',
       auth: 'Clears auth cookies and revokes the current session when possible.',
       details: [
-        'Clears both auth cookies on the server response.',
+        'Clears both auth cookies on the server response with Max-Age=0.',
+        'Returns { ok: true } on success.',
         'Used when user signs out from the web viewer.',
       ],
     };
   }
   if (pathname === '/auth/me') {
     return {
-      title: 'Current User API',
-      subtitle: 'Returns authenticated user + brain context',
+      title: 'Session Check API',
+      subtitle: 'Validate current authenticated session',
       endpointPath: '/auth/me',
       methods: 'GET',
       auth: 'Requires Authorization: Bearer <access_token> or access_token cookie.',
       details: [
         'Validates current access token.',
-        'Returns session-scoped identity and current brain context.',
+        'Returns { ok: true } when the session is valid.',
       ],
     };
   }
