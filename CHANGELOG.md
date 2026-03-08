@@ -14,10 +14,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `memory_reindex` response now includes semantic indexing readiness fields (`index_ready`, `mutation_count`, wait timing, and processed mutation markers).
 - `/view` settings include Semantic Index Sync controls (limit, wait toggle, timeout, run button, and readiness status panel).
 - Command palette includes a `Reindex semantic memory` action for in-app semantic maintenance.
-- Browser auth responses now issue and rotate httpOnly `access_token` / `refresh_token` cookies for sign-up, login, refresh, and logout flows.
+- Browser auth responses now issue and rotate httpOnly `auth_token` / `refresh_token` cookies for sign-up, login, refresh, and logout flows.
 - OAuth redirect handling now includes trusted self-registration domains for hosted MCP clients (`poke.com`, `claude.ai`) alongside explicit redirect-domain configuration.
 - CORS allowlisting now explicitly includes `https://poke.com` plus the dev and prod Worker origins used by embedded clients.
 - `/view.js` now serves the viewer script from a same-origin asset path so the existing CSP can allow it without `unsafe-inline`.
+- Cloudflare Worker auth now binds a dedicated `RATE_LIMIT_KV` namespace in both prod and dev for deployed brute-force protection.
 
 ### Changed
 - Settings modal layout was refactored from a single long flat list into grouped sections using native expandable containers, while preserving all existing setting field IDs and persistence behavior.
@@ -27,7 +28,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Semantic indexing mutation identifiers now use a parseable/stable format to improve cross-operation consistency between write paths and retrieval.
 - OAuth dynamic client registration now requires `ADMIN_TOKEN` unless every `redirect_uri` is on a trusted hosted-client domain, and stale non-whitelisted clients are purged during registration attempts.
 - OAuth metadata and authorization validation now enforce `S256` PKCE only, and the smoke test flow now covers the stricter registration/auth requirements.
-- Login requests now use the Cloudflare rate-limit binding, while authenticated browser/API requests can use cookie-backed access tokens in addition to bearer headers.
+- Login and signup requests now use a Cloudflare KV-backed rate limiter with 15-minute TTL windows, while authenticated browser/API requests can use cookie-backed auth tokens in addition to bearer headers.
 - `/view` UI actions are now bound with `addEventListener` and `data-action` hooks instead of inline `onclick`/`oninput` handlers.
 
 ### Fixed
@@ -38,6 +39,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Trusted Poke/Claude redirect URIs can now complete MCP dynamic client registration without manual preregistration, while non-trusted domains still require admin approval.
 - CORS responses now reflect only allowlisted origins on both preflight and actual responses instead of falling back to `*`.
 - `/view` buttons and interactive controls now work under the strict Content-Security-Policy without relaxing `script-src`.
+- Concurrent auth attempts now rate-limit consistently by recording one expiring KV key per request instead of racing on a shared counter key.
 
 ## [1.9.0] - 2026-03-04
 

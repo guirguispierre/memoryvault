@@ -1,11 +1,11 @@
 export interface Env {
   DB: D1Database;
+  RATE_LIMIT_KV: KVNamespace;
   AUTH_SECRET: string;
   ADMIN_TOKEN: string;
   OAUTH_REDIRECT_DOMAIN_ALLOWLIST?: string;
   AI?: Ai;
   MEMORY_INDEX?: Vectorize;
-  LOGIN_RATE_LIMITER: RateLimit;
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
@@ -15,13 +15,14 @@ const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
-const ACCESS_TOKEN_COOKIE_NAME = 'access_token';
+const AUTH_TOKEN_COOKIE_NAME = 'auth_token';
 const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
-const ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS = 60 * 15; // 15 minutes
-const ACCESS_TOKEN_COOKIE_PATH = '/';
+const AUTH_TOKEN_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24; // 24 hours
+const AUTH_TOKEN_COOKIE_PATH = '/';
 const REFRESH_TOKEN_COOKIE_PATH = '/';
 const SESSION_COOKIE_SAME_SITE = 'Lax' as const;
-const LOGIN_RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
+const AUTH_RATE_LIMIT_MAX_ATTEMPTS = 10;
+const AUTH_RATE_LIMIT_WINDOW_SECONDS = 60 * 15;
 const PBKDF2_ITERATIONS = 100_000;
 const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5';
 const VECTORIZE_QUERY_TOP_K_MAX = 20;
@@ -213,9 +214,9 @@ function normalizeCorsJsonResponseOptions(
 
 function buildSessionCookieHeaders(tokens: SessionTokens): string[] {
   return [
-    serializeCookie(ACCESS_TOKEN_COOKIE_NAME, tokens.access_token, {
-      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS,
-      path: ACCESS_TOKEN_COOKIE_PATH,
+    serializeCookie(AUTH_TOKEN_COOKIE_NAME, tokens.access_token, {
+      maxAge: AUTH_TOKEN_COOKIE_MAX_AGE_SECONDS,
+      path: AUTH_TOKEN_COOKIE_PATH,
       sameSite: SESSION_COOKIE_SAME_SITE,
     }),
     serializeCookie(REFRESH_TOKEN_COOKIE_NAME, tokens.refresh_token, {
@@ -228,9 +229,9 @@ function buildSessionCookieHeaders(tokens: SessionTokens): string[] {
 
 function clearSessionCookieHeaders(): string[] {
   return [
-    serializeCookie(ACCESS_TOKEN_COOKIE_NAME, '', {
+    serializeCookie(AUTH_TOKEN_COOKIE_NAME, '', {
       maxAge: 0,
-      path: ACCESS_TOKEN_COOKIE_PATH,
+      path: AUTH_TOKEN_COOKIE_PATH,
       sameSite: SESSION_COOKIE_SAME_SITE,
     }),
     serializeCookie(REFRESH_TOKEN_COOKIE_NAME, '', {
@@ -239,6 +240,10 @@ function clearSessionCookieHeaders(): string[] {
       sameSite: SESSION_COOKIE_SAME_SITE,
     }),
   ];
+}
+
+function buildRotatedSessionCookieHeaders(tokens: SessionTokens): string[] {
+  return [...clearSessionCookieHeaders(), ...buildSessionCookieHeaders(tokens)];
 }
 
 function parseBearerToken(request: Request): string | null {
@@ -250,7 +255,7 @@ function parseBearerToken(request: Request): string | null {
 }
 
 function getAccessTokenFromRequest(request: Request): string | null {
-  return parseBearerToken(request) ?? getRequestCookie(request, ACCESS_TOKEN_COOKIE_NAME);
+  return parseBearerToken(request) ?? getRequestCookie(request, AUTH_TOKEN_COOKIE_NAME);
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -483,6 +488,25 @@ async function authenticateRequest(request: Request, env: Env): Promise<AuthCont
   }
   await authEnv.DB.prepare('UPDATE auth_sessions SET used_at = ? WHERE id = ?').bind(ts, row.id).run();
   return { kind: 'user', brainId: row.brain_id, userId: row.user_id, sessionId: row.id, clientId: row.client_id ?? null };
+}
+
+function authRateLimitPrefix(ip: string): string {
+  return `rl:login:${ip || 'unknown'}`;
+}
+
+function authRateLimitKey(ip: string): string {
+  return `${authRateLimitPrefix(ip)}:${Date.now()}`;
+}
+
+async function checkRateLimit(ip: string, kv: KVNamespace): Promise<boolean> {
+  await kv.put(authRateLimitKey(ip), '1', { expirationTtl: AUTH_RATE_LIMIT_WINDOW_SECONDS });
+  const listed = await kv.list({ prefix: authRateLimitPrefix(ip) });
+  return listed.keys.length > AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+}
+
+async function resetAuthRateLimit(ip: string, kv: KVNamespace): Promise<void> {
+  const listed = await kv.list({ prefix: authRateLimitPrefix(ip) });
+  await Promise.all(listed.keys.map((key) => kv.delete(key.name)));
 }
 
 async function isRateLimited(ip: string, env: Env, limit = 10): Promise<boolean> {
@@ -6420,7 +6444,7 @@ const HTML_SECURITY_HEADERS: Record<string, string> = {
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self' cdn.jsdelivr.net fonts.googleapis.com fonts.gstatic.com; style-src 'self' 'unsafe-inline' fonts.googleapis.com; font-src fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none';",
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' cdn.jsdelivr.net fonts.googleapis.com fonts.gstatic.com mcp.figma.com; style-src 'self' 'unsafe-inline' fonts.googleapis.com; font-src fonts.gstatic.com; connect-src 'self' mcp.figma.com; frame-ancestors 'none';",
 };
 
 function corsJsonResponse(
@@ -6972,6 +6996,11 @@ function findActiveBrain(brains: BrainSummary[], preferredBrainId: string): Brai
 }
 
 async function handleAuthSignup(request: Request, env: Env): Promise<Response> {
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  if (await checkRateLimit(ip, env.RATE_LIMIT_KV)) {
+    return corsJsonResponse({ error: 'Too many attempts. Try again in 15 minutes.' }, 429);
+  }
+
   const body = await readJsonBody(request);
   if (!body) return corsJsonResponse({ error: 'Invalid JSON body.' }, 400);
 
@@ -6994,6 +7023,7 @@ async function handleAuthSignup(request: Request, env: Env): Promise<Response> {
   const userId = generateId();
   const passwordHash = await hashPassword(passwordRaw);
   const displayName = sanitizeDisplayName(body.display_name ?? body.name, email);
+  const user = { id: userId, email, display_name: displayName, created_at: ts };
   await env.DB.prepare(
     'INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
   ).bind(userId, email, passwordHash, displayName, ts, ts).run();
@@ -7009,10 +7039,17 @@ async function handleAuthSignup(request: Request, env: Env): Promise<Response> {
   ).bind(brainId, userId, ts).run();
 
   const tokens = await createSessionTokens(userId, brainId, env);
-  return corsJsonResponse({ ok: true }, 200, { cookies: buildSessionCookieHeaders(tokens) });
+  return corsJsonResponse({ success: true, user: userPayload(user) }, 200, {
+    cookies: buildSessionCookieHeaders(tokens),
+  });
 }
 
 async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  if (await checkRateLimit(ip, env.RATE_LIMIT_KV)) {
+    return corsJsonResponse({ error: 'Too many attempts. Try again in 15 minutes.' }, 429);
+  }
+
   const body = await readJsonBody(request);
   if (!body) return corsJsonResponse({ error: 'Invalid JSON body.' }, 400);
 
@@ -7042,7 +7079,10 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   }
 
   const tokens = await createSessionTokens(user.id, activeBrain.id, env);
-  return corsJsonResponse({ ok: true }, 200, { cookies: buildSessionCookieHeaders(tokens) });
+  await resetAuthRateLimit(ip, env.RATE_LIMIT_KV);
+  return corsJsonResponse({ success: true, user: userPayload(user) }, 200, {
+    cookies: buildSessionCookieHeaders(tokens),
+  });
 }
 
 async function handleAuthRefresh(request: Request, env: Env): Promise<Response> {
@@ -7059,21 +7099,22 @@ async function handleAuthRefresh(request: Request, env: Env): Promise<Response> 
       cookies: clearSessionCookieHeaders(),
     });
   }
-  return corsJsonResponse({ ok: true }, 200, { cookies: buildSessionCookieHeaders(rotated.tokens) });
+  return corsJsonResponse({ success: true }, 200, {
+    cookies: buildRotatedSessionCookieHeaders(rotated.tokens),
+  });
 }
 
 async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
-  let revoked = false;
   const refreshToken = (getRequestCookie(request, REFRESH_TOKEN_COOKIE_NAME) ?? '').trim();
   if (refreshToken) {
-    revoked = await revokeSession(refreshToken, env);
+    await revokeSession(refreshToken, env);
   } else {
     const authCtx = await authenticateRequest(request, env);
     if (authCtx?.kind === 'user' && authCtx.sessionId) {
-      revoked = await revokeSessionById(authCtx.sessionId, env);
+      await revokeSessionById(authCtx.sessionId, env);
     }
   }
-  return corsJsonResponse({ ok: true }, 200, { cookies: clearSessionCookieHeaders() });
+  return corsJsonResponse({ success: true }, 200, { cookies: clearSessionCookieHeaders() });
 }
 
 async function handleAuthMe(_authCtx: AuthContext, _env: Env): Promise<Response> {
@@ -12231,6 +12272,7 @@ function rootLandingHtml(url: URL): string {
       </div>
     </section>
   </main>
+  <script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async></script>
 </body>
 </html>`;
 }
@@ -12498,8 +12540,8 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       details: [
         'Creates a user account from email/password.',
         'Optionally accepts brain_name for the initial memory brain.',
-        'Sets httpOnly access_token and refresh_token cookies on success using SameSite=Lax.',
-        'Returns { ok: true } on success.',
+        'Sets httpOnly auth_token and refresh_token cookies on success using SameSite=Lax.',
+        'Returns { success: true, user } on success.',
       ],
     };
   }
@@ -12512,8 +12554,8 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       auth: 'No token required.',
       details: [
         'Authenticates user email/password credentials.',
-        'Sets httpOnly access_token and refresh_token cookies using SameSite=Lax.',
-        'Returns { ok: true } on success.',
+        'Sets httpOnly auth_token and refresh_token cookies using SameSite=Lax.',
+        'Returns { success: true, user } on success.',
         'Used by the web viewer and OAuth-assisted flows.',
       ],
     };
@@ -12527,9 +12569,9 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       auth: 'No access token required; requires refresh_token cookie.',
       details: [
         'Reads refresh_token from the Cookie header.',
-        'Issues new access and refresh tokens via httpOnly cookies using SameSite=Lax.',
+        'Issues new auth_token and refresh_token cookies using SameSite=Lax.',
         'Revokes/replaces previous refresh token for session safety.',
-        'Returns { ok: true } on success.',
+        'Returns { success: true } on success.',
       ],
     };
   }
@@ -12542,7 +12584,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       auth: 'Clears auth cookies and revokes the current session when possible.',
       details: [
         'Clears both auth cookies on the server response with Max-Age=0.',
-        'Returns { ok: true } on success.',
+        'Returns { success: true } on success.',
         'Used when user signs out from the web viewer.',
       ],
     };
@@ -12553,7 +12595,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Validate current authenticated session',
       endpointPath: '/auth/me',
       methods: 'GET',
-      auth: 'Requires Authorization: Bearer <access_token> or access_token cookie.',
+      auth: 'Requires Authorization: Bearer <access_token> or auth_token cookie.',
       details: [
         'Validates current access token.',
         'Returns { ok: true } when the session is valid.',
@@ -12566,7 +12608,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'List active sessions for the current user',
       endpointPath: '/auth/sessions',
       methods: 'GET',
-      auth: 'Requires Authorization: Bearer <access_token>.',
+      auth: 'Requires Authorization: Bearer <access_token> or auth_token cookie.',
       details: [
         'Returns active sessions bound to the authenticated user.',
         'Used for account/session management and audit.',
@@ -12579,7 +12621,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Revoke one or more active sessions',
       endpointPath: '/auth/sessions/revoke',
       methods: 'POST',
-      auth: 'Requires Authorization: Bearer <access_token>.',
+      auth: 'Requires Authorization: Bearer <access_token> or auth_token cookie.',
       details: [
         'Revokes target session(s), including all-other-sessions mode.',
         'Used to lock out stale or compromised sessions.',
@@ -12592,7 +12634,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'List/search/create memory records',
       endpointPath: '/api/memories',
       methods: 'GET, POST',
-      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      auth: 'Requires Authorization: Bearer <access_token>, auth_token cookie, or legacy AUTH_SECRET.',
       details: [
         'Returns memory records scoped to your brain.',
         'Supports type and search filtering via query params.',
@@ -12606,7 +12648,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'List MCP tools exposed by this server',
       endpointPath: '/api/tools',
       methods: 'GET',
-      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      auth: 'Requires Authorization: Bearer <access_token>, auth_token cookie, or legacy AUTH_SECRET.',
       details: [
         'Returns the tool metadata available to MCP clients.',
         'Primarily useful for diagnostics and integration checks.',
@@ -12619,7 +12661,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Graph nodes + explicit/inferred links',
       endpointPath: '/api/graph',
       methods: 'GET',
-      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      auth: 'Requires Authorization: Bearer <access_token>, auth_token cookie, or legacy AUTH_SECRET.',
       details: [
         'Returns graph nodes, explicit edges, and inferred edges.',
         'Used by the graph visualization in /view.',
@@ -12632,7 +12674,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Get links for a specific memory id',
       endpointPath: '/api/links/:memoryId',
       methods: 'GET',
-      auth: 'Requires Authorization: Bearer <access_token> or legacy AUTH_SECRET.',
+      auth: 'Requires Authorization: Bearer <access_token>, auth_token cookie, or legacy AUTH_SECRET.',
       details: [
         'Returns outbound/inbound links for one memory.',
         'Path parameter is the target memory id.',
@@ -12880,27 +12922,11 @@ export default {
 
       if (url.pathname === '/auth/signup') {
         if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-        if (await isRateLimited(ip, env)) {
-          return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
-        }
-        const response = await handleAuthSignup(request, env);
-        if (response.status >= 400) await recordFailedAttempt(ip, env);
-        else await clearRateLimit(ip, env);
-        return response;
+        return handleAuthSignup(request, env);
       }
 
       if (url.pathname === '/auth/login') {
         if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-        const clientIP = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-        const { success } = await env.LOGIN_RATE_LIMITER.limit({ key: clientIP });
-        if (!success) {
-          return corsJsonResponse(
-            { error: 'Too many login attempts. Try again later.' },
-            429,
-            { 'Retry-After': String(LOGIN_RATE_LIMIT_RETRY_AFTER_SECONDS) }
-          );
-        }
         return handleAuthLogin(request, env);
       }
 

@@ -15,11 +15,9 @@ binding = "DB"
 database_name = "ai-memory"
 database_id = "f881cdf0-9109-45a8-863f-65942a81a7bf"
 
-[[unsafe.bindings]]
-name = "LOGIN_RATE_LIMITER"
-type = "ratelimit"
-namespace_id = "1"
-simple = { limit = 5, period = 60 }
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "45fefc1b7f5f4fa3a8326a9db2b1477d"
 
 [env.dev]
 name = "ai-memory-mcp-dev"
@@ -36,8 +34,6 @@ binding = "DB"
 database_name = "ai-memory"
 database_id = "f881cdf0-9109-45a8-863f-65942a81a7bf"
 
-[[env.dev.unsafe.bindings]]
-name = "LOGIN_RATE_LIMITER"
-type = "ratelimit"
-namespace_id = "1"
-simple = { limit = 5, period = 60 }
+[[env.dev.kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "9c86e1f7ddbe4006993ccf7ce9eb25c2"
