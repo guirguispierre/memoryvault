@@ -1,8 +1,11 @@
 export interface Env {
   DB: D1Database;
   AUTH_SECRET: string;
+  ADMIN_TOKEN: string;
+  OAUTH_REDIRECT_DOMAIN_ALLOWLIST?: string;
   AI?: Ai;
   MEMORY_INDEX?: Vectorize;
+  LOGIN_RATE_LIMITER: RateLimit;
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
@@ -12,6 +15,12 @@ const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+const ACCESS_TOKEN_COOKIE_NAME = 'access_token';
+const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
+const ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS = 60 * 15; // 15 minutes
+const ACCESS_TOKEN_COOKIE_PATH = '/';
+const REFRESH_TOKEN_COOKIE_PATH = '/auth/refresh';
+const LOGIN_RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 const PBKDF2_ITERATIONS = 100_000;
 const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5';
 const VECTORIZE_QUERY_TOP_K_MAX = 20;
@@ -26,6 +35,8 @@ const MEMORY_SEARCH_DEFAULT_LIMIT = 20;
 const MEMORY_SEARCH_MAX_LIMIT = 20;
 const VECTOR_ID_PREFIX = 'm:';
 const VECTOR_ID_MAX_MEMORY_ID_LENGTH = 62; // 2-byte prefix + 62-byte id = 64-byte vector id limit.
+const DEFAULT_OAUTH_REDIRECT_DOMAIN_ALLOWLIST = ['localhost', '127.0.0.1'] as const;
+const TRUSTED_REDIRECT_DOMAINS = ['poke.com', 'claude.ai'] as const;
 
 type MemorySearchMode = 'lexical' | 'semantic' | 'hybrid';
 type SemanticMemoryCandidate = {
@@ -48,6 +59,11 @@ type SessionTokens = {
   expires_in: number;
   refresh_expires_in: number;
   session_id: string;
+};
+
+type CorsJsonResponseOptions = {
+  headers?: HeadersInit;
+  cookies?: string[];
 };
 
 function generateId(): string {
@@ -122,7 +138,102 @@ type AccessTokenPayload = {
 
 function canMutateMemories(authCtx: AuthContext): boolean {
   if (authCtx.kind === 'legacy') return true;
-  return typeof authCtx.clientId === 'string' && authCtx.clientId.trim().length > 0;
+  return typeof authCtx.userId === 'string' && authCtx.userId.trim().length > 0;
+}
+
+function mergeHeaders(target: Headers, source?: HeadersInit): Headers {
+  if (!source) return target;
+  const headers = new Headers(source);
+  headers.forEach((value, key) => target.set(key, value));
+  return target;
+}
+
+function buildCorsJsonHeaders(options: CorsJsonResponseOptions = {}): Headers {
+  const headers = mergeHeaders(new Headers(CORS_HEADERS), options.headers);
+  headers.set('Content-Type', 'application/json');
+  for (const cookie of options.cookies ?? []) {
+    headers.append('Set-Cookie', cookie);
+  }
+  return headers;
+}
+
+function parseRequestCookies(request: Request): Map<string, string> {
+  const cookies = new Map<string, string>();
+  const cookieHeader = request.headers.get('Cookie');
+  if (!cookieHeader) return cookies;
+  for (const part of cookieHeader.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator <= 0) continue;
+    const name = part.slice(0, separator).trim();
+    const rawValue = part.slice(separator + 1).trim();
+    if (!name) continue;
+    try {
+      cookies.set(name, decodeURIComponent(rawValue));
+    } catch {
+      cookies.set(name, rawValue);
+    }
+  }
+  return cookies;
+}
+
+function getRequestCookie(request: Request, name: string): string | null {
+  return parseRequestCookies(request).get(name) ?? null;
+}
+
+function serializeCookie(
+  name: string,
+  value: string,
+  options: {
+    httpOnly?: boolean;
+    secure?: boolean;
+    sameSite?: 'Strict' | 'Lax' | 'None';
+    maxAge?: number;
+    path: string;
+  }
+): string {
+  const parts = [`${name}=${encodeURIComponent(value)}`];
+  if (options.httpOnly !== false) parts.push('HttpOnly');
+  if (options.secure !== false) parts.push('Secure');
+  parts.push(`SameSite=${options.sameSite ?? 'Strict'}`);
+  if (typeof options.maxAge === 'number') parts.push(`Max-Age=${Math.max(0, Math.floor(options.maxAge))}`);
+  parts.push(`Path=${options.path}`);
+  return parts.join('; ');
+}
+
+function normalizeCorsJsonResponseOptions(
+  options: CorsJsonResponseOptions | Record<string, string>
+): CorsJsonResponseOptions {
+  const candidate = options as CorsJsonResponseOptions;
+  if (Array.isArray(candidate.cookies) || Object.prototype.hasOwnProperty.call(candidate, 'headers')) {
+    return candidate;
+  }
+  return { headers: options as Record<string, string> };
+}
+
+function buildSessionCookieHeaders(tokens: SessionTokens): string[] {
+  return [
+    serializeCookie(ACCESS_TOKEN_COOKIE_NAME, tokens.access_token, {
+      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS,
+      path: ACCESS_TOKEN_COOKIE_PATH,
+    }),
+    serializeCookie(REFRESH_TOKEN_COOKIE_NAME, tokens.refresh_token, {
+      maxAge: REFRESH_TOKEN_TTL_SECONDS,
+      path: REFRESH_TOKEN_COOKIE_PATH,
+    }),
+  ];
+}
+
+function clearSessionCookieHeaders(): string[] {
+  return [
+    serializeCookie(ACCESS_TOKEN_COOKIE_NAME, '', {
+      maxAge: 0,
+      path: ACCESS_TOKEN_COOKIE_PATH,
+    }),
+    serializeCookie(REFRESH_TOKEN_COOKIE_NAME, '', {
+      maxAge: 0,
+      path: REFRESH_TOKEN_COOKIE_PATH,
+    }),
+  ];
 }
 
 function parseBearerToken(request: Request): string | null {
@@ -131,6 +242,10 @@ function parseBearerToken(request: Request): string | null {
   const match = auth.match(/^\s*Bearer\s+(.+?)\s*$/i);
   if (!match) return null;
   return match[1] || null;
+}
+
+function getAccessTokenFromRequest(request: Request): string | null {
+  return parseBearerToken(request) ?? getRequestCookie(request, ACCESS_TOKEN_COOKIE_NAME);
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -326,8 +441,16 @@ async function revokeSession(refreshToken: string, env: Env): Promise<boolean> {
   return (result.meta.changes ?? 0) > 0;
 }
 
+async function revokeSessionById(sessionId: string, env: Env): Promise<boolean> {
+  const ts = now();
+  const result = await env.DB.prepare(
+    'UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL'
+  ).bind(ts, sessionId).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
 async function authenticateRequest(request: Request, env: Env): Promise<AuthContext | null> {
-  const token = parseBearerToken(request);
+  const token = getAccessTokenFromRequest(request);
   if (!token) return null;
   if (token === env.AUTH_SECRET) {
     return { kind: 'legacy', brainId: LEGACY_BRAIN_ID, userId: null, sessionId: null, clientId: 'legacy_auth_secret' };
@@ -349,6 +472,10 @@ async function authenticateRequest(request: Request, env: Env): Promise<AuthCont
      LIMIT 1`
   ).bind(payload.sid, payload.sub, payload.bid, ts).first<{ id: string; user_id: string; brain_id: string; client_id: string | null }>();
   if (!row) return null;
+  if (row.client_id) {
+    const client = await purgeOAuthClientIfNotWhitelisted(await getOAuthClient(row.client_id, authEnv), authEnv);
+    if (!client) return null;
+  }
   await authEnv.DB.prepare('UPDATE auth_sessions SET used_at = ? WHERE id = ?').bind(ts, row.id).run();
   return { kind: 'user', brainId: row.brain_id, userId: row.user_id, sessionId: row.id, clientId: row.client_id ?? null };
 }
@@ -6270,16 +6397,84 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
   }
 }
 
+const ALLOWED_ORIGINS = [
+  'https://claude.ai',
+  'https://poke.com',
+  'https://ai-memory-mcp-dev.guirguispierre.workers.dev',
+  'https://ai-memory-mcp.guirguispierre.workers.dev',
+];
+
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
 };
 
-function corsJsonResponse(body: unknown, status = 200): Response {
+const HTML_SECURITY_HEADERS: Record<string, string> = {
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' cdn.jsdelivr.net fonts.googleapis.com fonts.gstatic.com; style-src 'self' 'unsafe-inline' fonts.googleapis.com; font-src fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none';",
+};
+
+function corsJsonResponse(
+  body: unknown,
+  status = 200,
+  options: CorsJsonResponseOptions | Record<string, string> = {}
+): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    headers: buildCorsJsonHeaders(normalizeCorsJsonResponseOptions(options)),
+  });
+}
+
+function getCorsOrigin(request: Request): string {
+  const origin = request.headers.get('Origin');
+  return origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+}
+
+function mergeVaryHeader(existingValue: string | null, value: string): string {
+  const varyValues = new Set(
+    (existingValue ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
+  varyValues.add(value);
+  return Array.from(varyValues).join(', ');
+}
+
+function applyCors(request: Request, response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set('Access-Control-Allow-Origin', getCorsOrigin(request));
+  for (const [name, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(name, value);
+  }
+  headers.set('Vary', mergeVaryHeader(headers.get('Vary'), 'Origin'));
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function isHtmlResponse(response: Response): boolean {
+  const contentType = (response.headers.get('Content-Type') ?? '').toLowerCase();
+  return contentType.includes('text/html');
+}
+
+function wrapWithSecurityHeaders(response: Response): Response {
+  const clonedResponse = response.clone();
+  const headers = new Headers(clonedResponse.headers);
+  for (const [name, value] of Object.entries(HTML_SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
+  return new Response(clonedResponse.body, {
+    status: clonedResponse.status,
+    statusText: clonedResponse.statusText,
+    headers,
   });
 }
 
@@ -6365,7 +6560,7 @@ async function processMcpBody(
         id,
         error: {
           code: -32003,
-          message: 'Forbidden: this session is read-only. Use an OAuth agent session to modify memories.',
+          message: 'Forbidden: this session cannot modify memories. Re-authenticate and try again.',
         },
       };
     }
@@ -6816,8 +7011,7 @@ async function handleAuthSignup(request: Request, env: Env): Promise<Response> {
     user: userPayload({ id: userId, email, display_name: displayName, created_at: ts }),
     active_brain: activeBrain,
     brains,
-    ...tokens,
-  }, 201);
+  }, 201, { cookies: buildSessionCookieHeaders(tokens) });
 }
 
 async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
@@ -6854,18 +7048,23 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
     user: userPayload(user),
     active_brain: activeBrain,
     brains,
-    ...tokens,
-  });
+  }, 200, { cookies: buildSessionCookieHeaders(tokens) });
 }
 
 async function handleAuthRefresh(request: Request, env: Env): Promise<Response> {
-  const body = await readJsonBody(request);
-  if (!body) return corsJsonResponse({ error: 'Invalid JSON body.' }, 400);
-  const refreshToken = typeof body.refresh_token === 'string' ? body.refresh_token.trim() : '';
-  if (!refreshToken) return corsJsonResponse({ error: 'refresh_token is required.' }, 400);
+  const refreshToken = (getRequestCookie(request, REFRESH_TOKEN_COOKIE_NAME) ?? '').trim();
+  if (!refreshToken) {
+    return corsJsonResponse({ error: 'refresh_token cookie is required.' }, 400, {
+      cookies: clearSessionCookieHeaders(),
+    });
+  }
 
   const rotated = await rotateSession(refreshToken, env);
-  if (!rotated) return corsJsonResponse({ error: 'Invalid or expired refresh token.' }, 401);
+  if (!rotated) {
+    return corsJsonResponse({ error: 'Invalid or expired refresh token.' }, 401, {
+      cookies: clearSessionCookieHeaders(),
+    });
+  }
 
   const user = await env.DB.prepare(
     'SELECT id, email, display_name, created_at FROM users WHERE id = ? LIMIT 1'
@@ -6880,18 +7079,21 @@ async function handleAuthRefresh(request: Request, env: Env): Promise<Response> 
     user: userPayload(user),
     active_brain: activeBrain,
     brains,
-    ...rotated.tokens,
-  });
+  }, 200, { cookies: buildSessionCookieHeaders(rotated.tokens) });
 }
 
 async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
-  const body = await readJsonBody(request);
-  const refreshFromBody = typeof body?.refresh_token === 'string' ? body.refresh_token.trim() : '';
-  const refreshFromHeader = parseBearerToken(request) ?? '';
-  const refreshToken = refreshFromBody || refreshFromHeader;
-  if (!refreshToken) return corsJsonResponse({ error: 'refresh_token is required.' }, 400);
-  await revokeSession(refreshToken, env);
-  return corsJsonResponse({ ok: true });
+  let revoked = false;
+  const refreshToken = (getRequestCookie(request, REFRESH_TOKEN_COOKIE_NAME) ?? '').trim();
+  if (refreshToken) {
+    revoked = await revokeSession(refreshToken, env);
+  } else {
+    const authCtx = await authenticateRequest(request, env);
+    if (authCtx?.kind === 'user' && authCtx.sessionId) {
+      revoked = await revokeSessionById(authCtx.sessionId, env);
+    }
+  }
+  return corsJsonResponse({ ok: true, revoked }, 200, { cookies: clearSessionCookieHeaders() });
 }
 
 async function handleAuthMe(authCtx: AuthContext, env: Env): Promise<Response> {
@@ -7106,6 +7308,16 @@ function oauthRateLimitedError(): Response {
   });
 }
 
+function oauthUnauthorized(errorDescription = 'Unauthorized.'): Response {
+  return new Response(JSON.stringify({
+    error: 'unauthorized',
+    error_description: errorDescription,
+  }), {
+    status: 401,
+    headers: noStoreJsonHeaders({ 'WWW-Authenticate': 'Bearer' }),
+  });
+}
+
 function timingSafeEqualStrings(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let mismatch = 0;
@@ -7217,6 +7429,72 @@ function isValidRedirectUri(raw: string): boolean {
   }
 }
 
+function getOAuthRedirectDomainAllowlist(env: Env): string[] {
+  const configured = typeof env.OAUTH_REDIRECT_DOMAIN_ALLOWLIST === 'string'
+    ? env.OAUTH_REDIRECT_DOMAIN_ALLOWLIST
+    : '';
+  const parsed = configured
+    .split(/[,\s]+/)
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set([
+    ...DEFAULT_OAUTH_REDIRECT_DOMAIN_ALLOWLIST,
+    ...TRUSTED_REDIRECT_DOMAINS,
+    ...parsed,
+  ]));
+}
+
+function isAllowedRedirectDomain(hostname: string, env: Env): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) return false;
+  return getOAuthRedirectDomainAllowlist(env).some((domain) => (
+    normalized === domain || normalized.endsWith(`.${domain}`)
+  ));
+}
+
+function isWhitelistedRedirectUri(raw: string, env: Env): boolean {
+  if (!isValidRedirectUri(raw)) return false;
+  try {
+    const url = new URL(raw);
+    return isAllowedRedirectDomain(url.hostname, env);
+  } catch {
+    return false;
+  }
+}
+
+function hasOnlyWhitelistedRedirectUris(redirectUris: string[], env: Env): boolean {
+  return redirectUris.length > 0 && redirectUris.every((uri) => isWhitelistedRedirectUri(uri, env));
+}
+
+function isTrustedRedirectDomain(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) return false;
+  return TRUSTED_REDIRECT_DOMAINS.some((domain) => (
+    normalized === domain || normalized.endsWith(`.${domain}`)
+  ));
+}
+
+function isTrustedRedirectUri(raw: string): boolean {
+  if (!isValidRedirectUri(raw)) return false;
+  try {
+    const url = new URL(raw);
+    return isTrustedRedirectDomain(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function hasOnlyTrustedRedirectUris(redirectUris: string[]): boolean {
+  return redirectUris.length > 0 && redirectUris.every((uri) => isTrustedRedirectUri(uri));
+}
+
+function hasValidAdminBearer(request: Request, env: Env): boolean {
+  const provided = parseBearerToken(request)?.trim() ?? '';
+  const expected = (env.ADMIN_TOKEN ?? '').trim();
+  if (!provided || !expected) return false;
+  return timingSafeEqualStrings(provided, expected);
+}
+
 function escapeHtml(input: string): string {
   return input
     .replace(/&/g, '&amp;')
@@ -7324,47 +7602,45 @@ async function getOAuthClient(clientId: string, env: Env): Promise<OAuthClientRo
   };
 }
 
-function isAllowedRedirectForClient(client: OAuthClientRow | null, redirectUri: string): boolean {
-  if (!isValidRedirectUri(redirectUri)) return false;
-  if (!client) return true;
+function isAllowedRedirectForClient(client: OAuthClientRow | null, redirectUri: string, env: Env): boolean {
+  if (!client) return false;
+  if (!isWhitelistedRedirectUri(redirectUri, env)) return false;
   return client.redirect_uris.includes(redirectUri);
 }
 
-async function ensureOAuthClient(clientId: string, redirectUri: string, env: Env): Promise<OAuthClientRow> {
-  const existing = await getOAuthClient(clientId, env);
-  if (existing) return existing;
+async function revokeAndDeleteOAuthClient(clientId: string, id: string, env: Env): Promise<void> {
   const ts = now();
-  const id = generateId();
-  const redirectUris = [redirectUri];
-  const grantTypes = ['authorization_code', 'refresh_token'];
-  const responseTypes = ['code'];
   await env.DB.prepare(
-    `INSERT INTO oauth_clients
-      (id, client_id, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, client_secret_hash, client_secret_expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'none', NULL, 0, ?, ?)`
-  ).bind(
-    id,
-    clientId,
-    null,
-    JSON.stringify(redirectUris),
-    JSON.stringify(grantTypes),
-    JSON.stringify(responseTypes),
-    ts,
-    ts
-  ).run();
-  return {
-    id,
-    client_id: clientId,
-    client_name: null,
-    redirect_uris: redirectUris,
-    grant_types: grantTypes,
-    response_types: responseTypes,
-    token_endpoint_auth_method: 'none',
-    client_secret_hash: null,
-    client_secret_expires_at: 0,
-    created_at: ts,
-    updated_at: ts,
-  };
+    'UPDATE auth_sessions SET revoked_at = ? WHERE client_id = ? AND revoked_at IS NULL'
+  ).bind(ts, clientId).run();
+  await env.DB.prepare(
+    'DELETE FROM oauth_authorization_codes WHERE client_id = ?'
+  ).bind(clientId).run();
+  await env.DB.prepare(
+    'DELETE FROM oauth_clients WHERE id = ?'
+  ).bind(id).run();
+}
+
+async function purgeOAuthClientIfNotWhitelisted(client: OAuthClientRow | null, env: Env): Promise<OAuthClientRow | null> {
+  if (!client) return null;
+  if (hasOnlyWhitelistedRedirectUris(client.redirect_uris, env)) return client;
+  await revokeAndDeleteOAuthClient(client.client_id, client.id, env);
+  return null;
+}
+
+async function purgeNonWhitelistedOAuthClients(env: Env): Promise<number> {
+  const clients = await env.DB.prepare(
+    'SELECT id, client_id, redirect_uris FROM oauth_clients'
+  ).all<{ id: string; client_id: string; redirect_uris: string }>();
+  const rows = clients.results ?? [];
+  let purged = 0;
+  for (const row of rows) {
+    const redirectUris = parseJsonStringArray(row.redirect_uris);
+    if (hasOnlyWhitelistedRedirectUris(redirectUris, env)) continue;
+    await revokeAndDeleteOAuthClient(row.client_id, row.id, env);
+    purged += 1;
+  }
+  return purged;
 }
 
 function validateAuthorizeParams(params: URLSearchParams): { ok: true; data: Record<string, string> } | { ok: false; message: string } {
@@ -7378,8 +7654,8 @@ function validateAuthorizeParams(params: URLSearchParams): { ok: true; data: Rec
   if (!redirectUri.trim()) return { ok: false, message: 'redirect_uri is required.' };
   if (!isValidRedirectUri(redirectUri)) return { ok: false, message: 'redirect_uri is invalid.' };
   if (!codeChallenge.trim()) return { ok: false, message: 'code_challenge is required.' };
-  if (codeChallengeMethod !== 'S256' && codeChallengeMethod !== 'PLAIN') {
-    return { ok: false, message: 'code_challenge_method must be S256 or plain.' };
+  if (codeChallengeMethod !== 'S256') {
+    return { ok: false, message: 'Only S256 code_challenge_method is supported' };
   }
   return {
     ok: true,
@@ -7502,8 +7778,11 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
   if (request.method === 'GET') {
     const parsed = validateAuthorizeParams(url.searchParams);
     if (!parsed.ok) return oauthError('invalid_request', parsed.message, 400);
-    const client = await getOAuthClient(parsed.data.client_id, authEnv);
-    if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri)) {
+    const client = await purgeOAuthClientIfNotWhitelisted(await getOAuthClient(parsed.data.client_id, authEnv), authEnv);
+    if (!client) {
+      return oauthError('invalid_client', 'client_id is invalid.', 401);
+    }
+    if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri, authEnv)) {
       return oauthError('invalid_request', 'redirect_uri is not allowed for this client.', 400);
     }
     return new Response(renderAuthorizePage(parsed.data, null), {
@@ -7609,8 +7888,14 @@ async function handleOAuthAuthorize(request: Request, url: URL, env: Env): Promi
     }
   }
 
-  const client = await ensureOAuthClient(parsed.data.client_id, parsed.data.redirect_uri, authEnv);
-  if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri)) {
+  const client = await purgeOAuthClientIfNotWhitelisted(await getOAuthClient(parsed.data.client_id, authEnv), authEnv);
+  if (!client) {
+    return new Response(renderAuthorizePage(parsed.data, 'This OAuth client is not registered.'), {
+      status: 401,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+  if (!isAllowedRedirectForClient(client, parsed.data.redirect_uri, authEnv)) {
     return new Response(renderAuthorizePage(parsed.data, 'redirect_uri is not allowed for this client.'), {
       status: 400,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -7661,6 +7946,10 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
     ).bind(code).first<OAuthCodeRow>();
     if (!authCode || authCode.used_at !== null || authCode.expires_at <= now()) {
       return oauthError('invalid_grant', 'Authorization code is invalid or expired.');
+    }
+    const authCodeClient = await purgeOAuthClientIfNotWhitelisted(await getOAuthClient(authCode.client_id, authEnv), authEnv);
+    if (!authCodeClient) {
+      return oauthError('invalid_client', 'client_id is invalid.', 401);
     }
 
     if (redirectUri && authCode.redirect_uri !== redirectUri) {
@@ -7714,6 +8003,12 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
     if (!session || session.revoked_at !== null || session.expires_at <= now()) {
       return oauthError('invalid_grant', 'Refresh token is invalid or expired.');
     }
+    if (session.client_id) {
+      const refreshClient = await purgeOAuthClientIfNotWhitelisted(await getOAuthClient(session.client_id, authEnv), authEnv);
+      if (!refreshClient) {
+        return oauthError('invalid_client', 'client_id is invalid.', 401);
+      }
+    }
 
     // Skip client_secret validation for refresh tokens — same rationale as
     // authorization_code grant: MCP clients use varying auth methods and
@@ -7736,6 +8031,7 @@ async function handleOAuthToken(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleOAuthRegister(request: Request, env: Env): Promise<Response> {
+  const authEnv = withPrimaryDbEnv(env);
   if (request.method !== 'POST') return oauthError('invalid_request', 'Method not allowed.', 405);
   const body = await readJsonBody(request);
   if (!body) return oauthError('invalid_request', 'Invalid JSON body.', 400);
@@ -7748,9 +8044,14 @@ async function handleOAuthRegister(request: Request, env: Env): Promise<Response
     .filter((v): v is string => typeof v === 'string')
     .map((v) => v.trim())
     .filter(Boolean);
-  if (!redirectUris.length || redirectUris.some((uri) => !isValidRedirectUri(uri))) {
-    return oauthError('invalid_client_metadata', 'All redirect_uris must be valid HTTPS URIs (or localhost HTTP).');
+  if (!redirectUris.length || redirectUris.some((uri) => !isWhitelistedRedirectUri(uri, authEnv))) {
+    return oauthError('invalid_client_metadata', 'All redirect_uris must be valid and use an allowlisted domain (or localhost HTTP).');
   }
+  if (!hasOnlyTrustedRedirectUris(redirectUris) && !hasValidAdminBearer(request, authEnv)) {
+    return oauthUnauthorized('A valid admin bearer token is required unless every redirect_uri uses a trusted domain.');
+  }
+
+  await purgeNonWhitelistedOAuthClients(authEnv);
 
   const authMethodRaw = typeof body.token_endpoint_auth_method === 'string'
     ? body.token_endpoint_auth_method.trim()
@@ -7770,7 +8071,7 @@ async function handleOAuthRegister(request: Request, env: Env): Promise<Response
   const clientId = `mcp_${randomToken(12)}`;
   const clientSecret = authMethod === 'none' ? null : randomToken(24);
   const clientSecretHash = clientSecret ? await sha256DigestBase64Url(clientSecret) : null;
-  await env.DB.prepare(
+  await authEnv.DB.prepare(
     `INSERT INTO oauth_clients
       (id, client_id, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, client_secret_hash, client_secret_expires_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
@@ -7824,7 +8125,7 @@ function handleAuthorizationServerMetadata(url: URL): Response {
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
-    code_challenge_methods_supported: ['S256', 'plain'],
+    code_challenge_methods_supported: ['S256'],
     scopes_supported: ['mcp:full'],
   });
 }
@@ -9707,8 +10008,7 @@ function viewerHtml(): string {
     example_of: '#66a9ff',
   };
   let TOKEN = '';
-  let REFRESH_TOKEN = '';
-  let SESSION_MODE = 'legacy';
+  let SESSION_MODE = 'none';
   let activeFilter = '';
   let searchTimeout = null;
   let allMemories = [];
@@ -9737,6 +10037,10 @@ function viewerHtml(): string {
   let semanticReindexRunning = false;
   let semanticReindexLastResult = null;
   let semanticReindexLastError = '';
+
+  function hasAuthenticatedSession() {
+    return SESSION_MODE === 'user' || (SESSION_MODE === 'legacy' && !!TOKEN);
+  }
 
   function buildDefaultViewerSettings() {
     return {
@@ -9848,6 +10152,7 @@ function viewerHtml(): string {
 
   initializeViewerSettings();
   fillSettingsForm();
+  restoreUserSession();
 
   function setLoginError(message) {
     const el = document.getElementById('login-error');
@@ -9901,23 +10206,17 @@ function viewerHtml(): string {
     startLivePolling();
     showToast('Session active. Loading memory stream.', 'success');
     if (viewerSettings && viewerSettings.auto_open_graph) {
-      setTimeout(() => { if (TOKEN) showGraph(); }, 180);
+      setTimeout(() => { if (hasAuthenticatedSession()) showGraph(); }, 180);
     }
   }
 
   async function tryRefreshSession() {
-    if (!REFRESH_TOKEN) return false;
     try {
       const r = await fetch(BASE + '/auth/refresh', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: REFRESH_TOKEN }),
+        credentials: 'same-origin',
       });
       if (!r.ok) return false;
-      const data = await r.json();
-      if (!data || !data.access_token) return false;
-      TOKEN = data.access_token;
-      REFRESH_TOKEN = data.refresh_token || REFRESH_TOKEN;
       SESSION_MODE = 'user';
       return true;
     } catch {
@@ -9925,10 +10224,31 @@ function viewerHtml(): string {
     }
   }
 
+  async function restoreUserSession() {
+    if (hasAuthenticatedSession()) return true;
+    try {
+      let r = await fetch(BASE + '/auth/me', { credentials: 'same-origin' });
+      if (r.status === 401) {
+        const refreshed = await tryRefreshSession();
+        if (!refreshed) return false;
+        r = await fetch(BASE + '/auth/me', { credentials: 'same-origin' });
+      }
+      if (!r.ok) return false;
+      SESSION_MODE = 'user';
+      enterApp();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function apiFetch(url, options = {}, allowRefresh = true) {
-    const mergedHeaders = Object.assign({}, options.headers || {}, TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {});
-    const response = await fetch(url, Object.assign({}, options, { headers: mergedHeaders }));
-    if (response.status === 401 && allowRefresh && REFRESH_TOKEN) {
+    const mergedHeaders = Object.assign({}, options.headers || {});
+    if (SESSION_MODE === 'legacy' && TOKEN) {
+      mergedHeaders.Authorization = 'Bearer ' + TOKEN;
+    }
+    const response = await fetch(url, Object.assign({ credentials: 'same-origin' }, options, { headers: mergedHeaders }));
+    if (response.status === 401 && allowRefresh && SESSION_MODE === 'user') {
       const refreshed = await tryRefreshSession();
       if (refreshed) return apiFetch(url, options, false);
     }
@@ -10136,7 +10456,6 @@ function viewerHtml(): string {
         return;
       }
       TOKEN = val;
-      REFRESH_TOKEN = '';
       SESSION_MODE = 'legacy';
       enterApp();
       showToast('Legacy token accepted.', 'success');
@@ -10164,6 +10483,7 @@ function viewerHtml(): string {
       const r = await fetch(BASE + endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify(payload),
       });
       const data = await r.json().catch(() => ({}));
@@ -10171,13 +10491,8 @@ function viewerHtml(): string {
         setLoginError('⚠ ' + (data.error || 'AUTH FAILED'));
         return;
       }
-      TOKEN = data.access_token || '';
-      REFRESH_TOKEN = data.refresh_token || '';
+      TOKEN = '';
       SESSION_MODE = 'user';
-      if (!TOKEN) {
-        setLoginError('⚠ NO ACCESS TOKEN RETURNED');
-        return;
-      }
       enterApp();
       showToast(mode === 'signup' ? 'Account created and signed in.' : 'Signed in successfully.', 'success');
     } catch {
@@ -10195,12 +10510,12 @@ function viewerHtml(): string {
       const ok = window.confirm('Lock and sign out of the current session?');
       if (!ok) return;
     }
-    if (SESSION_MODE === 'user' && REFRESH_TOKEN) {
+    if (SESSION_MODE === 'user') {
       try {
+        await tryRefreshSession();
         await fetch(BASE + '/auth/logout', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: REFRESH_TOKEN }),
+          credentials: 'same-origin',
         });
       } catch {}
     }
@@ -10213,8 +10528,7 @@ function viewerHtml(): string {
       clockIntervalId = null;
     }
     TOKEN = '';
-    REFRESH_TOKEN = '';
-    SESSION_MODE = 'legacy';
+    SESSION_MODE = 'none';
     location.reload();
   }
 
@@ -10419,7 +10733,7 @@ function viewerHtml(): string {
   }
 
   function ensureAppReady(actionLabel = 'This action') {
-    if (TOKEN && appIsVisible()) return true;
+    if (hasAuthenticatedSession() && appIsVisible()) return true;
     showToast(actionLabel + ' is available after sign in.', 'info');
     return false;
   }
@@ -10910,7 +11224,7 @@ function viewerHtml(): string {
     if (liveEl) liveEl.style.display = 'flex';
     const intervalMs = Math.min(Math.max((viewerSettings?.live_poll_interval_sec ?? 10) * 1000, 5000), 120000);
     pollIntervalId = setInterval(async () => {
-      if (!TOKEN) return;
+      if (!hasAuthenticatedSession()) return;
       try {
         const r = await apiFetch(BASE + '/api/memories?limit=1');
         if (!r.ok) return;
@@ -11524,7 +11838,7 @@ function viewerHtml(): string {
     }
 
     if (typing) return;
-    if (!TOKEN || !appIsVisible()) return;
+    if (!hasAuthenticatedSession() || !appIsVisible()) return;
 
     if (key === '/') {
       e.preventDefault();
@@ -12054,10 +12368,12 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Dynamic client registration endpoint',
       endpointPath: '/register',
       methods: 'POST',
-      auth: 'No bearer token required.',
+      auth: 'Trusted redirect domains can self-register; all other clients require an admin bearer token.',
       details: [
         'Registers an OAuth client for MCP access.',
         'Expected body includes redirect_uris and token_endpoint_auth_method.',
+        'redirect_uris on poke.com or claude.ai can register without Authorization.',
+        'All other redirect domains must send Authorization: Bearer ADMIN_TOKEN.',
         'Returns client_id and optional client_secret metadata.',
       ],
     };
@@ -12128,7 +12444,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       details: [
         'Creates a user account from email/password.',
         'Optionally accepts brain_name for the initial memory brain.',
-        'Returns access_token and refresh_token on success.',
+        'Sets httpOnly access_token and refresh_token cookies on success.',
       ],
     };
   }
@@ -12141,7 +12457,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       auth: 'No token required.',
       details: [
         'Authenticates user email/password credentials.',
-        'Returns access_token and refresh_token.',
+        'Sets httpOnly access_token and refresh_token cookies.',
         'Used by the web viewer and OAuth-assisted flows.',
       ],
     };
@@ -12152,9 +12468,9 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Rotate session using refresh token',
       endpointPath: '/auth/refresh',
       methods: 'POST',
-      auth: 'No access token required; requires refresh_token in body.',
+      auth: 'No access token required; requires refresh_token cookie.',
       details: [
-        'Issues new access and refresh tokens.',
+        'Issues new access and refresh tokens via httpOnly cookies.',
         'Revokes/replaces previous refresh token for session safety.',
         'Used automatically by the web viewer when access token expires.',
       ],
@@ -12166,9 +12482,9 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Revoke a refresh token session',
       endpointPath: '/auth/logout',
       methods: 'POST',
-      auth: 'No access token required; requires refresh_token in body.',
+      auth: 'Clears auth cookies and revokes the current session when possible.',
       details: [
-        'Revokes session represented by the provided refresh token.',
+        'Clears both auth cookies on the server response.',
         'Used when user signs out from the web viewer.',
       ],
     };
@@ -12179,7 +12495,7 @@ function endpointGuideForPath(pathname: string): EndpointGuide | null {
       subtitle: 'Returns authenticated user + brain context',
       endpointPath: '/auth/me',
       methods: 'GET',
-      auth: 'Requires Authorization: Bearer <access_token>.',
+      auth: 'Requires Authorization: Bearer <access_token> or access_token cookie.',
       details: [
         'Validates current access token.',
         'Returns session-scoped identity and current brain context.',
@@ -12427,210 +12743,217 @@ function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname.startsWith('/mcp/')) {
-      url.pathname = url.pathname === '/mcp/' ? '/mcp' : (url.pathname.slice('/mcp'.length) || '/');
-    }
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: CORS_HEADERS });
-    }
-
-    await ensureSchema(env);
-
-    if (url.pathname === '/' && isLikelyMcpRootRequest(request)) {
-      const mcpUrl = new URL(url.toString());
-      mcpUrl.pathname = '/mcp';
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) return unauthorized(mcpUrl);
-      return handleMcp(request, env, mcpUrl, authCtx);
-    }
-
-    if (url.pathname === '/') {
-      if (isBrowserDocumentRequest(request)) {
-        return new Response(rootLandingHtml(url), {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
+    const response = await (async (): Promise<Response> => {
+      const url = new URL(request.url);
+      if (url.pathname.startsWith('/mcp/')) {
+        url.pathname = url.pathname === '/mcp/' ? '/mcp' : (url.pathname.slice('/mcp'.length) || '/');
       }
-      return jsonResponse({ name: SERVER_NAME, version: SERVER_VERSION, status: 'ok', tools: TOOLS.length });
-    }
 
-    if (url.pathname === '/view') {
-      return new Response(viewerHtml(), {
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      });
-    }
-
-    if (isBrowserDocumentRequest(request)) {
-      if (url.pathname === '/mcp') {
-        return new Response(mcpLandingHtml(url), {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { headers: CORS_HEADERS });
       }
-      if (!isOAuthAuthorizeNavigation(url)) {
-        const guide = endpointGuideForPath(url.pathname);
-        if (guide) {
-          return new Response(endpointGuideHtml(url, guide), {
+
+      await ensureSchema(env);
+
+      if (url.pathname === '/' && isLikelyMcpRootRequest(request)) {
+        const mcpUrl = new URL(url.toString());
+        mcpUrl.pathname = '/mcp';
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) return unauthorized(mcpUrl);
+        return handleMcp(request, env, mcpUrl, authCtx);
+      }
+
+      if (url.pathname === '/') {
+        if (isBrowserDocumentRequest(request)) {
+          return new Response(rootLandingHtml(url), {
             headers: { 'Content-Type': 'text/html; charset=utf-8' },
           });
         }
+        return jsonResponse({ name: SERVER_NAME, version: SERVER_VERSION, status: 'ok', tools: TOOLS.length });
       }
-    }
 
-    if (url.pathname === '/.well-known/oauth-authorization-server' || url.pathname === '/.well-known/openid-configuration') {
-      return handleAuthorizationServerMetadata(url);
-    }
-
-    if (url.pathname === '/.well-known/oauth-protected-resource' || url.pathname.startsWith('/.well-known/oauth-protected-resource/')) {
-      return handleProtectedResourceMetadata(url);
-    }
-
-    if (url.pathname === '/register') {
-      return handleOAuthRegister(request, env);
-    }
-
-    if (url.pathname === '/authorize') {
-      return handleOAuthAuthorize(request, url, env);
-    }
-
-    if (url.pathname === '/token') {
-      return handleOAuthToken(request, env);
-    }
-
-    if (url.pathname === '/auth/signup') {
-      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
-      }
-      const response = await handleAuthSignup(request, env);
-      if (response.status >= 400) await recordFailedAttempt(ip, env);
-      else await clearRateLimit(ip, env);
-      return response;
-    }
-
-    if (url.pathname === '/auth/login') {
-      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
-      }
-      const response = await handleAuthLogin(request, env);
-      if (response.status >= 400) await recordFailedAttempt(ip, env);
-      else await clearRateLimit(ip, env);
-      return response;
-    }
-
-    if (url.pathname === '/auth/refresh') {
-      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
-      }
-      const response = await handleAuthRefresh(request, env);
-      if (response.status >= 400) await recordFailedAttempt(ip, env);
-      else await clearRateLimit(ip, env);
-      return response;
-    }
-
-    if (url.pathname === '/auth/logout') {
-      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-      return handleAuthLogout(request, env);
-    }
-
-    if (url.pathname === '/auth/me') {
-      if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) return unauthorized(url);
-      return handleAuthMe(authCtx, env);
-    }
-
-    if (url.pathname === '/auth/sessions') {
-      if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) return unauthorized(url);
-      return handleAuthSessions(authCtx, env);
-    }
-
-    if (url.pathname === '/auth/sessions/revoke') {
-      if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) return unauthorized(url);
-      return handleAuthSessionRevoke(request, authCtx, env);
-    }
-
-    if (url.pathname === '/api/memories') {
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-          status: 429,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+      if (url.pathname === '/view') {
+        return new Response(viewerHtml(), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) {
-        await recordFailedAttempt(ip, env);
-        return unauthorized(url);
-      }
-      await clearRateLimit(ip, env);
-      return handleApiMemories(request, env, authCtx.brainId);
-    }
 
-    if (url.pathname === '/api/tools') {
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-          status: 429,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-        });
+      if (isBrowserDocumentRequest(request)) {
+        if (url.pathname === '/mcp') {
+          return new Response(mcpLandingHtml(url), {
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          });
+        }
+        if (!isOAuthAuthorizeNavigation(url)) {
+          const guide = endpointGuideForPath(url.pathname);
+          if (guide) {
+            return new Response(endpointGuideHtml(url, guide), {
+              headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
+          }
+        }
       }
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) {
-        await recordFailedAttempt(ip, env);
-        return unauthorized(url);
-      }
-      await clearRateLimit(ip, env);
-      return handleApiTools(authCtx);
-    }
 
-    if (url.pathname === '/mcp') {
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) {
-        return unauthorized(url);
+      if (url.pathname === '/.well-known/oauth-authorization-server' || url.pathname === '/.well-known/openid-configuration') {
+        return handleAuthorizationServerMetadata(url);
       }
-      return handleMcp(request, env, url, authCtx);
-    }
 
-    // GET /api/links/:id
-    if (url.pathname.startsWith('/api/links/')) {
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-          status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-        });
+      if (url.pathname === '/.well-known/oauth-protected-resource' || url.pathname.startsWith('/.well-known/oauth-protected-resource/')) {
+        return handleProtectedResourceMetadata(url);
       }
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
-      await clearRateLimit(ip, env);
-      const memoryId = url.pathname.slice('/api/links/'.length);
-      if (!memoryId) return corsJsonResponse({ error: 'Memory ID required' }, 400);
-      return handleApiLinks(memoryId, env, authCtx.brainId);
-    }
 
-    // GET /api/graph
-    if (url.pathname === '/api/graph') {
-      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-      if (await isRateLimited(ip, env)) {
-        return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-          status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-        });
+      if (url.pathname === '/register') {
+        return handleOAuthRegister(request, env);
       }
-      const authCtx = await authenticateRequest(request, env);
-      if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
-      await clearRateLimit(ip, env);
-      return handleApiGraph(env, authCtx.brainId);
-    }
 
-    return jsonResponse({ error: 'Not found' }, 404);
+      if (url.pathname === '/authorize') {
+        return handleOAuthAuthorize(request, url, env);
+      }
+
+      if (url.pathname === '/token') {
+        return handleOAuthToken(request, env);
+      }
+
+      if (url.pathname === '/auth/signup') {
+        if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        if (await isRateLimited(ip, env)) {
+          return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
+        }
+        const response = await handleAuthSignup(request, env);
+        if (response.status >= 400) await recordFailedAttempt(ip, env);
+        else await clearRateLimit(ip, env);
+        return response;
+      }
+
+      if (url.pathname === '/auth/login') {
+        if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        const clientIP = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        const { success } = await env.LOGIN_RATE_LIMITER.limit({ key: clientIP });
+        if (!success) {
+          return corsJsonResponse(
+            { error: 'Too many login attempts. Try again later.' },
+            429,
+            { 'Retry-After': String(LOGIN_RATE_LIMIT_RETRY_AFTER_SECONDS) }
+          );
+        }
+        return handleAuthLogin(request, env);
+      }
+
+      if (url.pathname === '/auth/refresh') {
+        if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        if (await isRateLimited(ip, env)) {
+          return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
+        }
+        const response = await handleAuthRefresh(request, env);
+        if (response.status >= 400) await recordFailedAttempt(ip, env);
+        else await clearRateLimit(ip, env);
+        return response;
+      }
+
+      if (url.pathname === '/auth/logout') {
+        if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        return handleAuthLogout(request, env);
+      }
+
+      if (url.pathname === '/auth/me') {
+        if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleAuthMe(authCtx, env);
+      }
+
+      if (url.pathname === '/auth/sessions') {
+        if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleAuthSessions(authCtx, env);
+      }
+
+      if (url.pathname === '/auth/sessions/revoke') {
+        if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleAuthSessionRevoke(request, authCtx, env);
+      }
+
+      if (url.pathname === '/api/memories') {
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        if (await isRateLimited(ip, env)) {
+          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+            status: 429,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+          });
+        }
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) {
+          await recordFailedAttempt(ip, env);
+          return unauthorized(url);
+        }
+        await clearRateLimit(ip, env);
+        return handleApiMemories(request, env, authCtx.brainId);
+      }
+
+      if (url.pathname === '/api/tools') {
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        if (await isRateLimited(ip, env)) {
+          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+            status: 429,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+          });
+        }
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) {
+          await recordFailedAttempt(ip, env);
+          return unauthorized(url);
+        }
+        await clearRateLimit(ip, env);
+        return handleApiTools(authCtx);
+      }
+
+      if (url.pathname === '/mcp') {
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) {
+          return unauthorized(url);
+        }
+        return handleMcp(request, env, url, authCtx);
+      }
+
+      // GET /api/links/:id
+      if (url.pathname.startsWith('/api/links/')) {
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        if (await isRateLimited(ip, env)) {
+          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+            status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+          });
+        }
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
+        await clearRateLimit(ip, env);
+        const memoryId = url.pathname.slice('/api/links/'.length);
+        if (!memoryId) return corsJsonResponse({ error: 'Memory ID required' }, 400);
+        return handleApiLinks(memoryId, env, authCtx.brainId);
+      }
+
+      // GET /api/graph
+      if (url.pathname === '/api/graph') {
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        if (await isRateLimited(ip, env)) {
+          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
+            status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
+          });
+        }
+        const authCtx = await authenticateRequest(request, env);
+        if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
+        await clearRateLimit(ip, env);
+        return handleApiGraph(env, authCtx.brainId);
+      }
+
+      return jsonResponse({ error: 'Not found' }, 404);
+    })();
+
+    const secureResponse = isHtmlResponse(response) ? wrapWithSecurityHeaders(response) : response;
+    return applyCors(request, secureResponse);
   },
 };

@@ -2,8 +2,14 @@
 set -euo pipefail
 
 BASE_URL="${1:-${BASE_URL:-https://ai-memory-mcp.guirguispierre.workers.dev}}"
-REDIRECT_URI="${REDIRECT_URI:-https://example.com/memoryvault/callback}"
+REDIRECT_URI="${REDIRECT_URI:-http://127.0.0.1:8787/memoryvault/callback}"
 PASSWORD="${SMOKE_PASSWORD:-MemoryVaultPass!2026}"
+ADMIN_TOKEN="${ADMIN_TOKEN:-}"
+
+[[ -n "$ADMIN_TOKEN" ]] || {
+  echo "ERROR: ADMIN_TOKEN is required for POST /register" >&2
+  exit 1
+}
 
 for cmd in curl jq awk sed openssl mktemp date; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -41,13 +47,22 @@ urlencode() {
   jq -rn --arg value "$1" '$value|@uri'
 }
 
+pkce_s256_challenge() {
+  printf '%s' "$1" \
+    | openssl dgst -binary -sha256 \
+    | openssl base64 -A \
+    | tr '+/' '-_' \
+    | tr -d '='
+}
+
 oauth_authorize_and_exchange() {
   local mode="$1"
   local email="$2"
   local brain_name="$3"
-  local verifier state headers_file status location code token_json access refresh
+  local verifier code_challenge state headers_file status location code token_json access refresh
 
   verifier="v$(openssl rand -hex 24)"
+  code_challenge="$(pkce_s256_challenge "$verifier")"
   state="st$(openssl rand -hex 8)"
   headers_file="$(mktemp)"
 
@@ -60,8 +75,8 @@ oauth_authorize_and_exchange() {
     --data-urlencode "scope=mcp:full" \
     --data-urlencode "resource=$BASE_URL/mcp" \
     --data-urlencode "state=$state" \
-    --data-urlencode "code_challenge=$verifier" \
-    --data-urlencode "code_challenge_method=plain" \
+    --data-urlencode "code_challenge=$code_challenge" \
+    --data-urlencode "code_challenge_method=S256" \
     --data-urlencode "auth_mode=$mode" \
     --data-urlencode "email=$email" \
     --data-urlencode "password=$PASSWORD" \
@@ -90,6 +105,38 @@ oauth_authorize_and_exchange() {
   [[ -n "$refresh" ]] || fail "Token response missing refresh_token"
 
   printf '%s\t%s\n' "$access" "$refresh"
+}
+
+assert_plain_pkce_rejected() {
+  local email="$1"
+  local verifier state body_file status error error_description
+
+  verifier="v$(openssl rand -hex 24)"
+  state="st$(openssl rand -hex 8)"
+  body_file="$(mktemp)"
+
+  status="$(curl -sS -o "$body_file" -w "%{http_code}" \
+    -X POST "$BASE_URL/authorize" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "response_type=code" \
+    --data-urlencode "client_id=$CLIENT_ID" \
+    --data-urlencode "redirect_uri=$REDIRECT_URI" \
+    --data-urlencode "scope=mcp:full" \
+    --data-urlencode "resource=$BASE_URL/mcp" \
+    --data-urlencode "state=$state" \
+    --data-urlencode "code_challenge=$verifier" \
+    --data-urlencode "code_challenge_method=pLaIn" \
+    --data-urlencode "auth_mode=signup" \
+    --data-urlencode "email=$email" \
+    --data-urlencode "password=$PASSWORD" \
+    --data-urlencode "brain_name=Rejected Plain Flow")"
+
+  [[ "$status" == "400" ]] || fail "Expected /authorize plain PKCE to return 400, got $status"
+  error="$(jq -r '.error // empty' <"$body_file")"
+  error_description="$(jq -r '.error_description // empty' <"$body_file")"
+  [[ "$error" == "invalid_request" ]] || fail "Expected invalid_request for plain PKCE, got: $error"
+  [[ "$error_description" == "Only S256 code_challenge_method is supported" ]] \
+    || fail "Unexpected plain PKCE error_description: $error_description"
 }
 
 mcp_save_memory() {
@@ -127,22 +174,31 @@ resource_url="$(jq -r '.resource // empty' <<<"$protected_resource")"
 auth_endpoint="$(jq -r '.authorization_endpoint // empty' <<<"$auth_server")"
 token_endpoint="$(jq -r '.token_endpoint // empty' <<<"$auth_server")"
 registration_endpoint="$(jq -r '.registration_endpoint // empty' <<<"$auth_server")"
+challenge_methods="$(jq -c '.code_challenge_methods_supported // []' <<<"$auth_server")"
 [[ "$resource_url" == "$BASE_URL/mcp" ]] || fail "Unexpected protected resource URL: $resource_url"
 [[ "$auth_endpoint" == "$BASE_URL/authorize" ]] || fail "Unexpected authorization endpoint: $auth_endpoint"
 [[ "$token_endpoint" == "$BASE_URL/token" ]] || fail "Unexpected token endpoint: $token_endpoint"
 [[ "$registration_endpoint" == "$BASE_URL/register" ]] || fail "Unexpected registration endpoint: $registration_endpoint"
+[[ "$challenge_methods" == "[\"S256\"]" ]] || fail "Unexpected code challenge methods: $challenge_methods"
 
 log "Registering OAuth client"
 register_payload="$(jq -cn \
   --arg redirect "$REDIRECT_URI" \
   '{client_name:"MemoryVault Smoke",redirect_uris:[$redirect],token_endpoint_auth_method:"none"}')"
-register_json="$(curl -fsS -X POST "$BASE_URL/register" -H "Content-Type: application/json" -d "$register_payload")"
+register_json="$(curl -fsS -X POST "$BASE_URL/register" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$register_payload")"
 CLIENT_ID="$(jq -r '.client_id // empty' <<<"$register_json")"
 [[ -n "$CLIENT_ID" ]] || fail "Client registration did not return client_id"
 
 seed="$(date +%s)-$(openssl rand -hex 3)"
 user1_email="smoke-u1-${seed}@example.com"
 user2_email="smoke-u2-${seed}@example.com"
+plain_reject_email="smoke-plain-${seed}@example.com"
+
+log "Verifying /authorize rejects plain PKCE"
+assert_plain_pkce_rejected "$plain_reject_email"
 
 log "Running OAuth signup flow for user 1 and user 2"
 read -r user1_access user1_refresh < <(oauth_authorize_and_exchange "signup" "$user1_email" "Smoke Brain U1")

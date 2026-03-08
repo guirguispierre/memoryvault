@@ -43,6 +43,11 @@ npm install
 cp .dev.vars.example .dev.vars
 ```
 
+Local config notes:
+- `AUTH_SECRET` secures legacy bearer auth and session signing.
+- `ADMIN_TOKEN` is required for `POST /register`.
+- `OAUTH_REDIRECT_DOMAIN_ALLOWLIST` is a comma-separated hostname/domain allowlist for OAuth client `redirect_uris`. `localhost` and `127.0.0.1` are always allowed.
+
 3. Initialize local D1 schema
 
 ```bash
@@ -67,19 +72,29 @@ Notes:
 npx wrangler whoami
 ```
 
-2. Set production secret (if not set)
+2. Set production secrets (if not set)
 
 ```bash
 npx wrangler secret put AUTH_SECRET
+npx wrangler secret put ADMIN_TOKEN
 ```
 
-3. Apply schema to remote D1 when needed
+3. Set `OAUTH_REDIRECT_DOMAIN_ALLOWLIST` in your Worker environment for production OAuth clients
+
+Example `wrangler.toml` snippet:
+
+```toml
+[vars]
+OAUTH_REDIRECT_DOMAIN_ALLOWLIST = "localhost,127.0.0.1,chatgpt.com,chat.openai.com,claude.ai"
+```
+
+4. Apply schema to remote D1 when needed
 
 ```bash
 npx wrangler d1 execute ai-memory --remote --file=schema.sql
 ```
 
-4. Deploy
+5. Deploy
 
 ```bash
 npm run deploy
@@ -104,6 +119,8 @@ Use this server URL:
 - Client should discover:
   - `/.well-known/oauth-protected-resource`
   - `/.well-known/oauth-authorization-server`
+- OAuth clients must be pre-registered by an admin via `POST /register` with `Authorization: Bearer <ADMIN_TOKEN>`.
+- Registered `redirect_uris` must use an allowlisted hostname/domain from `OAUTH_REDIRECT_DOMAIN_ALLOWLIST` (plus loopback `localhost` / `127.0.0.1`).
 - User can sign in, sign up, or use a legacy API token from the authorize screen.
 - Legacy token mode maps to the legacy shared brain and upgrades the connection into OAuth session tokens.
 
@@ -124,7 +141,7 @@ Use this server URL:
 - `GET /auth/me`
 - `GET /auth/sessions`
 - `POST /auth/sessions/revoke`
-- `POST /register` OAuth dynamic client registration
+- `POST /register` admin-authenticated OAuth dynamic client registration
 - `GET|POST /authorize` OAuth authorization endpoint
 - `POST /token` OAuth token endpoint
 
@@ -158,11 +175,24 @@ Smoke test examples:
 
 ```bash
 # Against production (default)
-npm run smoke:oauth-isolation
+ADMIN_TOKEN=... npm run smoke:oauth-isolation
 
 # Against local/dev target
-BASE_URL=http://127.0.0.1:8787 npm run smoke:oauth-isolation
+ADMIN_TOKEN=... BASE_URL=http://127.0.0.1:8787 npm run smoke:oauth-isolation
 ```
+
+Registration examples:
+
+```bash
+curl -X POST "$BASE_URL/register" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"client_name":"MemoryVault","redirect_uris":["http://127.0.0.1:8787/callback"],"token_endpoint_auth_method":"none"}'
+```
+
+The smoke test now requires:
+- `ADMIN_TOKEN` to register a client.
+- A loopback or allowlisted `REDIRECT_URI`.
 
 Notes:
 - The smoke test creates temporary users/memories in the target environment.
@@ -172,6 +202,9 @@ Notes:
 
 ## Security Notes
 
+- `POST /register` requires `Authorization: Bearer <ADMIN_TOKEN>`.
+- `/authorize` no longer auto-registers unknown OAuth clients; clients must exist before any code is issued.
+- `redirect_uris` are restricted to an allowlisted domain set, and stale non-whitelisted clients are purged and their sessions revoked when registration is attempted.
 - Per-brain row-level scoping is enforced across memories, links, and changelog.
 - Passwords are stored as PBKDF2-SHA256 hashes.
 - Refresh tokens are stored hashed.

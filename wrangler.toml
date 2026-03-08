@@ -15,6 +15,12 @@ binding = "DB"
 database_name = "ai-memory"
 database_id = "f881cdf0-9109-45a8-863f-65942a81a7bf"
 
+[[unsafe.bindings]]
+name = "LOGIN_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1"
+simple = { limit = 5, period = 60 }
+
 [env.dev]
 name = "ai-memory-mcp-dev"
 
@@ -29,3 +35,9 @@ index_name = "ai-memory-semantic-v1-dev"
 binding = "DB"
 database_name = "ai-memory"
 database_id = "f881cdf0-9109-45a8-863f-65942a81a7bf"
+
+[[env.dev.unsafe.bindings]]
+name = "LOGIN_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1"
+simple = { limit = 5, period = 60 }
