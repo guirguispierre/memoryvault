@@ -9581,12 +9581,12 @@ function viewerHtml(): string {
     <div class="field-label" style="margin-top:0.75rem">Brain Name (for signup)</div>
     <input type="text" class="token-input" id="brain-name-input" placeholder="Second Brain name (optional)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <div class="login-btn-row">
-      <button class="login-btn" onclick="doCredentialAuth('login')">SIGN IN →</button>
-      <button class="login-btn secondary" onclick="doCredentialAuth('signup')">SIGN UP →</button>
+      <button class="login-btn" data-action="login">SIGN IN →</button>
+      <button class="login-btn secondary" data-action="signup">SIGN UP →</button>
     </div>
     <div class="field-label" style="margin-top:1rem">Legacy Access Token</div>
     <input type="password" class="token-input" id="token-input" placeholder="Bearer token (legacy mode)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button class="login-btn secondary token-btn" onclick="doTokenLogin()">TOKEN LOGIN →</button>
+    <button class="login-btn secondary token-btn" data-action="token-login">TOKEN LOGIN →</button>
     <div class="login-error" id="login-error">⚠ ACCESS DENIED</div>
   </div>
 </div>
@@ -9603,28 +9603,28 @@ function viewerHtml(): string {
       <div id="live-indicator" style="font-size:0.6rem;letter-spacing:0.15em;color:var(--text-dim);display:none;align-items:center">
         <span class="live-dot"></span>LIVE
       </div>
-      <button class="logout-btn" onclick="doLogout()">LOCK</button>
+      <button class="logout-btn" data-action="logout">LOCK</button>
     </div>
   </header>
 
   <div class="stats-bar">
-    <div class="stat-pill active" id="stat-all" onclick="setFilter('')">
+    <div class="stat-pill active" id="stat-all" data-action="set-filter" data-filter="">
       <div class="stat-num" id="count-all">0</div>
       <div class="stat-label">All</div>
     </div>
-    <div class="stat-pill" id="stat-note" onclick="setFilter('note')">
+    <div class="stat-pill" id="stat-note" data-action="set-filter" data-filter="note">
       <div class="stat-num" id="count-note">0</div>
       <div class="stat-label">Notes</div>
     </div>
-    <div class="stat-pill" id="stat-fact" onclick="setFilter('fact')">
+    <div class="stat-pill" id="stat-fact" data-action="set-filter" data-filter="fact">
       <div class="stat-num" id="count-fact">0</div>
       <div class="stat-label">Facts</div>
     </div>
-    <div class="stat-pill" id="stat-journal" onclick="setFilter('journal')">
+    <div class="stat-pill" id="stat-journal" data-action="set-filter" data-filter="journal">
       <div class="stat-num" id="count-journal">0</div>
       <div class="stat-label">Journal</div>
     </div>
-    <div class="stat-pill" id="stat-graph" onclick="showGraph()">
+    <div class="stat-pill" id="stat-graph" data-action="show-graph">
       <div class="stat-num">⬡</div>
       <div class="stat-label">Graph</div>
     </div>
@@ -9632,32 +9632,32 @@ function viewerHtml(): string {
 
   <div class="controls">
     <div class="search-wrap">
-      <input type="text" class="search-input" id="search-input" placeholder="Search by name, id, key, or text..." inputmode="search" oninput="onSearch(this.value)">
+      <input type="text" class="search-input" id="search-input" placeholder="Search by name, id, key, or text..." inputmode="search">
     </div>
-    <button class="refresh-btn" onclick="loadMemories()">↻ REFRESH</button>
-    <button class="refresh-btn utility-btn" onclick="openCommandPalette()">COMMAND</button>
-    <button class="refresh-btn utility-btn" onclick="toggleShortcutsOverlay()">SHORTCUTS</button>
-    <button class="refresh-btn utility-btn" onclick="openSettingsOverlay()">SETTINGS</button>
+    <button class="refresh-btn" data-action="refresh-memories">↻ REFRESH</button>
+    <button class="refresh-btn utility-btn" data-action="open-command-palette">COMMAND</button>
+    <button class="refresh-btn utility-btn" data-action="toggle-shortcuts-overlay">SHORTCUTS</button>
+    <button class="refresh-btn utility-btn" data-action="open-settings-overlay">SETTINGS</button>
   </div>
 
   <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--bg);min-height:600px">
     <div class="graph-toolbar">
       <div class="graph-toolbar-row">
-        <input type="text" class="graph-search-input" id="graph-search-input" placeholder="Search graph..." inputmode="search" oninput="onGraphSearch(this.value)">
+        <input type="text" class="graph-search-input" id="graph-search-input" placeholder="Search graph..." inputmode="search">
       </div>
       <div class="graph-toolbar-row">
-        <button class="graph-btn active" id="graph-toggle-inferred" onclick="toggleGraphInferred()">INFERRED ON</button>
-        <button class="graph-btn active" id="graph-toggle-labels" onclick="toggleGraphLabels()">LABELS ON</button>
-        <button class="graph-btn active" id="graph-toggle-physics" onclick="toggleGraphPhysics()">PHYSICS ON</button>
-        <button class="graph-btn" onclick="resetGraphView()">RESET VIEW</button>
+        <button class="graph-btn active" id="graph-toggle-inferred" data-action="toggle-graph-inferred">INFERRED ON</button>
+        <button class="graph-btn active" id="graph-toggle-labels" data-action="toggle-graph-labels">LABELS ON</button>
+        <button class="graph-btn active" id="graph-toggle-physics" data-action="toggle-graph-physics">PHYSICS ON</button>
+        <button class="graph-btn" data-action="reset-graph-view">RESET VIEW</button>
       </div>
       <div class="graph-toolbar-row">
-        <button class="graph-btn relation active" id="graph-rel-related" onclick="toggleGraphRelation('related')">RELATED</button>
-        <button class="graph-btn relation active" id="graph-rel-supports" onclick="toggleGraphRelation('supports')">SUPPORTS</button>
-        <button class="graph-btn relation active" id="graph-rel-contradicts" onclick="toggleGraphRelation('contradicts')">CONTRA</button>
-        <button class="graph-btn relation active" id="graph-rel-supersedes" onclick="toggleGraphRelation('supersedes')">SUPER</button>
-        <button class="graph-btn relation active" id="graph-rel-causes" onclick="toggleGraphRelation('causes')">CAUSES</button>
-        <button class="graph-btn relation active" id="graph-rel-example_of" onclick="toggleGraphRelation('example_of')">EXAMPLE</button>
+        <button class="graph-btn relation active" id="graph-rel-related" data-action="toggle-graph-relation" data-relation="related">RELATED</button>
+        <button class="graph-btn relation active" id="graph-rel-supports" data-action="toggle-graph-relation" data-relation="supports">SUPPORTS</button>
+        <button class="graph-btn relation active" id="graph-rel-contradicts" data-action="toggle-graph-relation" data-relation="contradicts">CONTRA</button>
+        <button class="graph-btn relation active" id="graph-rel-supersedes" data-action="toggle-graph-relation" data-relation="supersedes">SUPER</button>
+        <button class="graph-btn relation active" id="graph-rel-causes" data-action="toggle-graph-relation" data-relation="causes">CAUSES</button>
+        <button class="graph-btn relation active" id="graph-rel-example_of" data-action="toggle-graph-relation" data-relation="example_of">EXAMPLE</button>
       </div>
     </div>
     <div class="graph-legend" id="graph-legend"></div>
@@ -9675,9 +9675,9 @@ function viewerHtml(): string {
 </div>
 
 <!-- EXPAND OVERLAY -->
-<div class="expand-overlay" id="expand-overlay" onclick="closeExpand(event)">
+<div class="expand-overlay" id="expand-overlay" data-action="close-expand-overlay">
   <div class="expand-box">
-    <button class="expand-close" onclick="closeExpandBtn()">✕ CLOSE</button>
+    <button class="expand-close" data-action="close-expand">✕ CLOSE</button>
     <div id="expand-header"></div>
     <div class="expand-content" id="expand-content"></div>
     <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border);font-size:0.6rem;color:var(--text-dim);letter-spacing:0.08em" id="expand-meta"></div>
@@ -9685,21 +9685,21 @@ function viewerHtml(): string {
   </div>
 </div>
 
-<div class="cmd-overlay" id="cmd-overlay" onclick="closeCommandPalette(event)">
-  <div class="cmd-box" onclick="event.stopPropagation()">
+<div class="cmd-overlay" id="cmd-overlay" data-action="close-command-palette-overlay">
+  <div class="cmd-box">
     <div class="cmd-head">
-      <input type="text" class="cmd-input" id="cmd-input" placeholder="Run an action..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="onCommandFilter(this.value)">
+      <input type="text" class="cmd-input" id="cmd-input" placeholder="Run an action..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
       <div class="cmd-hint">enter run - esc close - arrows move</div>
     </div>
     <div class="cmd-list" id="cmd-list"></div>
   </div>
 </div>
 
-<div class="shortcuts-overlay" id="shortcuts-overlay" onclick="closeShortcutsOverlay(event)">
-  <div class="shortcuts-box" onclick="event.stopPropagation()">
+<div class="shortcuts-overlay" id="shortcuts-overlay" data-action="close-shortcuts-overlay">
+  <div class="shortcuts-box">
     <div class="shortcuts-head">
       <h3>Keyboard Shortcuts</h3>
-      <button class="shortcuts-close" onclick="closeShortcutsOverlay()">Close</button>
+      <button class="shortcuts-close" data-action="close-shortcuts">Close</button>
     </div>
     <div class="shortcuts-grid">
       <span class="shortcut-key">Ctrl/Cmd+K</span><span class="shortcut-desc">Open command palette</span>
@@ -9714,14 +9714,14 @@ function viewerHtml(): string {
   </div>
 </div>
 
-<div class="settings-overlay" id="settings-overlay" onclick="closeSettingsOverlay(event)">
-  <div class="settings-box" onclick="event.stopPropagation()">
+<div class="settings-overlay" id="settings-overlay" data-action="close-settings-overlay">
+  <div class="settings-box">
     <div class="settings-head">
       <div class="settings-head-main">
         <h3>Viewer Settings</h3>
         <span class="settings-version">v${escapeHtml(SERVER_VERSION)}</span>
       </div>
-      <button class="settings-close" onclick="closeSettingsOverlay()">Close</button>
+      <button class="settings-close" data-action="close-settings">Close</button>
     </div>
     <div class="settings-scroll">
       <div class="settings-sections">
@@ -9894,7 +9894,7 @@ function viewerHtml(): string {
                 <div class="semantic-status-box">
                   <div class="semantic-status-line dim" id="semantic-status-line">No semantic reindex run in this session.</div>
                   <div class="semantic-status-meta" id="semantic-status-meta"></div>
-                  <button class="refresh-btn utility-btn" id="semantic-reindex-btn" onclick="runSemanticReindexFromSettings()">RUN SEMANTIC REINDEX</button>
+                  <button class="refresh-btn utility-btn" id="semantic-reindex-btn" data-action="run-semantic-reindex">RUN SEMANTIC REINDEX</button>
                 </div>
               </div>
             </div>
@@ -9903,32 +9903,38 @@ function viewerHtml(): string {
       </div>
     </div>
     <div class="settings-actions">
-      <button class="refresh-btn utility-btn" onclick="openChangelogOverlay()">VIEW CHANGELOG</button>
-      <button class="refresh-btn utility-btn" onclick="resetViewerSettings()">RESET DEFAULTS</button>
-      <button class="refresh-btn" onclick="applySettingsFromForm()">SAVE SETTINGS</button>
+      <button class="refresh-btn utility-btn" data-action="open-changelog-overlay">VIEW CHANGELOG</button>
+      <button class="refresh-btn utility-btn" data-action="reset-viewer-settings">RESET DEFAULTS</button>
+      <button class="refresh-btn" data-action="apply-settings">SAVE SETTINGS</button>
     </div>
   </div>
 </div>
 
-<div class="changelog-overlay" id="changelog-overlay" onclick="closeChangelogOverlay(event)">
-  <div class="changelog-box" onclick="event.stopPropagation()">
+<div class="changelog-overlay" id="changelog-overlay" data-action="close-changelog-overlay">
+  <div class="changelog-box">
     <div class="changelog-head">
       <div class="changelog-title-group">
         <h3>Release Changelog</h3>
         <div class="changelog-subtitle" id="changelog-subtitle">Recent platform updates</div>
       </div>
-      <button class="settings-close" onclick="closeChangelogOverlay()">Close</button>
+      <button class="settings-close" data-action="close-changelog">Close</button>
     </div>
     <div class="changelog-list" id="changelog-list"></div>
     <div class="settings-actions" style="margin-top:0.7rem">
-      <button class="refresh-btn utility-btn" onclick="window.open('https://github.com/guirguispierre/ai-memory-mcp/blob/master/CHANGELOG.md', '_blank', 'noopener')">OPEN FULL CHANGELOG</button>
+      <button class="refresh-btn utility-btn" data-action="open-full-changelog">OPEN FULL CHANGELOG</button>
     </div>
   </div>
 </div>
 
 <div class="toast-wrap" id="toast-wrap"></div>
 
-<script>
+<script src="/view.js"></script>
+</body>
+</html>`;
+}
+
+function viewerScript(): string {
+  return `
   const BASE = location.origin;
   const VIEWER_SERVER_VERSION = '${escapeHtml(SERVER_VERSION)}';
   const GRAPH_RELATION_TYPES = ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'];
@@ -10568,7 +10574,7 @@ function viewerHtml(): string {
       const qualityChips = sourceChip || confChip || impChip
         ? \`<div class="card-quality">\${sourceChip}\${confChip}\${impChip}</div>\`
         : '';
-      return \`<div class="card" data-type="\${m.type}" data-idx="\${i}" onclick="expandCard(\${i})" style="animation-delay:\${Math.min(i*0.04,0.4)}s">
+      return \`<div class="card" data-type="\${m.type}" data-idx="\${i}" data-action="expand-card" data-card-index="\${i}" style="animation-delay:\${Math.min(i*0.04,0.4)}s">
         <div class="card-type-stripe"></div>
         <div class="card-header">
           <div>\${titleHtml}\${keyHtml}\${!m.title && !m.key ? '<div class="card-title" style="opacity:0.4">untitled</div>' : ''}</div>
@@ -11683,7 +11689,124 @@ function viewerHtml(): string {
     }, 120);
   });
 
+  function bindViewerEventHandlers() {
+    const bindInput = (id, handler) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('input', (event) => {
+        const target = event.target;
+        handler(target && typeof target.value === 'string' ? target.value : '');
+      });
+    };
+
+    document.addEventListener('click', (event) => {
+      const target = event.target instanceof Element ? event.target.closest('[data-action]') : null;
+      if (!target) return;
+      const action = target.getAttribute('data-action') || '';
+
+      switch (action) {
+        case 'login':
+          doCredentialAuth('login');
+          break;
+        case 'signup':
+          doCredentialAuth('signup');
+          break;
+        case 'token-login':
+          doTokenLogin();
+          break;
+        case 'logout':
+          doLogout();
+          break;
+        case 'set-filter':
+          setFilter(target.getAttribute('data-filter') || '');
+          break;
+        case 'show-graph':
+          showGraph();
+          break;
+        case 'refresh-memories':
+          loadMemories();
+          break;
+        case 'open-command-palette':
+          openCommandPalette();
+          break;
+        case 'toggle-shortcuts-overlay':
+          toggleShortcutsOverlay();
+          break;
+        case 'open-settings-overlay':
+          openSettingsOverlay();
+          break;
+        case 'toggle-graph-inferred':
+          toggleGraphInferred();
+          break;
+        case 'toggle-graph-labels':
+          toggleGraphLabels();
+          break;
+        case 'toggle-graph-physics':
+          toggleGraphPhysics();
+          break;
+        case 'reset-graph-view':
+          resetGraphView();
+          break;
+        case 'toggle-graph-relation':
+          toggleGraphRelation(target.getAttribute('data-relation') || '');
+          break;
+        case 'close-expand-overlay':
+          closeExpand(event);
+          break;
+        case 'close-expand':
+          closeExpandBtn();
+          break;
+        case 'close-command-palette-overlay':
+          closeCommandPalette(event);
+          break;
+        case 'close-shortcuts-overlay':
+          closeShortcutsOverlay(event);
+          break;
+        case 'close-shortcuts':
+          closeShortcutsOverlay();
+          break;
+        case 'close-settings-overlay':
+          closeSettingsOverlay(event);
+          break;
+        case 'close-settings':
+          closeSettingsOverlay();
+          break;
+        case 'run-semantic-reindex':
+          runSemanticReindexFromSettings();
+          break;
+        case 'open-changelog-overlay':
+          openChangelogOverlay();
+          break;
+        case 'reset-viewer-settings':
+          resetViewerSettings();
+          break;
+        case 'apply-settings':
+          applySettingsFromForm();
+          break;
+        case 'close-changelog-overlay':
+          closeChangelogOverlay(event);
+          break;
+        case 'close-changelog':
+          closeChangelogOverlay();
+          break;
+        case 'open-full-changelog':
+          window.open('https://github.com/guirguispierre/ai-memory-mcp/blob/master/CHANGELOG.md', '_blank', 'noopener');
+          break;
+        case 'expand-card':
+          expandCard(Number(target.getAttribute('data-card-index') || target.getAttribute('data-idx') || '-1'));
+          break;
+        default:
+          break;
+      }
+    });
+
+    bindInput('search-input', onSearch);
+    bindInput('graph-search-input', onGraphSearch);
+    bindInput('cmd-input', onCommandFilter);
+  }
+
   syncGraphToolbarState();
+  bindViewerEventHandlers();
 
   // Enter key on login
   document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doTokenLogin(); });
@@ -11796,9 +11919,7 @@ function viewerHtml(): string {
       loadMemories();
     }
   });
-</script>
-</body>
-</html>`;
+`;
 }
 
 function rootLandingHtml(url: URL): string {
@@ -12712,6 +12833,12 @@ export default {
       if (url.pathname === '/view') {
         return new Response(viewerHtml(), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
+      if (url.pathname === '/view.js') {
+        return new Response(viewerScript(), {
+          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
         });
       }
 

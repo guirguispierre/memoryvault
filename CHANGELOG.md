@@ -17,6 +17,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Browser auth responses now issue and rotate httpOnly `access_token` / `refresh_token` cookies for sign-up, login, refresh, and logout flows.
 - OAuth redirect handling now includes trusted self-registration domains for hosted MCP clients (`poke.com`, `claude.ai`) alongside explicit redirect-domain configuration.
 - CORS allowlisting now explicitly includes `https://poke.com` plus the dev and prod Worker origins used by embedded clients.
+- `/view.js` now serves the viewer script from a same-origin asset path so the existing CSP can allow it without `unsafe-inline`.
 
 ### Changed
 - Settings modal layout was refactored from a single long flat list into grouped sections using native expandable containers, while preserving all existing setting field IDs and persistence behavior.
@@ -27,6 +28,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - OAuth dynamic client registration now requires `ADMIN_TOKEN` unless every `redirect_uri` is on a trusted hosted-client domain, and stale non-whitelisted clients are purged during registration attempts.
 - OAuth metadata and authorization validation now enforce `S256` PKCE only, and the smoke test flow now covers the stricter registration/auth requirements.
 - Login requests now use the Cloudflare rate-limit binding, while authenticated browser/API requests can use cookie-backed access tokens in addition to bearer headers.
+- `/view` UI actions are now bound with `addEventListener` and `data-action` hooks instead of inline `onclick`/`oninput` handlers.
 
 ### Fixed
 - Semantic retrieval failures caused by non-parseable vector record identifiers were resolved by switching to a parse-safe vector ID strategy.
@@ -35,6 +37,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Mutating MCP tools (including `memory_link`/`memory_unlink`) are now correctly available to authenticated user sessions; write access is no longer incorrectly gated on OAuth `client_id` presence.
 - Trusted Poke/Claude redirect URIs can now complete MCP dynamic client registration without manual preregistration, while non-trusted domains still require admin approval.
 - CORS responses now reflect only allowlisted origins on both preflight and actual responses instead of falling back to `*`.
+- `/view` buttons and interactive controls now work under the strict Content-Security-Policy without relaxing `script-src`.
 
 ## [1.9.0] - 2026-03-04
 
