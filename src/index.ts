@@ -9,7 +9,7 @@ export interface Env {
 }
 
 const SERVER_NAME = 'ai-memory-mcp';
-const SERVER_VERSION = '1.9.0';
+const SERVER_VERSION = '1.10.0';
 const LEGACY_BRAIN_ID = 'legacy-default-brain';
 const LEGACY_USER_ID = 'legacy-token-user';
 const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
