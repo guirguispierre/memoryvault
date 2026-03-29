@@ -509,33 +509,6 @@ async function resetAuthRateLimit(ip: string, kv: KVNamespace): Promise<void> {
   await Promise.all(listed.keys.map((key) => kv.delete(key.name)));
 }
 
-async function isRateLimited(ip: string, env: Env, limit = 10): Promise<boolean> {
-  const window = Math.floor(Date.now() / (15 * 60 * 1000));
-  const row = await env.DB.prepare(
-    'SELECT count FROM rate_limits WHERE ip = ? AND window = ?'
-  ).bind(ip, window).first<{ count: number }>();
-  return (row?.count ?? 0) >= limit;
-}
-
-async function recordFailedAttempt(ip: string, env: Env): Promise<void> {
-  const window = Math.floor(Date.now() / (15 * 60 * 1000));
-  await env.DB.prepare(
-    'INSERT INTO rate_limits (ip, window, count) VALUES (?, ?, 1) ON CONFLICT(ip, window) DO UPDATE SET count = count + 1'
-  ).bind(ip, window).run();
-  // 1% chance: delete rows older than 2 hours (8 windows) to prevent unbounded growth
-  if (Math.random() < 0.01) {
-    const cutoff = window - 8;
-    await env.DB.prepare('DELETE FROM rate_limits WHERE window < ?').bind(cutoff).run();
-  }
-}
-
-async function clearRateLimit(ip: string, env: Env): Promise<void> {
-  const window = Math.floor(Date.now() / (15 * 60 * 1000));
-  await env.DB.prepare(
-    'DELETE FROM rate_limits WHERE ip = ? AND window = ?'
-  ).bind(ip, window).run();
-}
-
 async function ensureLegacyTokenPrincipal(env: Env): Promise<{ userId: string; brainId: string }> {
   const ts = now();
   await env.DB.prepare(
@@ -6459,8 +6432,11 @@ function corsJsonResponse(
 }
 
 function getCorsOrigin(request: Request): string {
-  const origin = request.headers.get('Origin');
-  return origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  const origin = request.headers.get('Origin')?.trim();
+  if (origin && ALLOWED_ORIGINS.includes(origin)) return origin;
+
+  const requestOrigin = new URL(request.url).origin;
+  return ALLOWED_ORIGINS.includes(requestOrigin) ? requestOrigin : ALLOWED_ORIGINS[0];
 }
 
 function mergeVaryHeader(existingValue: string | null, value: string): string {
@@ -8106,7 +8082,7 @@ function handleAuthorizationServerMetadata(url: URL): Response {
 
 function viewerHtml(): string {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="cyberpunk">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8132,6 +8108,147 @@ function viewerHtml(): string {
     --mono: 'Share Tech Mono', monospace;
     --sans: 'Syne', sans-serif;
   }
+
+  /* ── THEME: LIGHT ── */
+  [data-theme="light"] {
+    --bg: #f5f5f5;
+    --bg2: #ffffff;
+    --bg3: #e8ecf0;
+    --border: #d0d5dc;
+    --border-bright: #b0b8c4;
+    --amber: #c07800;
+    --amber-dim: #a06800;
+    --amber-glow: rgba(192,120,0,0.10);
+    --teal: #008878;
+    --red: #c03030;
+    --text: #2c3e50;
+    --text-dim: #7a8a9a;
+    --text-bright: #1a1a2e;
+  }
+  [data-theme="light"] body {
+    background: linear-gradient(180deg, #f0f2f5 0%, #e4e8ec 100%);
+  }
+  [data-theme="light"] body::before { display: none; }
+  [data-theme="light"] body::after { display: none; }
+  [data-theme="light"] .login-box,
+  [data-theme="light"] .settings-folder {
+    background: var(--bg2);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  [data-theme="light"] .card {
+    background: var(--bg2);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  [data-theme="light"] .settings-folder[open] {
+    background: var(--bg2);
+  }
+  [data-theme="light"] .setting-row {
+    background: var(--bg3);
+  }
+  [data-theme="light"] .cmd-box,
+  [data-theme="light"] .shortcuts-box,
+  [data-theme="light"] .settings-box,
+  [data-theme="light"] .changelog-box {
+    background: var(--bg2);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+  }
+  [data-theme="light"] .expand-overlay {
+    background: rgba(245,245,245,0.92);
+  }
+  [data-theme="light"] .expand-box {
+    background: var(--bg2);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.10);
+  }
+
+  /* ── THEME: MIDNIGHT ── */
+  [data-theme="midnight"] {
+    --bg: #0a0a1a;
+    --bg2: #10102a;
+    --bg3: #16163a;
+    --border: #2a2a5a;
+    --border-bright: #3c3c7a;
+    --amber: #7c6aff;
+    --amber-dim: #4a3fb0;
+    --amber-glow: rgba(124,106,255,0.12);
+    --teal: #60ddff;
+    --red: #ff5a7a;
+    --text: #c8ccf0;
+    --text-dim: #5a5e8a;
+    --text-bright: #e8eaff;
+  }
+  [data-theme="midnight"] body {
+    background:
+      radial-gradient(circle at 20% 20%, rgba(124,106,255,0.08), transparent 40%),
+      radial-gradient(circle at 80% 80%, rgba(96,221,255,0.06), transparent 40%),
+      linear-gradient(180deg, #0a0a1a 0%, #060614 100%);
+  }
+
+  /* ── THEME: SOLARIZED ── */
+  [data-theme="solarized"] {
+    --bg: #002b36;
+    --bg2: #073642;
+    --bg3: #0a3f4c;
+    --border: #1a5a68;
+    --border-bright: #2a7a88;
+    --amber: #b58900;
+    --amber-dim: #7a5c00;
+    --amber-glow: rgba(181,137,0,0.12);
+    --teal: #2aa198;
+    --red: #dc322f;
+    --text: #93a1a1;
+    --text-dim: #586e75;
+    --text-bright: #eee8d5;
+  }
+  [data-theme="solarized"] body {
+    background: linear-gradient(180deg, #002b36 0%, #001f28 100%);
+  }
+
+  /* ── THEME: EMBER ── */
+  [data-theme="ember"] {
+    --bg: #1a0a08;
+    --bg2: #241210;
+    --bg3: #2e1a16;
+    --border: #4a2a22;
+    --border-bright: #6a3a30;
+    --amber: #ff6b35;
+    --amber-dim: #a84420;
+    --amber-glow: rgba(255,107,53,0.12);
+    --teal: #ffb347;
+    --red: #ff4444;
+    --text: #e8d0c8;
+    --text-dim: #7a5a50;
+    --text-bright: #fff0e8;
+  }
+  [data-theme="ember"] body {
+    background:
+      radial-gradient(circle at 30% 70%, rgba(255,107,53,0.08), transparent 40%),
+      radial-gradient(circle at 70% 20%, rgba(255,179,71,0.06), transparent 40%),
+      linear-gradient(180deg, #1a0a08 0%, #120604 100%);
+  }
+
+  /* ── THEME: ARCTIC ── */
+  [data-theme="arctic"] {
+    --bg: #0c1820;
+    --bg2: #122430;
+    --bg3: #183040;
+    --border: #284860;
+    --border-bright: #386080;
+    --amber: #40c8e0;
+    --amber-dim: #2090a8;
+    --amber-glow: rgba(64,200,224,0.12);
+    --teal: #80e8d0;
+    --red: #ff6080;
+    --text: #c0dce8;
+    --text-dim: #506878;
+    --text-bright: #e0f4ff;
+  }
+  [data-theme="arctic"] body {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(64,200,224,0.10), transparent 50%),
+      radial-gradient(circle at 20% 80%, rgba(128,232,208,0.06), transparent 40%),
+      linear-gradient(180deg, #0c1820 0%, #081018 100%);
+  }
+
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
@@ -9262,6 +9379,47 @@ function viewerHtml(): string {
     flex-wrap: wrap;
     margin-top: 0.7rem;
   }
+  .theme-picker {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.25rem;
+  }
+  .theme-swatch {
+    width: 40px;
+    height: 40px;
+    background: transparent;
+    border: 2px solid var(--border);
+    cursor: pointer;
+    padding: 3px;
+    transition: border-color 0.15s, transform 0.1s;
+    position: relative;
+  }
+  .theme-swatch:hover {
+    border-color: var(--amber);
+    transform: scale(1.1);
+  }
+  .theme-swatch.active {
+    border-color: var(--amber);
+    box-shadow: 0 0 8px var(--amber-glow);
+  }
+  .theme-swatch.active::after {
+    content: '✓';
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  }
+  .theme-swatch span {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
   .changelog-overlay {
     display: none;
     position: fixed;
@@ -9863,6 +10021,18 @@ function viewerHtml(): string {
           <summary>Appearance & Session</summary>
           <div class="settings-folder-body">
             <div class="settings-grid">
+              <div class="setting-row setting-span-2">
+                <label for="settings-theme">Theme</label>
+                <div class="setting-help">Choose a color theme for the viewer.</div>
+                <div class="theme-picker" id="theme-picker">
+                  <button type="button" class="theme-swatch" data-theme-value="cyberpunk" title="Cyberpunk"><span style="background:#080c10;border:2px solid #f0a500"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="light" title="Light"><span style="background:#f5f5f5;border:2px solid #c07800"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="midnight" title="Midnight"><span style="background:#0a0a1a;border:2px solid #7c6aff"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="solarized" title="Solarized"><span style="background:#002b36;border:2px solid #b58900"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="ember" title="Ember"><span style="background:#1a0a08;border:2px solid #ff6b35"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="arctic" title="Arctic"><span style="background:#0c1820;border:2px solid #40c8e0"></span></button>
+                </div>
+              </div>
               <div class="setting-row setting-inline">
                 <div>
                   <div class="setting-label">Show Scanlines</div>
@@ -10024,6 +10194,7 @@ function viewerScript(): string {
 
   function buildDefaultViewerSettings() {
     return {
+      theme: 'cyberpunk',
       live_poll_enabled: true,
       live_poll_interval_sec: 10,
       time_mode: 'utc',
@@ -10066,7 +10237,10 @@ function viewerScript(): string {
     const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
       ? source.default_memory_filter
       : '';
+    const validThemes = ['cyberpunk', 'light', 'midnight', 'solarized', 'ember', 'arctic'];
+    const theme = validThemes.includes(source.theme) ? source.theme : defaults.theme;
     return {
+      theme,
       live_poll_enabled: source.live_poll_enabled !== false,
       live_poll_interval_sec: Math.min(Math.max(Math.round(interval), 5), 120),
       time_mode: source.time_mode === 'local' ? 'local' : 'utc',
@@ -10119,6 +10293,8 @@ function viewerScript(): string {
     document.body.classList.toggle('compact-cards', viewerSettings.compact_cards);
     document.body.classList.toggle('scanlines-off', !viewerSettings.show_scanlines);
     document.body.classList.toggle('motion-reduced', viewerSettings.reduce_motion);
+    document.documentElement.setAttribute('data-theme', viewerSettings.theme || 'cyberpunk');
+    syncThemePicker();
     syncGraphToolbarState();
     if (restartPolling) startLivePolling(true);
     if (rerenderGrid) renderGrid(allMemories);
@@ -10553,7 +10729,14 @@ function viewerScript(): string {
     if (search) url += '&search=' + encodeURIComponent(search);
     try {
       const r = await apiFetch(url);
-      if (!r.ok) { doLogout(true); return; }
+      if (r.status === 401) { doLogout(true); return; }
+      if (!r.ok) {
+        if (!silent) {
+          grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div>ERROR LOADING MEMORIES</div>';
+          showToast('Memory load failed (' + r.status + ').', 'error');
+        }
+        return;
+      }
       const data = await r.json();
       allMemories = data.memories || [];
       updateStats(data.stats || [], allMemories);
@@ -10977,11 +11160,13 @@ function viewerScript(): string {
     if (semanticWait) semanticWait.checked = viewerSettings.semantic_reindex_wait_for_index;
     if (semanticTimeout) semanticTimeout.value = String(viewerSettings.semantic_reindex_wait_timeout_seconds);
     if (semanticLimit) semanticLimit.value = String(viewerSettings.semantic_reindex_limit);
+    syncThemePicker();
     renderSemanticReindexStatus();
   }
 
   function readSettingsFromForm() {
     const raw = {
+      theme: document.querySelector('.theme-swatch.active')?.dataset?.themeValue || viewerSettings?.theme || 'cyberpunk',
       live_poll_enabled: document.getElementById('settings-live-poll-enabled')?.checked !== false,
       live_poll_interval_sec: Number(document.getElementById('settings-live-poll-interval')?.value ?? 10),
       time_mode: document.getElementById('settings-time-mode')?.value === 'local' ? 'local' : 'utc',
@@ -11136,6 +11321,13 @@ function viewerScript(): string {
     applyViewerSettingsToRuntime({ restartPolling: true, rerenderGraph: true, rerenderGrid: true });
     updateTime();
     showToast('Settings reset to defaults.', 'info', true);
+  }
+
+  function syncThemePicker() {
+    const current = viewerSettings?.theme || 'cyberpunk';
+    document.querySelectorAll('.theme-swatch').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.themeValue === current);
+    });
   }
 
   function syncFilterPills(type) {
@@ -11839,6 +12031,17 @@ function viewerScript(): string {
         default:
           break;
       }
+    });
+
+    document.addEventListener('click', (event) => {
+      const target = event.target instanceof Element ? event.target.closest('.theme-swatch') : null;
+      if (!target) return;
+      const themeValue = target.getAttribute('data-theme-value');
+      if (!themeValue) return;
+      viewerSettings = readSettingsFromForm();
+      viewerSettings.theme = themeValue;
+      persistViewerSettings();
+      applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: false, rerenderGrid: false });
     });
 
     bindInput('search-input', onSearch);
@@ -12932,14 +13135,7 @@ export default {
 
       if (url.pathname === '/auth/refresh') {
         if (request.method !== 'POST') return corsJsonResponse({ error: 'Method not allowed' }, 405);
-        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-        if (await isRateLimited(ip, env)) {
-          return corsJsonResponse({ error: 'Too many failed attempts. Try again later.' }, 429);
-        }
-        const response = await handleAuthRefresh(request, env);
-        if (response.status >= 400) await recordFailedAttempt(ip, env);
-        else await clearRateLimit(ip, env);
-        return response;
+        return handleAuthRefresh(request, env);
       }
 
       if (url.pathname === '/auth/logout') {
@@ -12969,36 +13165,14 @@ export default {
       }
 
       if (url.pathname === '/api/memories') {
-        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-        if (await isRateLimited(ip, env)) {
-          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-            status: 429,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-          });
-        }
         const authCtx = await authenticateRequest(request, env);
-        if (!authCtx) {
-          await recordFailedAttempt(ip, env);
-          return unauthorized(url);
-        }
-        await clearRateLimit(ip, env);
+        if (!authCtx) return unauthorized(url);
         return handleApiMemories(request, env, authCtx.brainId);
       }
 
       if (url.pathname === '/api/tools') {
-        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-        if (await isRateLimited(ip, env)) {
-          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-            status: 429,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-          });
-        }
         const authCtx = await authenticateRequest(request, env);
-        if (!authCtx) {
-          await recordFailedAttempt(ip, env);
-          return unauthorized(url);
-        }
-        await clearRateLimit(ip, env);
+        if (!authCtx) return unauthorized(url);
         return handleApiTools(authCtx);
       }
 
@@ -13012,15 +13186,8 @@ export default {
 
       // GET /api/links/:id
       if (url.pathname.startsWith('/api/links/')) {
-        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-        if (await isRateLimited(ip, env)) {
-          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-            status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-          });
-        }
         const authCtx = await authenticateRequest(request, env);
-        if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
-        await clearRateLimit(ip, env);
+        if (!authCtx) return unauthorized(url);
         const memoryId = url.pathname.slice('/api/links/'.length);
         if (!memoryId) return corsJsonResponse({ error: 'Memory ID required' }, 400);
         return handleApiLinks(memoryId, env, authCtx.brainId);
@@ -13028,15 +13195,8 @@ export default {
 
       // GET /api/graph
       if (url.pathname === '/api/graph') {
-        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-        if (await isRateLimited(ip, env)) {
-          return new Response(JSON.stringify({ error: 'Too many failed attempts. Try again later.' }), {
-            status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '900' },
-          });
-        }
         const authCtx = await authenticateRequest(request, env);
-        if (!authCtx) { await recordFailedAttempt(ip, env); return unauthorized(url); }
-        await clearRateLimit(ip, env);
+        if (!authCtx) return unauthorized(url);
         return handleApiGraph(env, authCtx.brainId);
       }
 
