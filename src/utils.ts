@@ -343,3 +343,13 @@ export function protectedResourceMetadataUrl(url: URL, resourcePath = '/mcp'): s
 export function oauthChallengeHeader(url: URL): string {
   return `Bearer realm="mcp", resource_metadata="${protectedResourceMetadataUrl(url, url.pathname)}"`;
 }
+
+export function parseJsonStringArray(raw: string, fallback: string[] = []): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return fallback;
+    return parsed.filter((v): v is string => typeof v === 'string');
+  } catch {
+    return fallback;
+  }
+}
