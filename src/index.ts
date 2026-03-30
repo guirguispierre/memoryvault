@@ -30,6 +30,9 @@ import {
   handleApiLinks,
   handleApiGraph,
   handleApiTools,
+  handleApiExport,
+  handleApiImport,
+  handleApiPurge,
   rootLandingHtml,
   mcpLandingHtml,
   endpointGuideForPath,
@@ -176,6 +179,24 @@ export default {
         const authCtx = await authRequestWithOAuth(request, env);
         if (!authCtx) return unauthorized(url);
         return handleApiTools(authCtx);
+      }
+
+      if (url.pathname === '/api/export') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiExport(env, authCtx.brainId);
+      }
+
+      if (url.pathname === '/api/import') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiImport(request, env, authCtx.brainId);
+      }
+
+      if (url.pathname === '/api/purge') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiPurge(request, env, authCtx.brainId);
       }
 
       if (url.pathname === '/mcp') {

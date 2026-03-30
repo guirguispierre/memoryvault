@@ -2193,6 +2193,66 @@ export function viewerHtml(): string {
             </div>
           </div>
         </details>
+
+        <details class="settings-folder" id="settings-data-management">
+          <summary>Data Management</summary>
+          <div class="settings-folder-body">
+            <div class="settings-grid">
+
+              <div class="setting-row setting-span-2">
+                <div class="setting-label" style="font-size:0.75rem;letter-spacing:0.12em;margin-bottom:0.15rem">EXPORT</div>
+                <div class="setting-help">Save a backup of all your memories, links, and settings to a <code>.json</code> file. The export does not contain any account identifiers — only your content.</div>
+                <div style="margin-top:0.4rem">
+                  <button class="refresh-btn utility-btn" id="export-btn" data-action="run-export">EXPORT DATA</button>
+                  <div class="semantic-status-line dim" id="export-status-line" style="margin-top:0.3rem"></div>
+                </div>
+              </div>
+
+              <div class="setting-row setting-span-2" style="border-top:1px solid var(--border);padding-top:0.8rem;margin-top:0.3rem">
+                <div class="setting-label" style="font-size:0.75rem;letter-spacing:0.12em;margin-bottom:0.15rem">IMPORT</div>
+                <div class="setting-help">Restore data from a previously exported <code>.json</code> backup file.</div>
+                <div style="margin-top:0.4rem">
+                  <input type="file" accept=".json,application/json" id="import-file-input" style="display:none">
+                  <button class="refresh-btn utility-btn" id="import-choose-btn" data-action="choose-import-file">SELECT .JSON FILE</button>
+                  <div class="semantic-status-line dim" id="import-file-name" style="margin-top:0.3rem"></div>
+
+                  <div id="import-step-strategy" style="display:none;margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--border)">
+                    <div class="setting-help" style="margin-bottom:0.3rem">How should existing data be handled?</div>
+                    <select class="setting-input" id="import-strategy">
+                      <option value="merge">Merge — add new entries, update existing</option>
+                      <option value="skip_existing">Skip existing — only add new entries</option>
+                      <option value="overwrite">Overwrite — erase everything, then import (destructive!)</option>
+                    </select>
+                    <div class="setting-help" id="import-strategy-help" style="margin-top:0.2rem">Safest option. New entries are added, existing ones are updated.</div>
+                  </div>
+
+                  <div id="import-step-run" style="display:none;margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--border)">
+                    <button class="refresh-btn utility-btn" id="import-btn" data-action="run-import">IMPORT DATA</button>
+                  </div>
+
+                  <div class="semantic-status-line dim" id="import-status-line" style="margin-top:0.4rem"></div>
+                  <div class="semantic-status-meta" id="import-status-meta"></div>
+                </div>
+              </div>
+
+              <div class="setting-row setting-span-2" style="border-top:1px solid var(--border);padding-top:0.8rem;margin-top:0.3rem">
+                <div class="setting-label" style="font-size:0.75rem;letter-spacing:0.12em;margin-bottom:0.15rem;color:var(--red,#e05050)">DANGER ZONE</div>
+                <div class="setting-help">Permanently delete <strong>all</strong> memories, links, changelog, snapshots, and settings from this brain. This cannot be undone. Consider exporting a backup first.</div>
+                <div style="margin-top:0.4rem">
+                  <button class="refresh-btn utility-btn" id="purge-btn" data-action="run-purge" style="border-color:var(--red,#e05050);color:var(--red,#e05050)">PURGE ALL DATA</button>
+                  <div class="semantic-status-line dim" id="purge-status-line" style="margin-top:0.3rem"></div>
+                </div>
+              </div>
+
+              <div class="setting-row setting-span-2" style="border-top:1px solid var(--border);padding-top:0.6rem;margin-top:0.3rem">
+                <div class="setting-help" style="font-size:0.55rem;opacity:0.6;line-height:1.5">
+                  Privacy note: Exported files contain the full text of your memories and metadata. Review the file contents before sharing. Do not share exports that contain passwords, API keys, or other sensitive information.
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </details>
       </div>
     </div>
     <div class="settings-actions">
@@ -2708,6 +2768,241 @@ export function viewerScript(): string {
     return runSemanticReindex('settings');
   }
 
+  let importSelectedFile = null;
+  let importRunning = false;
+  let exportRunning = false;
+
+  function updateImportStrategyHelp() {
+    const select = document.getElementById('import-strategy');
+    const help = document.getElementById('import-strategy-help');
+    if (!select || !help) return;
+    const v = select.value;
+    if (v === 'merge') help.textContent = 'Safest option. New entries are added, existing ones are updated.';
+    else if (v === 'skip_existing') help.textContent = 'Conservative. Only adds new entries. Your current data is never modified.';
+    else if (v === 'overwrite') help.textContent = 'Destructive! All existing data is permanently deleted before import. You will be asked to confirm.';
+  }
+
+  async function runExport() {
+    if (!ensureAppReady('Export')) return;
+    if (exportRunning) { showToast('Export already in progress.', 'info'); return; }
+    exportRunning = true;
+    const statusEl = document.getElementById('export-status-line');
+    const btn = document.getElementById('export-btn');
+    if (btn) btn.disabled = true;
+    if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Preparing backup file...'; }
+    try {
+      const r = await apiFetch(BASE + '/api/export');
+      if (r.status === 401) { doLogout(true); return; }
+      if (!r.ok) throw new Error('Export failed (' + r.status + ')');
+      const disposition = r.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="(.+?)"/);
+      const filename = match ? match[1] : 'memoryvault-export.json';
+      const text = await r.text();
+      const parsed = JSON.parse(text);
+      const stats = parsed.stats || {};
+      const blob = new Blob([text], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+      const summary = (stats.memories || 0) + ' memories, ' + (stats.memory_links || 0) + ' links';
+      if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Backup saved: ' + filename + ' (' + summary + ')'; }
+      showToast('Backup downloaded — ' + summary + '.', 'success');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Export failed.';
+      if (statusEl) { statusEl.className = 'semantic-status-line error'; statusEl.textContent = msg; }
+      showToast(msg, 'error');
+    } finally {
+      exportRunning = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function chooseImportFile() {
+    const input = document.getElementById('import-file-input');
+    if (input) input.click();
+  }
+
+  function resetImportSteps() {
+    const nameEl = document.getElementById('import-file-name');
+    const stepStrategy = document.getElementById('import-step-strategy');
+    const stepRun = document.getElementById('import-step-run');
+    const statusEl = document.getElementById('import-status-line');
+    const metaEl = document.getElementById('import-status-meta');
+    importSelectedFile = null;
+    if (nameEl) nameEl.textContent = '';
+    if (stepStrategy) stepStrategy.style.display = 'none';
+    if (stepRun) stepRun.style.display = 'none';
+    if (statusEl) { statusEl.className = 'semantic-status-line dim'; statusEl.textContent = ''; }
+    if (metaEl) metaEl.innerHTML = '';
+  }
+
+  function showImportStep(step) {
+    const stepStrategy = document.getElementById('import-step-strategy');
+    const stepRun = document.getElementById('import-step-run');
+    if (step >= 2 && stepStrategy) stepStrategy.style.display = 'block';
+    if (step >= 3 && stepRun) stepRun.style.display = 'block';
+    if (step < 3 && stepRun) stepRun.style.display = 'none';
+    if (step < 2 && stepStrategy) stepStrategy.style.display = 'none';
+  }
+
+  function onImportFileSelected(event) {
+    const input = event.target;
+    const file = input && input.files && input.files[0];
+    const nameEl = document.getElementById('import-file-name');
+    const statusEl = document.getElementById('import-status-line');
+    const metaEl = document.getElementById('import-status-meta');
+    if (!file) {
+      resetImportSteps();
+      return;
+    }
+    if (!file.name.endsWith('.json')) {
+      showToast('Please select a .json file.', 'error');
+      resetImportSteps();
+      return;
+    }
+    importSelectedFile = file;
+    if (nameEl) nameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+    if (statusEl) { statusEl.className = 'semantic-status-line dim'; statusEl.textContent = ''; }
+    if (metaEl) metaEl.innerHTML = '';
+    showImportStep(3);
+  }
+
+  function onImportStrategyChanged() {
+    updateImportStrategyHelp();
+  }
+
+  async function runImport(source) {
+    if (!ensureAppReady('Import')) return;
+    if (importRunning) { showToast('Import already in progress.', 'info'); return; }
+    if (!importSelectedFile) { showToast('Select a file first.', 'info'); return; }
+
+    const strategySelect = document.getElementById('import-strategy');
+    const strategy = strategySelect ? strategySelect.value : 'merge';
+
+    if (strategy === 'overwrite') {
+      const confirmed = window.confirm(
+        'OVERWRITE will permanently delete ALL existing memories, links, changelog, and settings in this brain before importing. This cannot be undone.\\n\\nContinue?'
+      );
+      if (!confirmed) return;
+    }
+
+    importRunning = true;
+    const statusEl = document.getElementById('import-status-line');
+    const metaEl = document.getElementById('import-status-meta');
+    const importBtn = document.getElementById('import-btn');
+    if (importBtn) importBtn.disabled = true;
+    if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Importing (' + strategy + ')...'; }
+    if (metaEl) metaEl.innerHTML = '';
+
+    try {
+      const text = await importSelectedFile.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { throw new Error('File is not valid JSON.'); }
+      if (!parsed || typeof parsed !== 'object') throw new Error('File content is not a valid object.');
+      if (parsed.schema !== 'memoryvault_export_v1') throw new Error('Unsupported file format. Expected memoryvault_export_v1 schema.');
+
+      parsed.strategy = strategy;
+
+      const r = await apiFetch(BASE + '/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      if (r.status === 401) { doLogout(true); return; }
+      const result = await r.json();
+      if (!r.ok) throw new Error(result.error || 'Import failed (' + r.status + ')');
+
+      const imported = result.imported || {};
+
+      showImportStep(1);
+      importSelectedFile = null;
+      const nameEl = document.getElementById('import-file-name');
+      if (nameEl) nameEl.textContent = '';
+      const fileInput = document.getElementById('import-file-input');
+      if (fileInput) fileInput.value = '';
+
+      if (statusEl) {
+        statusEl.className = 'semantic-status-line';
+        statusEl.textContent = 'Import completed (' + strategy + ').';
+      }
+      if (metaEl) {
+        metaEl.innerHTML = '';
+        const addPill = (text, cls) => {
+          const pill = document.createElement('span');
+          pill.className = 'semantic-status-pill' + (cls ? (' ' + cls) : '');
+          pill.textContent = text;
+          metaEl.appendChild(pill);
+        };
+        if (imported.memories > 0) addPill(imported.memories + ' memories');
+        if (imported.memory_links > 0) addPill(imported.memory_links + ' links');
+        if (imported.memory_changelog > 0) addPill(imported.memory_changelog + ' changelog');
+        if (imported.brain_source_trust > 0) addPill(imported.brain_source_trust + ' trust rules');
+        if (imported.memory_watches > 0) addPill(imported.memory_watches + ' watches');
+        if (imported.skipped > 0) addPill(imported.skipped + ' skipped');
+        if (imported.memory_conflict_resolutions > 0) addPill(imported.memory_conflict_resolutions + ' resolutions');
+        if (imported.memory_entity_aliases > 0) addPill(imported.memory_entity_aliases + ' aliases');
+      }
+      showToast('Import completed: ' + (imported.memories || 0) + ' memories, ' + (imported.memory_links || 0) + ' links.', 'success');
+      loadMemories(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Import failed.';
+      if (statusEl) { statusEl.className = 'semantic-status-line error'; statusEl.textContent = msg; }
+      showToast(msg, 'error');
+    } finally {
+      importRunning = false;
+      if (importBtn) importBtn.disabled = false;
+    }
+  }
+
+  function runImportFromSettings() { return runImport('settings'); }
+
+  async function runPurge() {
+    if (!ensureAppReady('Purge')) return;
+    const statusEl = document.getElementById('purge-status-line');
+    const btn = document.getElementById('purge-btn');
+
+    const first = window.confirm(
+      'This will permanently delete ALL memories, links, changelog, snapshots, and settings from this brain.\\n\\nThis cannot be undone. Are you sure?'
+    );
+    if (!first) return;
+
+    const second = window.prompt(
+      'To confirm, type PURGE below:'
+    );
+    if (second !== 'PURGE') {
+      showToast('Purge cancelled.', 'info');
+      return;
+    }
+
+    if (btn) btn.disabled = true;
+    if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Purging all data...'; }
+
+    try {
+      const r = await apiFetch(BASE + '/api/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'PURGE ALL DATA' }),
+      });
+      if (r.status === 401) { doLogout(true); return; }
+      const result = await r.json();
+      if (!r.ok) throw new Error(result.error || 'Purge failed.');
+      const purged = result.purged || {};
+      if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Purged ' + (purged.memories || 0) + ' memories and ' + (purged.links || 0) + ' links.'; }
+      showToast('All data has been purged.', 'success', true);
+      loadMemories(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Purge failed.';
+      if (statusEl) { statusEl.className = 'semantic-status-line error'; statusEl.textContent = msg; }
+      showToast(msg, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function doTokenLogin() {
     clearLoginError();
     const val = document.getElementById('token-input').value.trim();
@@ -3106,6 +3401,34 @@ export function viewerScript(): string {
         run: async () => {
           if (!ensureAppReady('Semantic reindex')) return;
           await runSemanticReindex('command');
+        },
+      },
+      {
+        label: 'Export brain data',
+        detail: 'Download all data as JSON file',
+        run: async () => {
+          if (!ensureAppReady('Export')) return;
+          await runExport();
+        },
+      },
+      {
+        label: 'Import brain data',
+        detail: 'Restore from a backup file',
+        run: () => {
+          if (!ensureAppReady('Import')) return;
+          openSettingsOverlay();
+          setTimeout(() => {
+            const section = document.getElementById('settings-data-management');
+            if (section) { section.open = true; section.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+          }, 120);
+        },
+      },
+      {
+        label: 'Purge all data',
+        detail: 'Permanently delete everything (danger)',
+        run: async () => {
+          if (!ensureAppReady('Purge')) return;
+          await runPurge();
         },
       },
       {
@@ -4130,6 +4453,18 @@ export function viewerScript(): string {
         case 'run-semantic-reindex':
           runSemanticReindexFromSettings();
           break;
+        case 'run-export':
+          runExport();
+          break;
+        case 'choose-import-file':
+          chooseImportFile();
+          break;
+        case 'run-import':
+          runImportFromSettings();
+          break;
+        case 'run-purge':
+          runPurge();
+          break;
         case 'open-changelog-overlay':
           openChangelogOverlay();
           break;
@@ -4194,6 +4529,11 @@ export function viewerScript(): string {
 
   syncGraphToolbarState();
   bindViewerEventHandlers();
+
+  const importFileInput = document.getElementById('import-file-input');
+  if (importFileInput) importFileInput.addEventListener('change', onImportFileSelected);
+  const importStrategySelect = document.getElementById('import-strategy');
+  if (importStrategySelect) importStrategySelect.addEventListener('change', onImportStrategyChanged);
 
   // Enter key on login
   document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doTokenLogin(); });

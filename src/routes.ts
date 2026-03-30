@@ -19,6 +19,11 @@ import {
   now,
   toFiniteNumber,
   normalizeSourceKey,
+  normalizeRelation,
+  clampToRange,
+  isValidType,
+  generateId,
+  stableJson,
   escapeHtml,
 } from './utils.js';
 
@@ -30,7 +35,16 @@ import {
   loadLinkStatsMap,
   loadSourceTrustMap,
   getBrainPolicy,
+  setBrainPolicy,
+  loadExplicitMemoryLinks,
+  logChangelog,
+  parseJsonObject,
 } from './db.js';
+
+import {
+  safeSyncMemoriesToVectorIndex,
+  safeDeleteMemoryVectors,
+} from './vectorize.js';
 
 import {
   enrichMemoryRowsWithDynamics,
@@ -425,8 +439,382 @@ export function handleApiTools(authCtx: AuthContext): Response {
   });
 }
 
+const EXPORT_SCHEMA = 'memoryvault_export_v1';
+type ImportStrategy = 'merge' | 'overwrite' | 'skip_existing';
 
+export async function handleApiExport(env: Env, brainId: string): Promise<Response> {
+  const ts = now();
 
+  const memories = await env.DB.prepare(
+    `SELECT id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at
+     FROM memories WHERE brain_id = ? ORDER BY created_at DESC LIMIT 50000`
+  ).bind(brainId).all<Record<string, unknown>>();
+
+  const links = await loadExplicitMemoryLinks(env, brainId, 50000);
+
+  const changelog = await env.DB.prepare(
+    `SELECT id, event_type, entity_type, entity_id, summary, payload, created_at
+     FROM memory_changelog WHERE brain_id = ? ORDER BY created_at DESC LIMIT 50000`
+  ).bind(brainId).all<Record<string, unknown>>();
+
+  const sourceTrust = await env.DB.prepare(
+    'SELECT source_key, trust, notes, created_at, updated_at FROM brain_source_trust WHERE brain_id = ? ORDER BY source_key ASC'
+  ).bind(brainId).all<Record<string, unknown>>();
+
+  const policy = await getBrainPolicy(env, brainId);
+
+  const conflictResolutions = await env.DB.prepare(
+    'SELECT pair_key, a_id, b_id, status, canonical_id, note, created_at, updated_at FROM memory_conflict_resolutions WHERE brain_id = ? ORDER BY updated_at DESC LIMIT 50000'
+  ).bind(brainId).all<Record<string, unknown>>();
+
+  const aliases = await env.DB.prepare(
+    'SELECT canonical_memory_id, alias_memory_id, note, confidence, created_at, updated_at FROM memory_entity_aliases WHERE brain_id = ? ORDER BY updated_at DESC LIMIT 50000'
+  ).bind(brainId).all<Record<string, unknown>>();
+
+  const watches = await env.DB.prepare(
+    'SELECT name, event_types, query, webhook_url, is_active, created_at, updated_at FROM memory_watches WHERE brain_id = ? ORDER BY updated_at DESC LIMIT 1000'
+  ).bind(brainId).all<Record<string, unknown>>();
+
+  const sanitizedWatches = watches.results.map((w) => {
+    const copy = { ...w };
+    delete copy.webhook_url;
+    delete copy.secret;
+    return copy;
+  });
+
+  const payload = {
+    schema: EXPORT_SCHEMA,
+    exported_at: ts,
+    data: {
+      memories: memories.results,
+      memory_links: links,
+      memory_changelog: changelog.results,
+      brain_source_trust: sourceTrust.results,
+      brain_policy: policy,
+      memory_conflict_resolutions: conflictResolutions.results,
+      memory_entity_aliases: aliases.results,
+      memory_watches: sanitizedWatches,
+    },
+    stats: {
+      memories: memories.results.length,
+      memory_links: links.length,
+      memory_changelog: changelog.results.length,
+      brain_source_trust: sourceTrust.results.length,
+      memory_conflict_resolutions: conflictResolutions.results.length,
+      memory_entity_aliases: aliases.results.length,
+      memory_watches: sanitizedWatches.length,
+    },
+  };
+
+  const dateStr = new Date(ts * 1000).toISOString().slice(0, 10);
+  const filename = `memoryvault-export-${dateStr}.json`;
+
+  return new Response(stableJson(payload), {
+    headers: {
+      ...CORS_HEADERS,
+      'Content-Type': 'application/json',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    },
+  });
+}
+
+export async function handleApiImport(request: Request, env: Env, brainId: string): Promise<Response> {
+  if (request.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json() as Record<string, unknown>;
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+      status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (body.schema !== EXPORT_SCHEMA) {
+    return new Response(JSON.stringify({ error: `Unsupported schema. Expected "${EXPORT_SCHEMA}".` }), {
+      status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const strategyRaw = typeof body.strategy === 'string' ? body.strategy : 'merge';
+  const validStrategies: ImportStrategy[] = ['merge', 'overwrite', 'skip_existing'];
+  if (!validStrategies.includes(strategyRaw as ImportStrategy)) {
+    return new Response(JSON.stringify({ error: `Invalid strategy. Must be one of: ${validStrategies.join(', ')}` }), {
+      status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+  const strategy = strategyRaw as ImportStrategy;
+
+  const data = body.data && typeof body.data === 'object' && !Array.isArray(body.data)
+    ? body.data as Record<string, unknown>
+    : null;
+  if (!data) {
+    return new Response(JSON.stringify({ error: 'Missing or invalid "data" field.' }), {
+      status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const memoriesPayload = Array.isArray(data.memories) ? data.memories as Array<Record<string, unknown>> : [];
+  const linksPayload = Array.isArray(data.memory_links) ? data.memory_links as Array<Record<string, unknown>> : [];
+  const changelogPayload = Array.isArray(data.memory_changelog) ? data.memory_changelog as Array<Record<string, unknown>> : [];
+  const sourceTrustPayload = Array.isArray(data.brain_source_trust) ? data.brain_source_trust as Array<Record<string, unknown>> : [];
+  const policyPayload = data.brain_policy && typeof data.brain_policy === 'object' && !Array.isArray(data.brain_policy)
+    ? data.brain_policy as Record<string, unknown>
+    : null;
+  const conflictResolutionsPayload = Array.isArray(data.memory_conflict_resolutions) ? data.memory_conflict_resolutions as Array<Record<string, unknown>> : [];
+  const aliasesPayload = Array.isArray(data.memory_entity_aliases) ? data.memory_entity_aliases as Array<Record<string, unknown>> : [];
+  const watchesPayload = Array.isArray(data.memory_watches) ? data.memory_watches as Array<Record<string, unknown>> : [];
+
+  const ts = now();
+  const counts = { memories: 0, memory_links: 0, memory_changelog: 0, brain_source_trust: 0, memory_conflict_resolutions: 0, memory_entity_aliases: 0, memory_watches: 0, skipped: 0 };
+  const restoredMemoryRows: Array<Record<string, unknown>> = [];
+
+  if (strategy === 'overwrite') {
+    const existingIds = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? LIMIT 50000').bind(brainId).all<{ id: string }>();
+    await safeDeleteMemoryVectors(env, brainId, existingIds.results.map((r) => r.id), 'import_overwrite_purge');
+    await env.DB.prepare('DELETE FROM memory_links WHERE brain_id = ?').bind(brainId).run();
+    await env.DB.prepare('DELETE FROM memory_entity_aliases WHERE brain_id = ?').bind(brainId).run();
+    await env.DB.prepare('DELETE FROM memory_conflict_resolutions WHERE brain_id = ?').bind(brainId).run();
+    await env.DB.prepare('DELETE FROM memory_changelog WHERE brain_id = ?').bind(brainId).run();
+    await env.DB.prepare('DELETE FROM memory_watches WHERE brain_id = ?').bind(brainId).run();
+    await env.DB.prepare('DELETE FROM brain_source_trust WHERE brain_id = ?').bind(brainId).run();
+    await env.DB.prepare('DELETE FROM memories WHERE brain_id = ?').bind(brainId).run();
+  }
+
+  let existingIdSet: Set<string> | null = null;
+  if (strategy === 'skip_existing') {
+    const existingRows = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? LIMIT 50000').bind(brainId).all<{ id: string }>();
+    existingIdSet = new Set(existingRows.results.map((r) => r.id));
+  }
+
+  for (const raw of memoriesPayload) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const m = raw as Record<string, unknown>;
+    const memoryId = typeof m.id === 'string' && m.id ? m.id : generateId();
+    if (strategy === 'skip_existing' && existingIdSet?.has(memoryId)) { counts.skipped++; continue; }
+    const type = isValidType(m.type) ? m.type : 'note';
+    const content = typeof m.content === 'string' && m.content.trim() ? m.content.trim() : '';
+    if (!content) continue;
+    const archivedAt = m.archived_at == null ? null : Math.floor(toFiniteNumber(m.archived_at, ts));
+    const createdAt = Math.floor(toFiniteNumber(m.created_at, ts));
+    const updatedAt = Math.floor(toFiniteNumber(m.updated_at, ts));
+
+    await env.DB.prepare(
+      `INSERT INTO memories (id, brain_id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         brain_id = excluded.brain_id, type = excluded.type, title = excluded.title, key = excluded.key,
+         content = excluded.content, tags = excluded.tags, source = excluded.source,
+         confidence = excluded.confidence, importance = excluded.importance,
+         archived_at = excluded.archived_at, created_at = excluded.created_at, updated_at = excluded.updated_at`
+    ).bind(
+      memoryId, brainId, type,
+      typeof m.title === 'string' ? m.title : null,
+      typeof m.key === 'string' ? m.key : null,
+      content,
+      typeof m.tags === 'string' ? m.tags : null,
+      typeof m.source === 'string' ? m.source : null,
+      clampToRange(m.confidence, 0.7),
+      clampToRange(m.importance, 0.5),
+      archivedAt, createdAt, updatedAt
+    ).run();
+
+    restoredMemoryRows.push({ id: memoryId, type, content, tags: typeof m.tags === 'string' ? m.tags : null });
+    counts.memories++;
+  }
+
+  if (restoredMemoryRows.length) {
+    await safeSyncMemoriesToVectorIndex(env, brainId, restoredMemoryRows, 'import_sync');
+  }
+
+  const allMemoryIds = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? LIMIT 50000').bind(brainId).all<{ id: string }>();
+  const memoryIdSet = new Set(allMemoryIds.results.map((r) => r.id));
+
+  let existingLinkSet: Set<string> | null = null;
+  if (strategy === 'skip_existing') {
+    const existingLinks = await env.DB.prepare('SELECT id FROM memory_links WHERE brain_id = ? LIMIT 50000').bind(brainId).all<{ id: string }>();
+    existingLinkSet = new Set(existingLinks.results.map((r) => r.id));
+  }
+
+  for (const raw of linksPayload) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const link = raw as Record<string, unknown>;
+    const fromId = typeof link.from_id === 'string' ? link.from_id : '';
+    const toId = typeof link.to_id === 'string' ? link.to_id : '';
+    if (!fromId || !toId || !memoryIdSet.has(fromId) || !memoryIdSet.has(toId)) continue;
+    const linkId = typeof link.id === 'string' && link.id ? link.id : generateId();
+    if (strategy === 'skip_existing' && existingLinkSet?.has(linkId)) { counts.skipped++; continue; }
+    await env.DB.prepare(
+      `INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         brain_id = excluded.brain_id, from_id = excluded.from_id, to_id = excluded.to_id,
+         relation_type = excluded.relation_type, label = excluded.label`
+    ).bind(
+      linkId, brainId, fromId, toId,
+      normalizeRelation(link.relation_type),
+      typeof link.label === 'string' ? link.label : null,
+      Math.floor(toFiniteNumber(link.created_at, ts))
+    ).run();
+    counts.memory_links++;
+  }
+
+  for (const raw of changelogPayload) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const entry = raw as Record<string, unknown>;
+    const entryId = typeof entry.id === 'string' && entry.id ? entry.id : generateId();
+    const eventType = typeof entry.event_type === 'string' ? entry.event_type : '';
+    const entityType = typeof entry.entity_type === 'string' ? entry.entity_type : '';
+    const entityId = typeof entry.entity_id === 'string' ? entry.entity_id : '';
+    const summary = typeof entry.summary === 'string' ? entry.summary : '';
+    if (!eventType || !entityType || !entityId || !summary) continue;
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO memory_changelog (id, brain_id, event_type, entity_type, entity_id, summary, payload, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      entryId, brainId, eventType, entityType, entityId, summary,
+      typeof entry.payload === 'string' ? entry.payload : (entry.payload ? stableJson(entry.payload) : null),
+      Math.floor(toFiniteNumber(entry.created_at, ts))
+    ).run();
+    counts.memory_changelog++;
+  }
+
+  for (const raw of sourceTrustPayload) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const trustRow = raw as Record<string, unknown>;
+    const sourceKey = typeof trustRow.source_key === 'string' ? normalizeSourceKey(trustRow.source_key) : '';
+    if (!sourceKey) continue;
+    await env.DB.prepare(
+      `INSERT INTO brain_source_trust (id, brain_id, source_key, trust, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(brain_id, source_key) DO UPDATE SET trust = excluded.trust, notes = excluded.notes, updated_at = excluded.updated_at`
+    ).bind(
+      generateId(), brainId, sourceKey,
+      clampToRange(trustRow.trust, 0.5),
+      typeof trustRow.notes === 'string' ? trustRow.notes : null,
+      Math.floor(toFiniteNumber(trustRow.created_at, ts)), ts
+    ).run();
+    counts.brain_source_trust++;
+  }
+
+  for (const raw of conflictResolutionsPayload) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const res = raw as Record<string, unknown>;
+    const aId = typeof res.a_id === 'string' ? res.a_id : '';
+    const bId = typeof res.b_id === 'string' ? res.b_id : '';
+    if (!aId || !bId || !memoryIdSet.has(aId) || !memoryIdSet.has(bId)) continue;
+    const pk = [aId, bId].sort().join('::');
+    await env.DB.prepare(
+      `INSERT INTO memory_conflict_resolutions (id, brain_id, pair_key, a_id, b_id, status, canonical_id, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(brain_id, pair_key) DO UPDATE SET status = excluded.status, canonical_id = excluded.canonical_id, note = excluded.note, updated_at = excluded.updated_at`
+    ).bind(
+      generateId(), brainId, pk, aId, bId,
+      typeof res.status === 'string' ? res.status : 'needs_review',
+      typeof res.canonical_id === 'string' ? res.canonical_id : null,
+      typeof res.note === 'string' ? res.note : null,
+      Math.floor(toFiniteNumber(res.created_at, ts)), ts
+    ).run();
+    counts.memory_conflict_resolutions++;
+  }
+
+  for (const raw of aliasesPayload) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const alias = raw as Record<string, unknown>;
+    const canonicalId = typeof alias.canonical_memory_id === 'string' ? alias.canonical_memory_id : '';
+    const aliasId = typeof alias.alias_memory_id === 'string' ? alias.alias_memory_id : '';
+    if (!canonicalId || !aliasId || !memoryIdSet.has(canonicalId) || !memoryIdSet.has(aliasId)) continue;
+    await env.DB.prepare(
+      `INSERT INTO memory_entity_aliases (id, brain_id, canonical_memory_id, alias_memory_id, note, confidence, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(brain_id, alias_memory_id) DO UPDATE SET canonical_memory_id = excluded.canonical_memory_id, note = excluded.note, confidence = excluded.confidence, updated_at = excluded.updated_at`
+    ).bind(
+      generateId(), brainId, canonicalId, aliasId,
+      typeof alias.note === 'string' ? alias.note : null,
+      clampToRange(alias.confidence, 0.9),
+      Math.floor(toFiniteNumber(alias.created_at, ts)), ts
+    ).run();
+    counts.memory_entity_aliases++;
+  }
+
+  for (const raw of watchesPayload) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const watch = raw as Record<string, unknown>;
+    const name = typeof watch.name === 'string' && watch.name.trim() ? watch.name.trim() : '';
+    const eventTypes = typeof watch.event_types === 'string' ? watch.event_types : '';
+    if (!name || !eventTypes) continue;
+    await env.DB.prepare(
+      `INSERT INTO memory_watches (id, brain_id, name, event_types, query, webhook_url, secret, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      generateId(), brainId, name, eventTypes,
+      typeof watch.query === 'string' ? watch.query : null,
+      typeof watch.webhook_url === 'string' ? watch.webhook_url : null,
+      null,
+      watch.is_active === 0 ? 0 : 1,
+      Math.floor(toFiniteNumber(watch.created_at, ts)), ts
+    ).run();
+    counts.memory_watches++;
+  }
+
+  if (policyPayload) {
+    await setBrainPolicy(env, brainId, policyPayload);
+  }
+
+  await logChangelog(env, brainId, 'brain_data_imported', 'brain', brainId, `Imported brain data (${strategy})`, {
+    strategy, ...counts,
+  });
+
+  return new Response(JSON.stringify({ ok: true, strategy, imported: counts }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+export async function handleApiPurge(request: Request, env: Env, brainId: string): Promise<Response> {
+  if (request.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json() as Record<string, unknown>;
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+      status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (body.confirm !== 'PURGE ALL DATA') {
+    return new Response(JSON.stringify({ error: 'Confirmation required. Send { "confirm": "PURGE ALL DATA" }.' }), {
+      status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const existingIds = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? LIMIT 50000').bind(brainId).all<{ id: string }>();
+  const memoryCount = existingIds.results.length;
+  await safeDeleteMemoryVectors(env, brainId, existingIds.results.map((r) => r.id), 'purge_all');
+
+  const linkCount = (await env.DB.prepare('SELECT COUNT(*) as c FROM memory_links WHERE brain_id = ?').bind(brainId).first<{ c: number }>())?.c ?? 0;
+
+  await env.DB.prepare('DELETE FROM memory_links WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM memory_entity_aliases WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM memory_conflict_resolutions WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM memory_changelog WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM memory_watches WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM brain_source_trust WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM brain_snapshots WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM memories WHERE brain_id = ?').bind(brainId).run();
+
+  return new Response(JSON.stringify({ ok: true, purged: { memories: memoryCount, links: linkCount } }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
 
 
 
