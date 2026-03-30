@@ -17,8 +17,8 @@
     "oauth",
     "second-brain"
   ],
-  "author": "MemoryVault",
-  "license": "ISC",
+  "author": "Pierre Guirguis",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/guirguispierre/ai-memory-mcp.git"
