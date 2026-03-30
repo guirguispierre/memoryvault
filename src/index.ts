@@ -64,52 +64,51 @@ import {
   EMPTY_LINK_STATS,
 } from './constants.js';
 
+import {
+  generateId,
+  now,
+  withPrimaryDbEnv,
+  jsonResponse,
+  mergeHeaders,
+  buildCorsJsonHeaders,
+  normalizeCorsJsonResponseOptions,
+  parseRequestCookies,
+  getRequestCookie,
+  serializeCookie,
+  buildSessionCookieHeaders,
+  clearSessionCookieHeaders,
+  buildRotatedSessionCookieHeaders,
+  parseBearerToken,
+  getAccessTokenFromRequest,
+  clampToRange,
+  isMemorySearchMode,
+  hasSemanticSearchBindings,
+  normalizeSemanticScore,
+  truncateForMetadata,
+  parseTags,
+  isValidType,
+  isValidRelationType,
+  canMutateMemories,
+  readJsonBody,
+  escapeHtml,
+  toFiniteNumber,
+  normalizeSourceKey,
+  normalizeTag,
+  parseTagSet,
+  normalizeRelation,
+  stableJson,
+  sanitizeDisplayName,
+  sanitizeBrainName,
+  userPayload,
+  isLikelyMcpRootRequest,
+  isBrowserDocumentRequest,
+  isOAuthAuthorizeNavigation,
+  normalizeResourcePath,
+  protectedResourceMetadataUrl,
+  oauthChallengeHeader,
+} from './utils.js';
+
 export type { Env };
-
-
-function generateId(): string {
-  return crypto.randomUUID();
-}
-
-function now(): number {
-  return Math.floor(Date.now() / 1000);
-}
-
-function withPrimaryDbEnv(env: Env): Env {
-  const dbMaybe = env.DB as unknown as { withSession?: (constraint?: unknown) => unknown };
-  if (typeof dbMaybe.withSession !== 'function') return env;
-  try {
-    const sessionDb = dbMaybe.withSession('first-primary') as D1Database;
-    if (!sessionDb || typeof sessionDb.prepare !== 'function') return env;
-    return { ...env, DB: sessionDb };
-  } catch {
-    return env;
-  }
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function normalizeResourcePath(pathname: string): string {
-  const input = (pathname || '').trim();
-  const withLeadingSlash = input ? (input.startsWith('/') ? input : `/${input}`) : '/';
-  const normalized = withLeadingSlash.replace(/\/+$/, '') || '/';
-  if (normalized === '/') return '/mcp';
-  return normalized;
-}
-
-function protectedResourceMetadataUrl(url: URL, resourcePath = '/mcp'): string {
-  const normalized = normalizeResourcePath(resourcePath);
-  return `${url.origin}/.well-known/oauth-protected-resource${normalized}`;
-}
-
-function oauthChallengeHeader(url: URL): string {
-  return `Bearer realm="mcp", resource_metadata="${protectedResourceMetadataUrl(url, url.pathname)}"`;
-}
 
 function unauthorized(url?: URL): Response {
   const headers: Record<string, string> = { ...CORS_HEADERS, 'Content-Type': 'application/json' };
@@ -121,125 +120,6 @@ function unauthorized(url?: URL): Response {
 }
 
 
-function canMutateMemories(authCtx: AuthContext): boolean {
-  if (authCtx.kind === 'legacy') return true;
-  return typeof authCtx.userId === 'string' && authCtx.userId.trim().length > 0;
-}
-
-function mergeHeaders(target: Headers, source?: HeadersInit): Headers {
-  if (!source) return target;
-  const headers = new Headers(source);
-  headers.forEach((value, key) => target.set(key, value));
-  return target;
-}
-
-function buildCorsJsonHeaders(options: CorsJsonResponseOptions = {}): Headers {
-  const headers = mergeHeaders(new Headers(CORS_HEADERS), options.headers);
-  headers.set('Content-Type', 'application/json');
-  for (const cookie of options.cookies ?? []) {
-    headers.append('Set-Cookie', cookie);
-  }
-  return headers;
-}
-
-function parseRequestCookies(request: Request): Map<string, string> {
-  const cookies = new Map<string, string>();
-  const cookieHeader = request.headers.get('Cookie');
-  if (!cookieHeader) return cookies;
-  for (const part of cookieHeader.split(';')) {
-    const separator = part.indexOf('=');
-    if (separator <= 0) continue;
-    const name = part.slice(0, separator).trim();
-    const rawValue = part.slice(separator + 1).trim();
-    if (!name) continue;
-    try {
-      cookies.set(name, decodeURIComponent(rawValue));
-    } catch {
-      cookies.set(name, rawValue);
-    }
-  }
-  return cookies;
-}
-
-function getRequestCookie(request: Request, name: string): string | null {
-  return parseRequestCookies(request).get(name) ?? null;
-}
-
-function serializeCookie(
-  name: string,
-  value: string,
-  options: {
-    httpOnly?: boolean;
-    secure?: boolean;
-    sameSite?: 'Strict' | 'Lax' | 'None';
-    maxAge?: number;
-    path: string;
-  }
-): string {
-  const parts = [`${name}=${encodeURIComponent(value)}`];
-  if (options.httpOnly !== false) parts.push('HttpOnly');
-  if (options.secure !== false) parts.push('Secure');
-  parts.push(`SameSite=${options.sameSite ?? 'Strict'}`);
-  if (typeof options.maxAge === 'number') parts.push(`Max-Age=${Math.max(0, Math.floor(options.maxAge))}`);
-  parts.push(`Path=${options.path}`);
-  return parts.join('; ');
-}
-
-function normalizeCorsJsonResponseOptions(
-  options: CorsJsonResponseOptions | Record<string, string>
-): CorsJsonResponseOptions {
-  const candidate = options as CorsJsonResponseOptions;
-  if (Array.isArray(candidate.cookies) || Object.prototype.hasOwnProperty.call(candidate, 'headers')) {
-    return candidate;
-  }
-  return { headers: options as Record<string, string> };
-}
-
-function buildSessionCookieHeaders(tokens: SessionTokens): string[] {
-  return [
-    serializeCookie(AUTH_TOKEN_COOKIE_NAME, tokens.access_token, {
-      maxAge: AUTH_TOKEN_COOKIE_MAX_AGE_SECONDS,
-      path: AUTH_TOKEN_COOKIE_PATH,
-      sameSite: SESSION_COOKIE_SAME_SITE,
-    }),
-    serializeCookie(REFRESH_TOKEN_COOKIE_NAME, tokens.refresh_token, {
-      maxAge: REFRESH_TOKEN_TTL_SECONDS,
-      path: REFRESH_TOKEN_COOKIE_PATH,
-      sameSite: SESSION_COOKIE_SAME_SITE,
-    }),
-  ];
-}
-
-function clearSessionCookieHeaders(): string[] {
-  return [
-    serializeCookie(AUTH_TOKEN_COOKIE_NAME, '', {
-      maxAge: 0,
-      path: AUTH_TOKEN_COOKIE_PATH,
-      sameSite: SESSION_COOKIE_SAME_SITE,
-    }),
-    serializeCookie(REFRESH_TOKEN_COOKIE_NAME, '', {
-      maxAge: 0,
-      path: REFRESH_TOKEN_COOKIE_PATH,
-      sameSite: SESSION_COOKIE_SAME_SITE,
-    }),
-  ];
-}
-
-function buildRotatedSessionCookieHeaders(tokens: SessionTokens): string[] {
-  return [...clearSessionCookieHeaders(), ...buildSessionCookieHeaders(tokens)];
-}
-
-function parseBearerToken(request: Request): string | null {
-  const auth = request.headers.get('Authorization');
-  if (!auth) return null;
-  const match = auth.match(/^\s*Bearer\s+(.+?)\s*$/i);
-  if (!match) return null;
-  return match[1] || null;
-}
-
-function getAccessTokenFromRequest(request: Request): string | null {
-  return parseBearerToken(request) ?? getRequestCookie(request, AUTH_TOKEN_COOKIE_NAME);
-}
 
 function bytesToBase64Url(bytes: Uint8Array): string {
   let bin = '';
@@ -511,46 +391,6 @@ function normalizeLegacyToken(raw: unknown): string {
 }
 
 
-function isValidType(t: unknown): t is MemoryType {
-  return typeof t === 'string' && (VALID_TYPES as readonly string[]).includes(t);
-}
-
-function isValidRelationType(t: unknown): t is RelationType {
-  return typeof t === 'string' && (RELATION_TYPES as readonly string[]).includes(t);
-}
-
-function clampToRange(input: unknown, fallback: number, min = 0, max = 1): number {
-  const n = typeof input === 'number' ? input : Number(input);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(Math.max(n, min), max);
-}
-
-function isMemorySearchMode(value: unknown): value is MemorySearchMode {
-  return value === 'lexical' || value === 'semantic' || value === 'hybrid';
-}
-
-function hasSemanticSearchBindings(env: Env): env is Env & { AI: Ai; MEMORY_INDEX: Vectorize } {
-  return Boolean(env.AI && env.MEMORY_INDEX);
-}
-
-function normalizeSemanticScore(rawScore: number): number {
-  if (!Number.isFinite(rawScore)) return 0;
-  return clampToRange((rawScore + 1) / 2, 0, 0, 1);
-}
-
-function truncateForMetadata(value: string, max = 120): string {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return trimmed.length <= max ? trimmed : trimmed.slice(0, max);
-}
-
-function parseTags(tags: unknown): string[] {
-  if (typeof tags !== 'string' || !tags.trim()) return [];
-  return tags
-    .split(',')
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
 
 function buildMemoryEmbeddingText(memory: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -1321,11 +1161,6 @@ async function ensureSchema(env: Env): Promise<void> {
 }
 
 
-function toFiniteNumber(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }
@@ -1334,23 +1169,6 @@ function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function normalizeSourceKey(raw: string): string {
-  return raw.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 160);
-}
-
-function normalizeTag(raw: string): string {
-  return raw.trim().toLowerCase();
-}
-
-function parseTagSet(raw: unknown): Set<string> {
-  if (typeof raw !== 'string' || !raw.trim()) return new Set();
-  return new Set(
-    raw.split(',')
-      .map((tag) => normalizeTag(tag))
-      .filter(Boolean)
-      .slice(0, 64)
-  );
-}
 
 function tokenizeText(raw: string, max = 80): string[] {
   const stopWords = new Set([
@@ -1752,10 +1570,6 @@ function relationSpreadWeight(relationType: RelationType): number {
   }
 }
 
-function normalizeRelation(raw: unknown): RelationType {
-  return isValidRelationType(raw) ? raw : 'related';
-}
-
 function buildAdjacencyFromEdges(edges: GraphEdge[]): Map<string, GraphNeighbor[]> {
   const adjacency = new Map<string, GraphNeighbor[]>();
   for (const edge of edges) {
@@ -1776,14 +1590,6 @@ function slugify(input: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 64) || 'objective';
-}
-
-function stableJson(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return JSON.stringify({ note: 'unserializable payload' });
-  }
 }
 
 function parseWatchEventTypes(raw: string): string[] {
@@ -6277,7 +6083,7 @@ function corsJsonResponse(
 ): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: buildCorsJsonHeaders(normalizeCorsJsonResponseOptions(options)),
+    headers: buildCorsJsonHeaders(CORS_HEADERS, normalizeCorsJsonResponseOptions(options)),
   });
 }
 
@@ -6333,47 +6139,6 @@ function wrapWithSecurityHeaders(response: Response): Response {
   });
 }
 
-function isLikelyMcpRootRequest(request: Request): boolean {
-  const accept = (request.headers.get('Accept') ?? '').toLowerCase();
-  const contentType = (request.headers.get('Content-Type') ?? '').toLowerCase();
-  if (accept.includes('text/event-stream')) return true;
-  if (request.headers.has('MCP-Protocol-Version') || request.headers.has('mcp-protocol-version')) return true;
-  if (request.method === 'POST' && contentType.includes('application/json')) return true;
-  return false;
-}
-
-function isBrowserDocumentRequest(request: Request): boolean {
-  if (request.method !== 'GET') return false;
-  const accept = (request.headers.get('Accept') ?? '').toLowerCase();
-  if (accept.includes('text/event-stream')) return false;
-  if (request.headers.has('MCP-Protocol-Version') || request.headers.has('mcp-protocol-version')) return false;
-  const fetchDest = (request.headers.get('Sec-Fetch-Dest') ?? '').toLowerCase();
-  const fetchMode = (request.headers.get('Sec-Fetch-Mode') ?? '').toLowerCase();
-  if (fetchDest === 'document' || fetchMode === 'navigate') return true;
-  return accept.includes('text/html');
-}
-
-function isOAuthAuthorizeNavigation(url: URL): boolean {
-  if (url.pathname !== '/authorize') return false;
-  const q = url.searchParams;
-  return q.has('response_type')
-    || q.has('client_id')
-    || q.has('redirect_uri')
-    || q.has('code_challenge')
-    || q.has('state')
-    || q.has('scope')
-    || q.has('resource');
-}
-
-async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
-  try {
-    const body = await request.json();
-    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
-    return body as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
 
 async function processMcpBody(
   body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
@@ -6754,32 +6519,6 @@ function handleApiTools(authCtx: AuthContext): Response {
 }
 
 
-function sanitizeDisplayName(raw: unknown, email: string): string | null {
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    if (trimmed) return trimmed.slice(0, 120);
-  }
-  const local = email.split('@')[0]?.replace(/[^a-z0-9]+/gi, ' ').trim();
-  return local ? local.slice(0, 120) : null;
-}
-
-function sanitizeBrainName(raw: unknown, email: string): string {
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    if (trimmed) return trimmed.slice(0, 120);
-  }
-  const local = email.split('@')[0]?.replace(/[^a-z0-9]+/gi, ' ').trim();
-  return local ? `${local.slice(0, 64)}'s Second Brain` : 'Second Brain';
-}
-
-function userPayload(row: { id: string; email: string; display_name: string | null; created_at: number }): Record<string, unknown> {
-  return {
-    id: row.id,
-    email: row.email,
-    display_name: row.display_name,
-    created_at: row.created_at,
-  };
-}
 
 async function listBrainsForUser(userId: string, env: Env): Promise<BrainSummary[]> {
   const rows = await env.DB.prepare(
@@ -7279,14 +7018,6 @@ function hasValidAdminBearer(request: Request, env: Env): boolean {
   return timingSafeEqualStrings(provided, expected);
 }
 
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 async function readFormBody(request: Request): Promise<URLSearchParams | null> {
   const contentType = (request.headers.get('content-type') ?? '').toLowerCase();
