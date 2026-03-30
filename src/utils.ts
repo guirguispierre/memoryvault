@@ -344,6 +344,14 @@ export function oauthChallengeHeader(url: URL): string {
   return `Bearer realm="mcp", resource_metadata="${protectedResourceMetadataUrl(url, url.pathname)}"`;
 }
 
+export function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'objective';
+}
+
 export function parseJsonStringArray(raw: string, fallback: string[] = []): string[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
