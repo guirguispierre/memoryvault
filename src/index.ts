@@ -1,179 +1,10 @@
+import { type Env } from './types.js';
+import { SERVER_NAME, SERVER_VERSION } from './constants.js';
+import { jsonResponse, isLikelyMcpRootRequest, isBrowserDocumentRequest, isOAuthAuthorizeNavigation } from './utils.js';
+import { CORS_HEADERS, corsJsonResponse, applyCors, isHtmlResponse, wrapWithSecurityHeaders, unauthorized } from './cors.js';
+import { ensureSchema } from './db.js';
 import {
-  type Env,
-  type MemorySearchMode,
-  type SemanticMemoryCandidate,
-  type VectorSyncStats,
-  type SessionTokens,
-  type CorsJsonResponseOptions,
-  type AuthContext,
-  type AccessTokenPayload,
-  type RefreshSessionRow,
-  VALID_TYPES,
-  type MemoryType,
-  RELATION_TYPES,
-  type RelationType,
-  type LinkStats,
-  type ScoreComponent,
-  type DynamicScoreBreakdown,
-  type BrainPolicy,
-  type ToolDefinition,
-  type ToolReleaseMeta,
-  type ToolChangelogChange,
-  type ToolChangelogEntry,
-  type MemoryGraphNode,
-  type MemoryGraphLink,
-  type UserRow,
-  type BrainSummary,
-  type EndpointGuide,
-  type ToolArgs,
-} from './types.js';
-
-import {
-  SERVER_NAME,
-  SERVER_VERSION,
-  LEGACY_BRAIN_ID,
-  LEGACY_USER_ID,
-  LEGACY_USER_EMAIL,
-  ACCESS_TOKEN_TTL_SECONDS,
-  REFRESH_TOKEN_TTL_SECONDS,
-  AUTH_TOKEN_COOKIE_NAME,
-  REFRESH_TOKEN_COOKIE_NAME,
-  AUTH_TOKEN_COOKIE_MAX_AGE_SECONDS,
-  AUTH_TOKEN_COOKIE_PATH,
-  REFRESH_TOKEN_COOKIE_PATH,
-  SESSION_COOKIE_SAME_SITE,
-  AUTH_RATE_LIMIT_MAX_ATTEMPTS,
-  AUTH_RATE_LIMIT_WINDOW_SECONDS,
-  PBKDF2_ITERATIONS,
-  EMBEDDING_MODEL,
-  VECTORIZE_QUERY_TOP_K_MAX,
-  VECTORIZE_UPSERT_BATCH_SIZE,
-  VECTORIZE_DELETE_BATCH_SIZE,
-  VECTORIZE_SETTLE_POLL_INTERVAL_MS,
-  VECTORIZE_REINDEX_WAIT_TIMEOUT_SECONDS,
-  VECTORIZE_REINDEX_WAIT_TIMEOUT_SECONDS_MAX,
-  EMBEDDING_BATCH_SIZE,
-  MEMORY_SEARCH_FUSION_K,
-  MEMORY_SEARCH_DEFAULT_LIMIT,
-  MEMORY_SEARCH_MAX_LIMIT,
-  VECTOR_ID_PREFIX,
-  VECTOR_ID_MAX_MEMORY_ID_LENGTH,
-  DEFAULT_OAUTH_REDIRECT_DOMAIN_ALLOWLIST,
-  TRUSTED_REDIRECT_DOMAINS,
-  DEFAULT_BRAIN_POLICY,
-  EMPTY_LINK_STATS,
-} from './constants.js';
-
-import {
-  generateId,
-  now,
-  withPrimaryDbEnv,
-  jsonResponse,
-  mergeHeaders,
-  buildCorsJsonHeaders,
-  normalizeCorsJsonResponseOptions,
-  parseRequestCookies,
-  getRequestCookie,
-  serializeCookie,
-  buildSessionCookieHeaders,
-  clearSessionCookieHeaders,
-  buildRotatedSessionCookieHeaders,
-  parseBearerToken,
-  getAccessTokenFromRequest,
-  clampToRange,
-  isMemorySearchMode,
-  hasSemanticSearchBindings,
-  normalizeSemanticScore,
-  truncateForMetadata,
-  parseTags,
-  isValidType,
-  isValidRelationType,
-  canMutateMemories,
-  readJsonBody,
-  escapeHtml,
-  toFiniteNumber,
-  normalizeSourceKey,
-  normalizeTag,
-  parseTagSet,
-  normalizeRelation,
-  stableJson,
-  sanitizeDisplayName,
-  sanitizeBrainName,
-  userPayload,
-  isLikelyMcpRootRequest,
-  isBrowserDocumentRequest,
-  isOAuthAuthorizeNavigation,
-  normalizeResourcePath,
-  protectedResourceMetadataUrl,
-  oauthChallengeHeader,
-  parseJsonStringArray,
-  slugify,
-} from './utils.js';
-
-import {
-  bytesToBase64Url,
-  base64UrlToBytes,
-  hmacSha256,
-  sha256DigestBase64Url,
-  derivePasswordHash,
-  hashPassword,
-  verifyPassword,
-  randomToken,
-  normalizeEmail,
-  isValidEmail,
-  isStrongEnoughPassword,
-  signAccessToken,
-  verifyAccessToken,
-} from './crypto.js';
-
-import {
-  ALLOWED_ORIGINS,
-  CORS_HEADERS,
-  HTML_SECURITY_HEADERS,
-  corsJsonResponse,
-  getCorsOrigin,
-  mergeVaryHeader,
-  applyCors,
-  isHtmlResponse,
-  wrapWithSecurityHeaders,
-  unauthorized,
-} from './cors.js';
-
-import {
-  runMigrationStatement,
-  ensureSchema,
-  parseJsonObject,
-  sanitizePolicyPatch,
-  normalizeLinkStats,
-  loadMemoryRowsByIds,
-  runLexicalMemorySearch,
-  loadLinkStatsMap,
-  loadSourceTrustMap,
-  getBrainPolicy,
-  setBrainPolicy,
-  loadActiveMemoryNodes,
-  loadExplicitMemoryLinks,
-  ensureObjectiveRoot,
-  logChangelog,
-  normalizeWatchEventInput,
-  parseWatchEventTypes,
-  listBrainsForUser,
-  findActiveBrain,
-} from './db.js';
-
-import {
-  createSessionTokens,
-  getRefreshSessionByToken,
-  rotateSession,
-  revokeSession,
-  revokeSessionById,
   authenticateRequest,
-  authRateLimitPrefix,
-  authRateLimitKey,
-  checkRateLimit,
-  resetAuthRateLimit,
-  ensureLegacyTokenPrincipal,
-  normalizeLegacyToken,
   handleAuthSignup,
   handleAuthLogin,
   handleAuthRefresh,
@@ -182,10 +13,7 @@ import {
   handleAuthSessions,
   handleAuthSessionRevoke,
 } from './auth.js';
-
 import {
-  type OAuthClientRow,
-  type OAuthCodeRow,
   getOAuthClient,
   purgeOAuthClientIfNotWhitelisted,
   handleOAuthAuthorize,
@@ -193,56 +21,10 @@ import {
   handleOAuthRegister,
   handleProtectedResourceMetadata,
   handleAuthorizationServerMetadata,
-  hasValidAdminBearer,
-  readFormBody,
-  noStoreJsonHeaders,
 } from './oauth.js';
-
+import { TOOLS } from './tools-schema.js';
+import { viewerHtml, viewerScript } from './viewer.js';
 import {
-  buildMemoryEmbeddingText,
-  syncMemoriesToVectorIndex,
-  safeSyncMemoriesToVectorIndex,
-  safeDeleteMemoryVectors,
-  querySemanticMemoryCandidates,
-  fuseSearchRows,
-  waitForVectorMutationReady,
-  waitForVectorQueryReady,
-} from './vectorize.js';
-
-import {
-  clamp01,
-  round3,
-  countKeywordHits,
-  computeDynamicScoreBreakdown,
-  computeDynamicScores,
-  enrichMemoryRowsWithDynamics,
-  projectMemoryForClient,
-  enrichAndProjectRows,
-} from './scoring.js';
-
-import {
-  TOOL_RELEASE_META,
-  TOOL_CHANGELOG,
-  getToolReleaseMeta,
-  isToolDeprecated,
-  compareSemver,
-  parseSemver,
-  TOOLS,
-  MUTATING_TOOL_NAMES,
-  isMutatingTool,
-} from './tools-schema.js';
-
-import {
-  callTool,
-} from './tools.js';
-
-import {
-  viewerHtml,
-  viewerScript,
-} from './viewer.js';
-
-import {
-  processMcpBody,
   handleMcp,
   handleApiMemories,
   handleApiLinks,
@@ -263,15 +45,6 @@ async function validateOAuthClientForAuth(clientId: string, env: Env): Promise<u
 function authRequestWithOAuth(request: Request, env: Env) {
   return authenticateRequest(request, env, validateOAuthClientForAuth);
 }
-
-
-
-
-
-
-
-
-
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
