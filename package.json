@@ -1,5 +1,5 @@
 {
-  "name": "ai-memory-mcp",
+  "name": "memoryvault",
   "version": "1.10.0",
   "description": "MemoryVault MCP server on Cloudflare Workers + D1 with OAuth and graph-based memory tools.",
   "scripts": {
@@ -21,12 +21,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/guirguispierre/ai-memory-mcp.git"
+    "url": "https://github.com/guirguispierre/memoryvault.git"
   },
   "bugs": {
-    "url": "https://github.com/guirguispierre/ai-memory-mcp/issues"
+    "url": "https://github.com/guirguispierre/memoryvault/issues"
   },
-  "homepage": "https://ai-memory-mcp.guirguispierre.workers.dev",
+  "homepage": "https://github.com/guirguispierre/memoryvault",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",

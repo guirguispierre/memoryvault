@@ -20,8 +20,8 @@ MemoryVault gives AI clients (Claude, ChatGPT, etc.) persistent memory across se
 1. **Clone and install**
 
 ```bash
-git clone https://github.com/guirguispierre/ai-memory-mcp.git
-cd ai-memory-mcp
+git clone https://github.com/guirguispierre/memoryvault.git
+cd memoryvault
 npm install
 ```
 

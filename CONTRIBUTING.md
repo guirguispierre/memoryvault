@@ -59,4 +59,4 @@ Thanks for your interest in contributing!
 
 ## Reporting Issues
 
-Open an issue at [github.com/guirguispierre/ai-memory-mcp/issues](https://github.com/guirguispierre/ai-memory-mcp/issues).
+Open an issue at [github.com/guirguispierre/memoryvault/issues](https://github.com/guirguispierre/memoryvault/issues).

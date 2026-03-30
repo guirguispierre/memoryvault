@@ -1,4 +1,4 @@
-name = "ai-memory-mcp"
+name = "memoryvault"
 main = "src/index.ts"
 compatibility_date = "2026-03-05"
 compatibility_flags = ["nodejs_compat"]
@@ -20,7 +20,7 @@ binding = "RATE_LIMIT_KV"
 id = "YOUR_KV_NAMESPACE_ID"
 
 [env.dev]
-name = "ai-memory-mcp-dev"
+name = "memoryvault-dev"
 
 [env.dev.ai]
 binding = "AI"
