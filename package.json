@@ -32,6 +32,9 @@
     "@modelcontextprotocol/sdk": "^1.28.0",
     "zod": "^4.3.6"
   },
+  "overrides": {
+    "@hono/node-server": ">=1.19.10"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260329.1",
     "typescript": "^6.0.2",
