@@ -124,16 +124,20 @@ import {
   verifyAccessToken,
 } from './crypto.js';
 
-export type { Env };
+import {
+  ALLOWED_ORIGINS,
+  CORS_HEADERS,
+  HTML_SECURITY_HEADERS,
+  corsJsonResponse,
+  getCorsOrigin,
+  mergeVaryHeader,
+  applyCors,
+  isHtmlResponse,
+  wrapWithSecurityHeaders,
+  unauthorized,
+} from './cors.js';
 
-function unauthorized(url?: URL): Response {
-  const headers: Record<string, string> = { ...CORS_HEADERS, 'Content-Type': 'application/json' };
-  if (url) headers['WWW-Authenticate'] = oauthChallengeHeader(url);
-  return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-    status: 401,
-    headers,
-  });
-}
+export type { Env };
 
 async function createSessionTokens(userId: string, brainId: string, env: Env, clientId: string | null = null): Promise<{
   access_token: string;
@@ -5957,89 +5961,6 @@ async function callTool(name: string, args: ToolArgs, env: Env, brainId: string)
   }
 }
 
-const ALLOWED_ORIGINS = [
-  'https://claude.ai',
-  'https://poke.com',
-  'https://ai-memory-mcp-dev.guirguispierre.workers.dev',
-  'https://ai-memory-mcp.guirguispierre.workers.dev',
-];
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
-};
-
-const HTML_SECURITY_HEADERS: Record<string, string> = {
-  'X-Frame-Options': 'DENY',
-  'X-Content-Type-Options': 'nosniff',
-  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
-  'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self' cdn.jsdelivr.net fonts.googleapis.com fonts.gstatic.com mcp.figma.com; style-src 'self' 'unsafe-inline' fonts.googleapis.com; font-src fonts.gstatic.com; connect-src 'self' mcp.figma.com; frame-ancestors 'none';",
-};
-
-function corsJsonResponse(
-  body: unknown,
-  status = 200,
-  options: CorsJsonResponseOptions | Record<string, string> = {}
-): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: buildCorsJsonHeaders(CORS_HEADERS, normalizeCorsJsonResponseOptions(options)),
-  });
-}
-
-function getCorsOrigin(request: Request): string {
-  const origin = request.headers.get('Origin')?.trim();
-  if (origin && ALLOWED_ORIGINS.includes(origin)) return origin;
-
-  const requestOrigin = new URL(request.url).origin;
-  return ALLOWED_ORIGINS.includes(requestOrigin) ? requestOrigin : ALLOWED_ORIGINS[0];
-}
-
-function mergeVaryHeader(existingValue: string | null, value: string): string {
-  const varyValues = new Set(
-    (existingValue ?? '')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)
-  );
-  varyValues.add(value);
-  return Array.from(varyValues).join(', ');
-}
-
-function applyCors(request: Request, response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set('Access-Control-Allow-Origin', getCorsOrigin(request));
-  for (const [name, value] of Object.entries(CORS_HEADERS)) {
-    headers.set(name, value);
-  }
-  headers.set('Vary', mergeVaryHeader(headers.get('Vary'), 'Origin'));
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
-function isHtmlResponse(response: Response): boolean {
-  const contentType = (response.headers.get('Content-Type') ?? '').toLowerCase();
-  return contentType.includes('text/html');
-}
-
-function wrapWithSecurityHeaders(response: Response): Response {
-  const clonedResponse = response.clone();
-  const headers = new Headers(clonedResponse.headers);
-  for (const [name, value] of Object.entries(HTML_SECURITY_HEADERS)) {
-    headers.set(name, value);
-  }
-  return new Response(clonedResponse.body, {
-    status: clonedResponse.status,
-    statusText: clonedResponse.statusText,
-    headers,
-  });
-}
 
 
 async function processMcpBody(
