@@ -1,12 +1,34 @@
-export interface Env {
-  DB: D1Database;
-  RATE_LIMIT_KV: KVNamespace;
-  AUTH_SECRET: string;
-  ADMIN_TOKEN: string;
-  OAUTH_REDIRECT_DOMAIN_ALLOWLIST?: string;
-  AI?: Ai;
-  MEMORY_INDEX?: Vectorize;
-}
+import {
+  type Env,
+  type MemorySearchMode,
+  type SemanticMemoryCandidate,
+  type VectorSyncStats,
+  type SessionTokens,
+  type CorsJsonResponseOptions,
+  type AuthContext,
+  type AccessTokenPayload,
+  type RefreshSessionRow,
+  VALID_TYPES,
+  type MemoryType,
+  RELATION_TYPES,
+  type RelationType,
+  type LinkStats,
+  type ScoreComponent,
+  type DynamicScoreBreakdown,
+  type BrainPolicy,
+  type ToolDefinition,
+  type ToolReleaseMeta,
+  type ToolChangelogChange,
+  type ToolChangelogEntry,
+  type MemoryGraphNode,
+  type MemoryGraphLink,
+  type UserRow,
+  type BrainSummary,
+  type EndpointGuide,
+  type ToolArgs,
+} from './types.js';
+
+export type { Env };
 
 const SERVER_NAME = 'ai-memory-mcp';
 const SERVER_VERSION = '1.10.0';
@@ -40,33 +62,6 @@ const VECTOR_ID_MAX_MEMORY_ID_LENGTH = 62; // 2-byte prefix + 62-byte id = 64-by
 const DEFAULT_OAUTH_REDIRECT_DOMAIN_ALLOWLIST = ['localhost', '127.0.0.1'] as const;
 const TRUSTED_REDIRECT_DOMAINS = ['poke.com', 'claude.ai'] as const;
 
-type MemorySearchMode = 'lexical' | 'semantic' | 'hybrid';
-type SemanticMemoryCandidate = {
-  memory_id: string;
-  score: number;
-  rank: number;
-};
-
-type VectorSyncStats = {
-  upserted: number;
-  deleted: number;
-  skipped: number;
-  mutation_ids: string[];
-  probe_vector_id: string | null;
-};
-
-type SessionTokens = {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-  refresh_expires_in: number;
-  session_id: string;
-};
-
-type CorsJsonResponseOptions = {
-  headers?: HeadersInit;
-  cookies?: string[];
-};
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -121,22 +116,6 @@ function unauthorized(url?: URL): Response {
   });
 }
 
-type AuthContext = {
-  kind: 'legacy' | 'user';
-  brainId: string;
-  userId: string | null;
-  sessionId: string | null;
-  clientId: string | null;
-};
-
-type AccessTokenPayload = {
-  typ: 'access';
-  sub: string;
-  bid: string;
-  sid: string;
-  iat: number;
-  exp: number;
-};
 
 function canMutateMemories(authCtx: AuthContext): boolean {
   if (authCtx.kind === 'legacy') return true;
@@ -406,14 +385,6 @@ async function createSessionTokens(userId: string, brainId: string, env: Env, cl
   };
 }
 
-type RefreshSessionRow = {
-  id: string;
-  user_id: string;
-  brain_id: string;
-  client_id: string | null;
-  expires_at: number;
-  revoked_at: number | null;
-};
 
 async function getRefreshSessionByToken(refreshToken: string, env: Env): Promise<RefreshSessionRow | null> {
   const refreshHash = await sha256DigestBase64Url(refreshToken);
@@ -535,10 +506,6 @@ function normalizeLegacyToken(raw: unknown): string {
   return (match?.[1] ?? trimmed).trim();
 }
 
-const VALID_TYPES = ['note', 'fact', 'journal'] as const;
-type MemoryType = typeof VALID_TYPES[number];
-const RELATION_TYPES = ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'] as const;
-type RelationType = typeof RELATION_TYPES[number];
 
 function isValidType(t: unknown): t is MemoryType {
   return typeof t === 'string' && (VALID_TYPES as readonly string[]).includes(t);
@@ -1349,15 +1316,6 @@ async function ensureSchema(env: Env): Promise<void> {
   await schemaReady;
 }
 
-type LinkStats = {
-  link_count: number;
-  supports_count: number;
-  contradicts_count: number;
-  supersedes_count: number;
-  causes_count: number;
-  example_of_count: number;
-};
-
 const EMPTY_LINK_STATS: LinkStats = {
   link_count: 0,
   supports_count: 0,
@@ -1367,47 +1325,6 @@ const EMPTY_LINK_STATS: LinkStats = {
   example_of_count: 0,
 };
 
-type ScoreComponent = {
-  name: string;
-  delta: number;
-};
-
-type DynamicScoreBreakdown = {
-  score_model: string;
-  evaluated_at: number;
-  memory_type: string;
-  source: string | null;
-  age_days: number;
-  link_stats: LinkStats;
-  base_confidence: number;
-  base_importance: number;
-  raw_confidence: number;
-  raw_importance: number;
-  dynamic_confidence: number;
-  dynamic_importance: number;
-  confidence_components: ScoreComponent[];
-  importance_components: ScoreComponent[];
-  signals: {
-    certainty_hits: number;
-    hedge_hits: number;
-    importance_hits: number;
-    source_trust: number | null;
-    high_signal_source: boolean;
-    low_signal_source: boolean;
-    content_length: number;
-  };
-};
-
-type BrainPolicy = {
-  decay_days: number;
-  max_inferred_edges: number;
-  min_link_suggestion_score: number;
-  retention_days: number;
-  private_mode: boolean;
-  snapshot_retention: number;
-  path_max_hops: number;
-  subgraph_default_radius: number;
-};
 
 const DEFAULT_BRAIN_POLICY: BrainPolicy = {
   decay_days: 30,
@@ -2063,33 +1980,6 @@ async function ensureObjectiveRoot(env: Env, brainId: string): Promise<string> {
   return id;
 }
 
-type ToolDefinition = {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-};
-
-type ToolReleaseMeta = {
-  introduced_in: string;
-  deprecated_in?: string;
-  replaced_by?: string;
-  notes?: string;
-};
-
-type ToolChangelogChange = {
-  type: 'added' | 'updated' | 'deprecated' | 'security' | 'fix';
-  target: 'tool' | 'endpoint' | 'scoring' | 'auth';
-  name: string;
-  description: string;
-};
-
-type ToolChangelogEntry = {
-  id: string;
-  version: string;
-  released_at: number;
-  summary: string;
-  changes: ToolChangelogChange[];
-};
 
 const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
   memory_graph_stats: {
@@ -2983,29 +2873,6 @@ function isMutatingTool(toolName: string): boolean {
   return MUTATING_TOOL_NAMES.has(toolName);
 }
 
-type MemoryGraphNode = {
-  id: string;
-  type: string;
-  title: string | null;
-  key: string | null;
-  content: string;
-  tags: string | null;
-  source: string | null;
-  created_at: number;
-  updated_at: number;
-  confidence: number;
-  importance: number;
-};
-
-type MemoryGraphLink = {
-  id: string;
-  from_id: string;
-  to_id: string;
-  relation_type: RelationType;
-  label: string | null;
-  inferred?: boolean;
-  score?: number;
-};
 
 async function loadActiveMemoryNodes(env: Env, brainId: string, limit = 1500): Promise<MemoryGraphNode[]> {
   const rows = await env.DB.prepare(
@@ -3090,7 +2957,6 @@ function buildTagInferredLinks(nodes: MemoryGraphNode[], maxEdges = 400): Memory
     .slice(0, maxEdges);
 }
 
-type ToolArgs = Record<string, unknown>;
 type McpResult = { content: Array<{ type: string; text: string }> };
 
 async function callTool(name: string, args: ToolArgs, env: Env, brainId: string): Promise<McpResult> {
@@ -6903,22 +6769,6 @@ function handleApiTools(authCtx: AuthContext): Response {
   });
 }
 
-type UserRow = {
-  id: string;
-  email: string;
-  password_hash: string;
-  display_name: string | null;
-  created_at: number;
-};
-
-type BrainSummary = {
-  id: string;
-  name: string;
-  slug: string | null;
-  role: string;
-  created_at: number;
-  updated_at: number;
-};
 
 function sanitizeDisplayName(raw: unknown, email: string): string | null {
   if (typeof raw === 'string') {
@@ -12651,14 +12501,6 @@ function mcpLandingHtml(url: URL): string {
 </html>`;
 }
 
-type EndpointGuide = {
-  title: string;
-  subtitle: string;
-  endpointPath: string;
-  methods: string;
-  auth: string;
-  details: string[];
-};
 
 function endpointGuideForPath(pathname: string): EndpointGuide | null {
   if (pathname === '/register') {
