@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="${1:-${BASE_URL:-https://ai-memory-mcp.guirguispierre.workers.dev}}"
+BASE_URL="${1:-${BASE_URL:-http://127.0.0.1:8787}}"
 REDIRECT_URI="${REDIRECT_URI:-http://127.0.0.1:8787/memoryvault/callback}"
 PASSWORD="${SMOKE_PASSWORD:-MemoryVaultPass!2026}"
 ADMIN_TOKEN="${ADMIN_TOKEN:-}"

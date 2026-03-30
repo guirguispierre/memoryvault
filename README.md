@@ -1,215 +1,157 @@
-# MemoryVault MCP (Cloudflare Workers + D1)
+# MemoryVault MCP
 
-MemoryVault is a secure, graph-aware MCP server for long-term AI memory.
+A self-hosted, graph-aware memory server for AI assistants. Built on Cloudflare Workers + D1.
 
-It supports:
-- Multi-tenant user accounts with isolated "brains"
-- OAuth-first MCP auth (works with clients that leave API key empty)
-- Legacy bearer-token auth fallback
-- Hybrid lexical + semantic memory retrieval (D1 + Vectorize + Workers AI embeddings)
-- Memory graph tools (links, activation, reinforcement, decay, conflicts, objectives)
-- Web viewer at `/view`
-- In-view semantic sync controls (run `memory_reindex`, wait/readiness options, status feedback)
+MemoryVault gives AI clients (Claude, ChatGPT, etc.) persistent memory across sessions via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Store notes, facts, and journal entries. Link related memories into a knowledge graph. Search with hybrid lexical + semantic retrieval.
 
-Production URL:
-- `https://ai-memory-mcp.guirguispierre.workers.dev`
+## Features
 
-Changelog:
-- [CHANGELOG.md](./CHANGELOG.md)
+- **40+ MCP tools** — memory CRUD, graph linking, conflict detection, objectives, snapshots, and more
+- **Hybrid search** — lexical + semantic (Vectorize + Workers AI embeddings) with RRF fusion
+- **Knowledge graph** — typed relationships, path finding, neighborhood traversal, inferred links
+- **Multi-tenant** — user accounts with isolated "brains" and per-brain policies
+- **OAuth + PKCE** — standards-based auth for MCP clients, plus legacy bearer token fallback
+- **Web viewer** — browse memories, explore the graph, manage settings at `/view`
+- **6 themes** — cyberpunk, light, midnight, solarized, ember, arctic
+- **Zero external dependencies** at runtime (just @modelcontextprotocol/sdk and zod)
 
-## Architecture
+## Quick Start
 
-- Runtime: Cloudflare Workers
-- Database: Cloudflare D1 (SQLite)
-- Semantic index: Cloudflare Vectorize (`MEMORY_INDEX`)
-- Embeddings: Cloudflare Workers AI (`@cf/baai/bge-base-en-v1.5`)
-- Protocol: Model Context Protocol (MCP) over HTTP/SSE
-- Auth:
-  - OAuth Authorization Code + PKCE (`/authorize`, `/token`, `/register`)
-  - JWT access + refresh tokens for user sessions
-  - Optional legacy `AUTH_SECRET` bearer mode
-
-## Quick Start (Local)
-
-1. Install dependencies
+1. **Clone and install**
 
 ```bash
+git clone https://github.com/guirguispierre/memoryvault.git
+cd memoryvault
 npm install
 ```
 
-2. Configure local secret
+2. **Configure secrets**
 
 ```bash
 cp .dev.vars.example .dev.vars
+# Edit .dev.vars with your own secrets
 ```
 
-Local config notes:
-- `AUTH_SECRET` secures legacy bearer auth and session signing.
-- `ADMIN_TOKEN` is required for `POST /register`.
-- `OAUTH_REDIRECT_DOMAIN_ALLOWLIST` is a comma-separated hostname/domain allowlist for OAuth client `redirect_uris`. `localhost` and `127.0.0.1` are always allowed.
+3. **Set up Cloudflare resources**
 
-3. Initialize local D1 schema
+```bash
+# Create D1 database
+npx wrangler d1 create ai-memory
+
+# Update wrangler.toml with your database_id
+
+# Create KV namespace for rate limiting
+npx wrangler kv namespace create RATE_LIMIT_KV
+# Update wrangler.toml with the KV namespace id
+
+# Create Vectorize indexes (for semantic search)
+npx wrangler vectorize create ai-memory-semantic-v1 --dimensions=768 --metric=cosine
+```
+
+4. **Initialize database schema**
 
 ```bash
 npx wrangler d1 execute ai-memory --local --file=schema.sql
 ```
 
-4. Run locally
+5. **Run locally**
 
 ```bash
 npm run dev
 ```
 
-Notes:
-- Semantic search + reindex require Workers AI/Vectorize bindings and remote dev (`wrangler dev --remote`).
-- Vectorize mutations are asynchronous; `memory_reindex` defaults to waiting for index readiness (`wait_for_index=true`) before it returns.
-
-## Deploy
-
-1. Ensure Wrangler is authenticated
+## Deploy to Production
 
 ```bash
-npx wrangler whoami
-```
-
-2. Set production secrets (if not set)
-
-```bash
+# Set secrets
 npx wrangler secret put AUTH_SECRET
 npx wrangler secret put ADMIN_TOKEN
-```
 
-3. Set `OAUTH_REDIRECT_DOMAIN_ALLOWLIST` in your Worker environment for production OAuth clients
-
-Example `wrangler.toml` snippet:
-
-```toml
-[vars]
-OAUTH_REDIRECT_DOMAIN_ALLOWLIST = "localhost,127.0.0.1,chatgpt.com,chat.openai.com,claude.ai"
-```
-
-4. Apply schema to remote D1 when needed
-
-```bash
+# Apply schema to remote D1
 npx wrangler d1 execute ai-memory --remote --file=schema.sql
-```
 
-5. Deploy
-
-```bash
+# Deploy
 npm run deploy
 ```
 
-Before first semantic deploy, create Vectorize indexes:
+## Configuration
 
-```bash
-npx wrangler vectorize create ai-memory-semantic-v1 --dimensions=768 --metric=cosine
-npx wrangler vectorize create ai-memory-semantic-v1-dev --dimensions=768 --metric=cosine
-```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AUTH_SECRET` | Yes | Signs JWTs and secures legacy bearer auth |
+| `ADMIN_TOKEN` | Yes | Required for `POST /register` (OAuth client registration) |
+| `OAUTH_REDIRECT_DOMAIN_ALLOWLIST` | No | Comma-separated hostnames for OAuth redirect URIs. `localhost` and `127.0.0.1` are always allowed |
 
 ## MCP Integration
 
-Use this server URL:
-- `https://ai-memory-mcp.guirguispierre.workers.dev/mcp`
+Point your MCP client to:
+```
+https://<your-worker>.<your-subdomain>.workers.dev/mcp
+```
 
-### OAuth mode (recommended)
+**OAuth mode (recommended):** Leave the API key empty. The server responds with OAuth discovery metadata. Your client handles the flow automatically.
 
-- Leave API key empty in the MCP client.
-- The server responds with OAuth challenge metadata.
-- Client should discover:
-  - `/.well-known/oauth-protected-resource`
-  - `/.well-known/oauth-authorization-server`
-- OAuth clients must be pre-registered by an admin via `POST /register` with `Authorization: Bearer <ADMIN_TOKEN>`.
-- Registered `redirect_uris` must use an allowlisted hostname/domain from `OAUTH_REDIRECT_DOMAIN_ALLOWLIST` (plus loopback `localhost` / `127.0.0.1`).
-- User can sign in, sign up, or use a legacy API token from the authorize screen.
-- Legacy token mode maps to the legacy shared brain and upgrades the connection into OAuth session tokens.
+**Legacy bearer mode:** Send `Authorization: Bearer <AUTH_SECRET>` for simple setups.
 
-### Legacy bearer mode
+## Architecture
 
-- Send `Authorization: Bearer <AUTH_SECRET>`.
-- This maps to a shared legacy brain (`legacy-default-brain`).
+| Module | Purpose |
+|--------|---------|
+| `src/index.ts` | Worker entry point and HTTP routing |
+| `src/types.ts` | Shared TypeScript types |
+| `src/constants.ts` | Configuration constants |
+| `src/utils.ts` | Pure utility functions |
+| `src/crypto.ts` | PBKDF2, JWT, HMAC utilities |
+| `src/cors.ts` | CORS and security headers |
+| `src/db.ts` | D1 queries and schema migration |
+| `src/auth.ts` | Session management and auth endpoints |
+| `src/oauth.ts` | OAuth protocol (authorization, token, registration) |
+| `src/vectorize.ts` | Semantic search and Vectorize integration |
+| `src/scoring.ts` | Dynamic confidence/importance scoring |
+| `src/tools-schema.ts` | MCP tool definitions and metadata |
+| `src/tools.ts` | MCP tool handler implementations |
+| `src/viewer.ts` | Web viewer UI (`/view`) |
+| `src/routes.ts` | API and HTML route handlers |
 
-## Key Endpoints
-
-- `GET /` health + version + tool count
-- `POST /mcp` MCP methods (`initialize`, `tools/list`, `tools/call`)
-- `GET /view` web UI
-- `GET /api/memories` memory list/search
-- `GET /api/graph` graph nodes + edges + inferred edges
-- `GET /api/links/:id` links for a memory
-- `POST /auth/signup|login|refresh|logout`
-- `GET /auth/me`
-- `GET /auth/sessions`
-- `POST /auth/sessions/revoke`
-- `POST /register` admin-authenticated OAuth dynamic client registration
-- `GET|POST /authorize` OAuth authorization endpoint
-- `POST /token` OAuth token endpoint
+**Tech stack:** Cloudflare Workers, D1 (SQLite), Vectorize, Workers AI (`@cf/baai/bge-base-en-v1.5`), MCP SDK
 
 ## Available MCP Tools
 
-- `memory_save`, `memory_get`, `memory_get_fact`, `memory_search`, `memory_list`
-- `memory_reindex` (semantic backfill/repair, readiness wait controls)
-- `memory_update`, `memory_delete`, `memory_stats`
-- `memory_link`, `memory_unlink`, `memory_links`
-- `memory_consolidate`, `memory_forget`
-- `memory_activate`, `memory_reinforce`, `memory_decay`
-- `memory_changelog`, `memory_conflicts`
-- `memory_link_suggest`, `memory_path_find`, `memory_subgraph`
-- `memory_conflict_resolve`, `memory_entity_resolve`
-- `memory_source_trust_set`, `memory_source_trust_get`
-- `objective_set`, `objective_list`, `objective_next_actions`
-- `brain_policy_set`, `brain_policy_get`
-- `brain_snapshot_create`, `brain_snapshot_list`, `brain_snapshot_restore`
-- `memory_watch`
-- `tool_manifest`, `tool_changelog`, `memory_explain_score`
+**Memory operations:** `memory_save`, `memory_get`, `memory_get_fact`, `memory_search`, `memory_list`, `memory_update`, `memory_delete`, `memory_reindex`, `memory_stats`
 
-## Scripts
+**Graph:** `memory_link`, `memory_unlink`, `memory_links`, `memory_link_suggest`, `memory_path_find`, `memory_subgraph`, `memory_neighbors`, `memory_graph_stats`, `memory_tag_stats`
 
-- `npm run dev` start local worker
-- `npm run type-check` TypeScript check
-- `npm test` alias for type-check
-- `npm run deploy` deploy to Cloudflare
-- `npm run smoke:oauth-isolation` run OAuth + tenant isolation + session revocation smoke test
+**Knowledge management:** `memory_consolidate`, `memory_forget`, `memory_activate`, `memory_reinforce`, `memory_decay`, `memory_conflicts`, `memory_conflict_resolve`, `memory_entity_resolve`
 
-Smoke test examples:
+**Trust & policy:** `memory_source_trust_set`, `memory_source_trust_get`, `brain_policy_set`, `brain_policy_get`
+
+**Snapshots:** `brain_snapshot_create`, `brain_snapshot_list`, `brain_snapshot_restore`
+
+**Objectives:** `objective_set`, `objective_list`, `objective_next_actions`
+
+**Observability:** `memory_changelog`, `memory_watch`, `memory_explain_score`, `tool_manifest`, `tool_changelog`
+
+## Development
 
 ```bash
-# Against production (default)
+npm run dev          # Start local worker
+npm run type-check   # TypeScript check
+npm run deploy       # Deploy to Cloudflare
+```
+
+**Smoke test:**
+```bash
 ADMIN_TOKEN=... npm run smoke:oauth-isolation
-
-# Against local/dev target
-ADMIN_TOKEN=... BASE_URL=http://127.0.0.1:8787 npm run smoke:oauth-isolation
 ```
 
-Registration examples:
+**Notes:**
+- Semantic search requires Workers AI/Vectorize bindings — use `npx wrangler dev --remote` for full functionality
+- Local dev uses `--local` D1 by default
 
-```bash
-curl -X POST "$BASE_URL/register" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"client_name":"MemoryVault","redirect_uris":["http://127.0.0.1:8787/callback"],"token_endpoint_auth_method":"none"}'
-```
+## Contributing
 
-The smoke test now requires:
-- `ADMIN_TOKEN` to register a client.
-- A loopback or allowlisted `REDIRECT_URI`.
-
-Notes:
-- The smoke test creates temporary users/memories in the target environment.
-- GitHub Actions includes:
-  - `CI` (automatic type-check on push/PR)
-  - `Smoke OAuth Isolation` (manual workflow_dispatch against a selected base URL)
-
-## Security Notes
-
-- `POST /register` requires `Authorization: Bearer <ADMIN_TOKEN>`.
-- `/authorize` no longer auto-registers unknown OAuth clients; clients must exist before any code is issued.
-- `redirect_uris` are restricted to an allowlisted domain set, and stale non-whitelisted clients are purged and their sessions revoked when registration is attempted.
-- Per-brain row-level scoping is enforced across memories, links, and changelog.
-- Passwords are stored as PBKDF2-SHA256 hashes.
-- Refresh tokens are stored hashed.
-- Rate limiting is enabled for auth-protected entry points.
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-ISC
+[MIT](./LICENSE)
