@@ -1,4 +1,4 @@
-name = "memoryvault"
+name = "ai-memory-mcp"
 main = "src/index.ts"
 compatibility_date = "2026-03-05"
 compatibility_flags = ["nodejs_compat"]
@@ -13,14 +13,14 @@ index_name = "ai-memory-semantic-v1"
 [[d1_databases]]
 binding = "DB"
 database_name = "ai-memory"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "f881cdf0-9109-45a8-863f-65942a81a7bf"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "45fefc1b7f5f4fa3a8326a9db2b1477d"
 
 [env.dev]
-name = "memoryvault-dev"
+name = "ai-memory-mcp-dev"
 
 [env.dev.ai]
 binding = "AI"
@@ -32,8 +32,8 @@ index_name = "ai-memory-semantic-v1-dev"
 [[env.dev.d1_databases]]
 binding = "DB"
 database_name = "ai-memory"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "f881cdf0-9109-45a8-863f-65942a81a7bf"
 
 [[env.dev.kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "YOUR_DEV_KV_NAMESPACE_ID"
+id = "9c86e1f7ddbe4006993ccf7ce9eb25c2"
