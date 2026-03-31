@@ -80,6 +80,13 @@ export function viewerHtml(): string {
     background: var(--bg2);
     box-shadow: 0 8px 32px rgba(0,0,0,0.10);
   }
+  [data-theme="light"] .update-banner {
+    background: rgba(192,120,0,0.06);
+    border-color: var(--amber-dim);
+  }
+  [data-theme="light"] .update-banner-item {
+    background: var(--bg3);
+  }
 
   /* ── THEME: MIDNIGHT ── */
   [data-theme="midnight"] {
@@ -950,6 +957,100 @@ export function viewerHtml(): string {
   .toast.success { border-color: var(--teal); color: var(--teal); }
   .toast.error { border-color: var(--red); color: var(--red); }
   .toast.hide { animation: toastOut 0.2s ease forwards; }
+
+  /* ── UPDATE BANNER ── */
+  .update-banner {
+    display: none;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.55rem 0.8rem;
+    margin: 0 0.6rem;
+    border: 1px solid var(--amber-dim);
+    border-left: 3px solid var(--amber);
+    background: var(--amber-glow);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    color: var(--text);
+    line-height: 1.5;
+    animation: bannerSlide 0.3s ease;
+  }
+  .update-banner.visible { display: flex; }
+  .update-banner-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    color: var(--amber);
+  }
+  .update-banner-body { flex: 1; min-width: 0; }
+  .update-banner-title {
+    font-weight: 700;
+    color: var(--amber);
+    text-transform: uppercase;
+    margin-bottom: 0.15rem;
+  }
+  .update-banner-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 0.6rem;
+    margin-top: 0.25rem;
+  }
+  .update-banner-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.12rem 0.35rem;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+  }
+  .update-banner-item .badge {
+    font-size: 0.55rem;
+    padding: 0.05rem 0.2rem;
+    background: var(--amber);
+    color: var(--bg);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .update-banner-actions {
+    display: flex;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    align-items: center;
+  }
+  .update-banner-btn {
+    all: unset;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.55rem;
+    border: 1px solid var(--border-bright);
+    color: var(--text);
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .update-banner-btn:hover {
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .update-banner-dismiss {
+    all: unset;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    padding: 0.15rem 0.3rem;
+    line-height: 1;
+    transition: color 0.15s;
+  }
+  .update-banner-dismiss:hover { color: var(--text-bright); }
+  @keyframes bannerSlide {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
   .cmd-overlay {
     display: none;
     position: fixed;
@@ -1727,6 +1828,18 @@ export function viewerHtml(): string {
     </div>
   </header>
 
+  <div class="update-banner" id="update-banner">
+    <div class="update-banner-icon">&#9670;</div>
+    <div class="update-banner-body">
+      <div class="update-banner-title" id="update-banner-title">New in v${escapeHtml(SERVER_VERSION)}</div>
+      <div class="update-banner-items" id="update-banner-items"></div>
+    </div>
+    <div class="update-banner-actions">
+      <button class="update-banner-btn" data-action="open-changelog-overlay">Details</button>
+      <button class="update-banner-dismiss" data-action="dismiss-update-banner" title="Dismiss">&times;</button>
+    </div>
+  </div>
+
   <div class="stats-bar">
     <div class="stat-pill active" id="stat-all" data-action="set-filter" data-filter="">
       <div class="stat-num" id="count-all">0</div>
@@ -2284,6 +2397,91 @@ export function viewerScript(): string {
     showToast('Session active. Loading memory stream.', 'success');
     if (viewerSettings && viewerSettings.auto_open_graph) {
       setTimeout(() => { if (hasAuthenticatedSession()) showGraph(); }, 180);
+    }
+    checkUpdateBanner();
+  }
+
+  const UPDATE_BANNER_DISMISSED_KEY = 'memoryvault.update_banner.dismissed_version';
+
+  async function checkUpdateBanner() {
+    try {
+      const dismissedVersion = localStorage.getItem(UPDATE_BANNER_DISMISSED_KEY) || '';
+      if (dismissedVersion === VIEWER_SERVER_VERSION) return;
+      const headers = SESSION_MODE === 'legacy' && TOKEN
+        ? { 'Authorization': 'Bearer ' + TOKEN }
+        : {};
+      const r = await fetch(BASE + '/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'update-banner',
+          method: 'tools/call',
+          params: {
+            name: 'tool_changelog',
+            arguments: dismissedVersion ? { since_version: dismissedVersion, limit: 5 } : { limit: 3 },
+          },
+        }),
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      const text = data?.result?.content?.[0]?.text;
+      if (!text) return;
+      const parsed = JSON.parse(text);
+      const entries = parsed?.entries || parsed;
+      if (!Array.isArray(entries) || entries.length === 0) return;
+      const items = [];
+      for (const entry of entries) {
+        if (!entry.changes) continue;
+        for (const change of entry.changes) {
+          items.push({
+            type: change.type || 'added',
+            name: change.name || '',
+            version: entry.version || '',
+          });
+        }
+      }
+      if (items.length === 0) return;
+      const container = document.getElementById('update-banner-items');
+      if (!container) return;
+      container.innerHTML = '';
+      const shown = items.slice(0, 6);
+      for (const item of shown) {
+        const el = document.createElement('span');
+        el.className = 'update-banner-item';
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = item.type.toUpperCase();
+        el.appendChild(badge);
+        const label = document.createTextNode(' ' + item.name);
+        el.appendChild(label);
+        container.appendChild(el);
+      }
+      if (items.length > 6) {
+        const more = document.createElement('span');
+        more.className = 'update-banner-item';
+        more.textContent = '+' + (items.length - 6) + ' more';
+        container.appendChild(more);
+      }
+      const titleEl = document.getElementById('update-banner-title');
+      if (titleEl) {
+        const latestVersion = entries[0]?.version || VIEWER_SERVER_VERSION;
+        titleEl.textContent = 'New in v' + latestVersion;
+      }
+      document.getElementById('update-banner').classList.add('visible');
+    } catch {}
+  }
+
+  function dismissUpdateBanner() {
+    localStorage.setItem(UPDATE_BANNER_DISMISSED_KEY, VIEWER_SERVER_VERSION);
+    const banner = document.getElementById('update-banner');
+    if (banner) {
+      banner.style.animation = 'bannerSlide 0.2s ease reverse forwards';
+      setTimeout(() => {
+        banner.classList.remove('visible');
+        banner.style.animation = '';
+      }, 200);
     }
   }
 
@@ -3942,6 +4140,9 @@ export function viewerScript(): string {
           break;
         case 'close-changelog':
           closeChangelogOverlay();
+          break;
+        case 'dismiss-update-banner':
+          dismissUpdateBanner();
           break;
         case 'open-full-changelog':
           window.open('https://github.com/guirguispierre/memoryvault/blob/main/CHANGELOG.md', '_blank', 'noopener');
