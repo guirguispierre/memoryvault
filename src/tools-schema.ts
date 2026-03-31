@@ -136,9 +136,47 @@ export const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
     introduced_in: '1.7.0',
     notes: 'Create/list/manage event watches with optional webhooks.',
   },
+  memory_merge: {
+    introduced_in: '1.11.0',
+    notes: 'Merge overlapping memories into one richer memory, combining content and links.',
+  },
+  memory_temporal_cluster: {
+    introduced_in: '1.11.0',
+    notes: 'Retrieve memories clustered by time windows with surrounding graph context.',
+  },
+  memory_spaced_repetition: {
+    introduced_in: '1.11.0',
+    notes: 'Surface decaying but important memories that need reinforcement, like human spaced repetition.',
+  },
 };
 
 export const TOOL_CHANGELOG: ToolChangelogEntry[] = [
+  {
+    id: 'cognitive-1.11.0',
+    version: '1.11.0',
+    released_at: 1774934400,
+    summary: 'Cognitive memory features: merging, temporal clustering, and spaced repetition signals.',
+    changes: [
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_merge',
+        description: 'Merge two or more memories into a single richer memory, combining content, tags, and links.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_temporal_cluster',
+        description: 'Retrieve memories grouped by time windows with graph context for temporal reasoning.',
+      },
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_spaced_repetition',
+        description: 'Surface memories due for review based on importance decay and access patterns.',
+      },
+    ],
+  },
   {
     id: 'semantic-1.9.0',
     version: '1.9.0',
@@ -885,6 +923,52 @@ export const TOOLS: ToolDefinition[] = [
       required: [],
     },
   },
+  {
+    name: 'memory_merge',
+    description: 'Merge two or more memories into a single richer memory. Combines content, tags, and links from all source memories into the primary (highest importance) memory, then archives the others with supersedes links.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        memory_ids: { type: 'array', items: { type: 'string' }, description: 'IDs of memories to merge (minimum 2)' },
+        primary_id: { type: 'string', description: 'Optional: force this memory as the merge target instead of auto-selecting by importance' },
+        merged_content: { type: 'string', description: 'Optional: provide the merged content directly instead of auto-concatenating' },
+        merged_title: { type: 'string', description: 'Optional: title for the merged memory' },
+      },
+      required: ['memory_ids'],
+    },
+  },
+  {
+    name: 'memory_temporal_cluster',
+    description: 'Retrieve memories grouped by time windows. Like human episodic memory — recall what you were thinking about during a time period, with surrounding graph context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: { type: 'number', description: 'Start of time range as unix timestamp (seconds). Defaults to 7 days ago.' },
+        end: { type: 'number', description: 'End of time range as unix timestamp (seconds). Defaults to now.' },
+        window: { type: 'string', enum: ['hour', 'day', 'week'], description: 'How to bucket memories within the range (default: day)' },
+        type: { type: 'string', enum: ['note', 'fact', 'journal'], description: 'Optional type filter' },
+        tag: { type: 'string', description: 'Optional tag filter' },
+        include_links: { type: 'boolean', description: 'Include graph links between memories in each cluster (default true)' },
+        limit_per_window: { type: 'number', description: 'Max memories per time bucket (default 50)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_spaced_repetition',
+    description: 'Surface memories due for review — important memories that are fading from lack of access, like human spaced repetition. Returns memories sorted by review urgency.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        min_importance: { type: 'number', minimum: 0, maximum: 1, description: 'Only surface memories with base importance >= this (default 0.4)' },
+        min_age_days: { type: 'number', description: 'Only surface memories older than N days (default 7)' },
+        max_confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Only surface memories with confidence <= this (default 0.8). Helps find important but uncertain memories.' },
+        limit: { type: 'number', description: 'Max memories to return (default 15, max 50)' },
+        include_score_breakdown: { type: 'boolean', description: 'Include urgency score breakdown per memory (default true)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 export const MUTATING_TOOL_NAMES = new Set<string>([
@@ -906,6 +990,7 @@ export const MUTATING_TOOL_NAMES = new Set<string>([
   'brain_snapshot_create',
   'brain_snapshot_restore',
   'memory_watch',
+  'memory_merge',
 ]);
 
 export function isMutatingTool(toolName: string): boolean {

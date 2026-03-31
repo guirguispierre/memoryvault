@@ -1,7 +1,7 @@
 import type { BrainPolicy, LinkStats } from './types.js';
 
 export const SERVER_NAME = 'memoryvault';
-export const SERVER_VERSION = '1.10.0';
+export const SERVER_VERSION = '1.11.0';
 export const LEGACY_BRAIN_ID = 'legacy-default-brain';
 export const LEGACY_USER_ID = 'legacy-token-user';
 export const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
