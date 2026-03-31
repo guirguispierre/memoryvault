@@ -1,4 +1,4 @@
-name = "ai-memory-mcp"
+name = "ai-memory-mcp-dev"
 main = "src/index.ts"
 compatibility_date = "2026-03-05"
 compatibility_flags = ["nodejs_compat"]
