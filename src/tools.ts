@@ -3553,6 +3553,9 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       if (!Array.isArray(memory_ids) || memory_ids.length < 2) {
         return { content: [{ type: 'text', text: 'memory_ids must be an array of at least 2 memory IDs.' }] };
       }
+      if (memory_ids.length > 20) {
+        return { content: [{ type: 'text', text: 'memory_ids cannot exceed 20 entries.' }] };
+      }
       const ids = memory_ids.map(String).filter(Boolean);
       if (ids.length < 2) return { content: [{ type: 'text', text: 'Need at least 2 valid memory IDs.' }] };
 
@@ -3590,14 +3593,14 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         ? merged_content.trim()
         : [primary, ...others].map((r) => String(r.content ?? '')).filter(Boolean).join('\n\n---\n\n');
 
-      // Merge tags
+      // Merge tags (normalized and deduplicated)
       const allTags = new Set<string>();
       for (const r of rows.results) {
         if (typeof r.tags === 'string') {
-          r.tags.split(',').map((t: string) => t.trim()).filter(Boolean).forEach((t: string) => allTags.add(t));
+          for (const t of parseTagSet(r.tags)) allTags.add(t);
         }
       }
-      const mergedTags = allTags.size > 0 ? Array.from(allTags).join(',') : null;
+      const mergedTags = allTags.size > 0 ? Array.from(allTags).sort((a, b) => a.localeCompare(b)).join(',') : null;
 
       // Use the highest importance and confidence from all sources
       const maxImportance = Math.max(...rows.results.map((r) => clampToRange(r.importance, 0.5)));
@@ -3669,6 +3672,11 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
             ).bind(generateId(), brainId, primaryId, toId, link.relation_type, link.label ?? null, ts).run();
           }
         }
+
+        // Clean up old links from archived memory (except the supersedes link we just created)
+        await env.DB.prepare(
+          'DELETE FROM memory_links WHERE brain_id = ? AND (from_id = ? OR to_id = ?) AND id NOT IN (SELECT id FROM memory_links WHERE brain_id = ? AND from_id = ? AND to_id = ? AND relation_type = ?)'
+        ).bind(brainId, otherId, otherId, brainId, primaryId, otherId, 'supersedes').run();
       }
 
       // Sync vectors
@@ -3723,9 +3731,9 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       const perWindow = Math.min(Math.max(Number.isFinite(Number(limit_per_window)) ? Math.floor(Number(limit_per_window)) : 50, 1), 200);
       const wantLinks = include_links !== false;
 
-      // Query memories in the time range
+      // Query memories in the time range [start, end)
       const params: unknown[] = [brainId, startTs, endTs];
-      let query = 'SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at FROM memories WHERE brain_id = ? AND archived_at IS NULL AND created_at >= ? AND created_at <= ?';
+      let query = 'SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at FROM memories WHERE brain_id = ? AND archived_at IS NULL AND created_at >= ? AND created_at < ?';
       if (type) {
         query += ' AND type = ?';
         params.push(type);
@@ -3743,8 +3751,20 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
 
       for (const row of allRows.results) {
         const createdAt = Number(row.created_at ?? 0);
-        const windowStart = startTs + Math.floor((createdAt - startTs) / windowSize) * windowSize;
-        const windowEnd = windowStart + windowSize;
+        // Bucket by UTC-aligned boundaries
+        let windowStart: number;
+        if (windowName === 'hour') {
+          windowStart = createdAt - (createdAt % 3600);
+        } else if (windowName === 'week') {
+          // Align to Monday 00:00 UTC (epoch was a Thursday, so offset by 3 days)
+          const dayTs = createdAt - (createdAt % 86400);
+          const dayOfWeek = (Math.floor(dayTs / 86400) + 4) % 7; // 0=Sun
+          const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+          windowStart = dayTs - mondayOffset * 86400;
+        } else {
+          windowStart = createdAt - (createdAt % 86400);
+        }
+        const windowEnd = Math.min(windowStart + windowSize, endTs);
 
         let cluster = clusters.get(windowStart);
         if (!cluster) {
@@ -3765,9 +3785,22 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         }
       }
 
-      // Optionally load links between memories in each cluster
+      // Load all links between returned memories in a single batch query
+      const allMemIds = allRows.results.map((r) => String(r.id));
+      const allMemIdSet = new Set(allMemIds);
+      let allLinks: Record<string, unknown>[] = [];
+      if (wantLinks && allMemIds.length > 1) {
+        const linkPlaceholders = allMemIds.map(() => '?').join(',');
+        const linkRows = await env.DB.prepare(
+          `SELECT id, from_id, to_id, relation_type, label FROM memory_links
+           WHERE brain_id = ? AND from_id IN (${linkPlaceholders}) AND to_id IN (${linkPlaceholders})`
+        ).bind(brainId, ...allMemIds, ...allMemIds).all<Record<string, unknown>>();
+        allLinks = linkRows.results;
+      }
+
       const result: Array<Record<string, unknown>> = [];
       for (const cluster of clusters.values()) {
+        const clusterMemIds = new Set(cluster.memories.map((m) => String(m.id)));
         const clusterOut: Record<string, unknown> = {
           window_start: cluster.window_start,
           window_end: cluster.window_end,
@@ -3788,13 +3821,9 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         };
 
         if (wantLinks && cluster.memories.length > 1) {
-          const memIds = cluster.memories.map((m) => String(m.id));
-          const linkPlaceholders = memIds.map(() => '?').join(',');
-          const clusterLinks = await env.DB.prepare(
-            `SELECT id, from_id, to_id, relation_type, label FROM memory_links
-             WHERE brain_id = ? AND from_id IN (${linkPlaceholders}) AND to_id IN (${linkPlaceholders})`
-          ).bind(brainId, ...memIds, ...memIds).all<Record<string, unknown>>();
-          clusterOut.links = clusterLinks.results;
+          clusterOut.links = allLinks.filter(
+            (l) => clusterMemIds.has(String(l.from_id)) && clusterMemIds.has(String(l.to_id))
+          );
         }
 
         result.push(clusterOut);
