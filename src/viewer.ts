@@ -28,10 +28,21 @@ export function viewerHtml(): string {
     --text-bright: #e8f4ff;
     --mono: 'Share Tech Mono', monospace;
     --sans: 'Syne', sans-serif;
+    --overlay-bg: rgba(6, 10, 15, 0.84);
+    --panel-bg: rgba(13, 18, 25, 0.98);
+    --panel-shadow: rgba(0, 0, 0, 0.42);
+    --surface: rgba(8, 12, 16, 0.64);
+    --surface-raised: rgba(10, 15, 21, 0.8);
+    --toast-bg: rgba(13, 18, 25, 0.96);
+    --card-glow: rgba(0, 0, 0, 0.28);
+    --success: #2eca75;
+    --info: #66a9ff;
+    --journal: #8888ff;
+    --causes: #ff9e4f;
   }
 
-  /* ── THEME: LIGHT ── */
-  [data-theme="light"] {
+  /* ── LIGHT VARIANTS ── */
+  [data-theme="cyberpunk-light"] {
     --bg: #f5f5f5;
     --bg2: #ffffff;
     --bg3: #e8ecf0;
@@ -46,46 +57,144 @@ export function viewerHtml(): string {
     --text-dim: #7a8a9a;
     --text-bright: #1a1a2e;
   }
-  [data-theme="light"] body {
+  [data-theme="cyberpunk-light"] body {
     background: linear-gradient(180deg, #f0f2f5 0%, #e4e8ec 100%);
   }
-  [data-theme="light"] body::before { display: none; }
-  [data-theme="light"] body::after { display: none; }
-  [data-theme="light"] .login-box,
-  [data-theme="light"] .settings-folder {
+  [data-theme="midnight-light"] {
+    --bg: #f2f0fa;
+    --bg2: #ffffff;
+    --bg3: #eae6f6;
+    --border: #d0cce4;
+    --border-bright: #b8b2d8;
+    --amber: #6050d0;
+    --amber-dim: #4a3fb0;
+    --amber-glow: rgba(96,80,208,0.10);
+    --teal: #4090e0;
+    --red: #d04060;
+    --text: #302c54;
+    --text-dim: #7878a8;
+    --text-bright: #1a1640;
+  }
+  [data-theme="midnight-light"] body {
+    background: linear-gradient(180deg, #f0eef8 0%, #e6e2f2 100%);
+  }
+  [data-theme="solarized-light"] {
+    --bg: #fdf6e3;
+    --bg2: #eee8d5;
+    --bg3: #e6dfc8;
+    --border: #d4c8a8;
+    --border-bright: #c0b490;
+    --amber: #b58900;
+    --amber-dim: #7a5c00;
+    --amber-glow: rgba(181,137,0,0.10);
+    --teal: #2aa198;
+    --red: #dc322f;
+    --text: #657b83;
+    --text-dim: #93a1a1;
+    --text-bright: #073642;
+  }
+  [data-theme="solarized-light"] body {
+    background: linear-gradient(180deg, #fdf6e3 0%, #f5edd6 100%);
+  }
+  [data-theme="ember-light"] {
+    --bg: #fdf4ee;
+    --bg2: #ffffff;
+    --bg3: #f5eae2;
+    --border: #e0ccc2;
+    --border-bright: #cbb4a6;
+    --amber: #d05020;
+    --amber-dim: #a84420;
+    --amber-glow: rgba(208,80,32,0.10);
+    --teal: #d09030;
+    --red: #c02020;
+    --text: #3e2820;
+    --text-dim: #8a7068;
+    --text-bright: #1a0a04;
+  }
+  [data-theme="ember-light"] body {
+    background: linear-gradient(180deg, #fdf4ee 0%, #f5ece4 100%);
+  }
+  [data-theme="arctic-light"] {
+    --bg: #f0f7fc;
+    --bg2: #ffffff;
+    --bg3: #e4eef6;
+    --border: #c8d8e8;
+    --border-bright: #a8c0d8;
+    --amber: #1898b0;
+    --amber-dim: #107088;
+    --amber-glow: rgba(24,152,176,0.10);
+    --teal: #30a898;
+    --red: #d04868;
+    --text: #1e3850;
+    --text-dim: #607888;
+    --text-bright: #0c2030;
+  }
+  [data-theme="arctic-light"] body {
+    background: linear-gradient(180deg, #eef5fc 0%, #e4edf6 100%);
+  }
+  [data-theme$="-light"] {
+    --overlay-bg: rgba(0, 0, 0, 0.32);
+    --panel-bg: var(--bg2);
+    --panel-shadow: rgba(0, 0, 0, 0.12);
+    --surface: var(--bg3);
+    --surface-raised: var(--bg2);
+    --toast-bg: var(--bg2);
+    --card-glow: rgba(0, 0, 0, 0.10);
+    --success: #1a9a55;
+    --info: #3070d0;
+    --journal: #6060cc;
+    --causes: #c07030;
+  }
+  [data-theme$="-light"] body::before { display: none; }
+  [data-theme$="-light"] body::after { display: none; }
+  [data-theme$="-light"] .login-box,
+  [data-theme$="-light"] .settings-folder {
     background: var(--bg2);
     box-shadow: 0 1px 4px rgba(0,0,0,0.08);
   }
-  [data-theme="light"] .card {
+  [data-theme$="-light"] .card {
     background: var(--bg2);
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
-  [data-theme="light"] .settings-folder[open] {
+  [data-theme$="-light"] .settings-folder[open] {
     background: var(--bg2);
   }
-  [data-theme="light"] .setting-row {
+  [data-theme$="-light"] .setting-row {
     background: var(--bg3);
   }
-  [data-theme="light"] .cmd-box,
-  [data-theme="light"] .shortcuts-box,
-  [data-theme="light"] .settings-box,
-  [data-theme="light"] .changelog-box {
+  [data-theme$="-light"] .cmd-box,
+  [data-theme$="-light"] .shortcuts-box,
+  [data-theme$="-light"] .settings-box,
+  [data-theme$="-light"] .changelog-box {
     background: var(--bg2);
     box-shadow: 0 8px 32px rgba(0,0,0,0.12);
   }
-  [data-theme="light"] .expand-overlay {
-    background: rgba(245,245,245,0.92);
+  [data-theme$="-light"] .expand-overlay {
+    background: rgba(255,255,255,0.8);
   }
-  [data-theme="light"] .expand-box {
+  [data-theme$="-light"] .expand-box {
     background: var(--bg2);
     box-shadow: 0 8px 32px rgba(0,0,0,0.10);
   }
-  [data-theme="light"] .update-banner {
+  [data-theme$="-light"] .update-banner {
     background: rgba(192,120,0,0.06);
     border-color: var(--amber-dim);
   }
-  [data-theme="light"] .update-banner-item {
+  [data-theme$="-light"] .update-banner-item {
     background: var(--bg3);
+  }
+  [data-theme$="-light"] .toast {
+    background: var(--bg2);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+  }
+  [data-theme$="-light"] .card::before {
+    background: linear-gradient(110deg, transparent 0%, rgba(0,0,0,0.03) 48%, transparent 72%);
+  }
+  [data-theme$="-light"] .graph-search-input,
+  [data-theme$="-light"] .graph-btn,
+  [data-theme$="-light"] .graph-legend-item {
+    background: var(--bg2);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
 
   /* ── THEME: MIDNIGHT ── */
@@ -339,7 +448,7 @@ export function viewerHtml(): string {
     cursor: pointer;
     transition: background 0.15s, transform 0.1s;
   }
-  .login-btn:hover { background: #ffbc20; }
+  .login-btn:hover { filter: brightness(1.15); }
   .login-btn.secondary {
     background: transparent;
     color: var(--text);
@@ -432,7 +541,7 @@ export function viewerHtml(): string {
     position: relative;
     transform: translateY(0);
   }
-  .stat-pill:hover, .stat-pill.active { background: var(--bg3); transform: translateY(-2px); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.04); }
+  .stat-pill:hover, .stat-pill.active { background: var(--bg3); transform: translateY(-2px); box-shadow: inset 0 -1px 0 var(--amber-glow); }
   .stat-pill.active::after {
     content: '';
     position: absolute;
@@ -591,7 +700,7 @@ export function viewerHtml(): string {
   .card:hover {
     background: var(--bg3);
     transform: translateY(-3px);
-    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.28);
+    box-shadow: 0 10px 20px var(--card-glow);
   }
   .card:hover::before { transform: translateX(140%); }
   .card-type-stripe {
@@ -601,7 +710,7 @@ export function viewerHtml(): string {
   }
   .card[data-type="note"] .card-type-stripe { background: var(--teal); }
   .card[data-type="fact"] .card-type-stripe { background: var(--amber); }
-  .card[data-type="journal"] .card-type-stripe { background: #8888ff; }
+  .card[data-type="journal"] .card-type-stripe { background: var(--journal); }
 
   .card-header {
     display: flex;
@@ -620,7 +729,7 @@ export function viewerHtml(): string {
   }
   .card[data-type="note"] .card-type-badge { border-color: var(--teal); color: var(--teal); }
   .card[data-type="fact"] .card-type-badge { border-color: var(--amber); color: var(--amber); }
-  .card[data-type="journal"] .card-type-badge { border-color: #8888ff; color: #8888ff; }
+  .card[data-type="journal"] .card-type-badge { border-color: var(--journal); color: var(--journal); }
 
   .card-title {
     font-family: var(--sans);
@@ -690,10 +799,10 @@ export function viewerHtml(): string {
     text-transform: uppercase;
     border: 1px solid var(--border);
     color: var(--text-dim);
-    background: rgba(8, 12, 16, 0.7);
+    background: var(--surface);
     padding: 0.12rem 0.34rem;
   }
-  .quality-chip.conf { border-color: #66a9ff; color: #66a9ff; }
+  .quality-chip.conf { border-color: var(--info); color: var(--info); }
   .quality-chip.imp { border-color: var(--amber); color: var(--amber); }
   .quality-chip.src { border-color: var(--teal); color: var(--teal); }
   .tag {
@@ -725,7 +834,7 @@ export function viewerHtml(): string {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(4,8,14,0.92);
+    background: var(--overlay-bg);
     z-index: 200;
     padding: 2rem;
     overflow-y: auto;
@@ -829,9 +938,9 @@ export function viewerHtml(): string {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--teal);
+    background: #22c55e;
     margin-right: 4px;
-    box-shadow: 0 0 0 rgba(0, 200, 180, 0.4);
+    box-shadow: 0 0 0 rgba(34, 197, 94, 0.4);
     animation: livePulse 1.9s infinite;
   }
   .connection-chip .chip-type { font-size: 0.55rem; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.6; }
@@ -846,18 +955,18 @@ export function viewerHtml(): string {
   }
   .connection-chip .chip-relation.contradicts { border-color: var(--red); color: var(--red); }
   .connection-chip .chip-relation.supersedes { border-color: var(--amber); color: var(--amber); }
-  .connection-chip .chip-relation.supports { border-color: #2eca75; color: #2eca75; }
+  .connection-chip .chip-relation.supports { border-color: var(--success); color: var(--success); }
   .graph-node circle { stroke-width: 2px; cursor: pointer; transition: r 0.15s, opacity 0.18s, stroke-opacity 0.18s; }
   .graph-node circle:hover { r: 10; }
   .graph-node text { font-family: var(--mono); font-size: 10px; fill: var(--text); pointer-events: none; transition: opacity 0.18s; }
   .graph-link { stroke-width: 1.5px; transition: stroke-opacity 0.18s; }
   .graph-link.explicit { stroke: var(--border-bright); opacity: 0.9; }
   .graph-link.explicit.relation-related { stroke: var(--border-bright); }
-  .graph-link.explicit.relation-supports { stroke: #2eca75; }
+  .graph-link.explicit.relation-supports { stroke: var(--success); }
   .graph-link.explicit.relation-contradicts { stroke: var(--red); stroke-dasharray: 6 3; }
   .graph-link.explicit.relation-supersedes { stroke: var(--amber); }
-  .graph-link.explicit.relation-causes { stroke: #ff9e4f; }
-  .graph-link.explicit.relation-example-of { stroke: #66a9ff; }
+  .graph-link.explicit.relation-causes { stroke: var(--causes); }
+  .graph-link.explicit.relation-example-of { stroke: var(--info); }
   .graph-link.inferred { stroke: var(--teal); opacity: 0.4; stroke-dasharray: 4 4; }
   .graph-link-label { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); pointer-events: none; }
   .graph-toolbar-row {
@@ -869,7 +978,7 @@ export function viewerHtml(): string {
   }
   .graph-search-input {
     min-width: 150px;
-    background: rgba(8, 12, 16, 0.9);
+    background: var(--surface-raised);
     border: 1px solid var(--border-bright);
     color: var(--text);
     font-family: var(--mono);
@@ -897,7 +1006,7 @@ export function viewerHtml(): string {
   }
   .graph-btn {
     border: 1px solid var(--border-bright);
-    background: rgba(8, 12, 16, 0.9);
+    background: var(--surface-raised);
     color: var(--text-dim);
     font-family: var(--mono);
     font-size: 0.58rem;
@@ -925,7 +1034,7 @@ export function viewerHtml(): string {
     letter-spacing: 0.12em;
     text-transform: uppercase;
     border: 1px solid var(--border);
-    background: rgba(8, 12, 16, 0.9);
+    background: var(--surface-raised);
     color: var(--text-dim);
     padding: 0.2rem 0.45rem;
   }
@@ -941,7 +1050,7 @@ export function viewerHtml(): string {
   }
   .toast {
     border: 1px solid var(--border-bright);
-    background: rgba(13, 18, 25, 0.96);
+    background: var(--toast-bg);
     color: var(--text);
     font-size: 0.68rem;
     letter-spacing: 0.08em;
@@ -950,7 +1059,7 @@ export function viewerHtml(): string {
     min-width: 190px;
     max-width: min(80vw, 420px);
     line-height: 1.45;
-    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28);
+    box-shadow: 0 10px 22px var(--card-glow);
     animation: toastIn 0.2s ease;
   }
   .toast.info { border-color: var(--border-bright); color: var(--text); }
@@ -1056,7 +1165,7 @@ export function viewerHtml(): string {
     position: fixed;
     inset: 0;
     z-index: 300;
-    background: rgba(6, 10, 15, 0.86);
+    background: var(--overlay-bg);
     padding: 6vh 1rem 1rem;
     align-items: flex-start;
     justify-content: center;
@@ -1065,8 +1174,8 @@ export function viewerHtml(): string {
   .cmd-box {
     width: min(700px, 100%);
     border: 1px solid var(--border-bright);
-    background: rgba(13, 18, 25, 0.98);
-    box-shadow: 0 26px 50px rgba(0, 0, 0, 0.45);
+    background: var(--panel-bg);
+    box-shadow: 0 26px 50px var(--panel-shadow);
   }
   .cmd-head {
     padding: 0.8rem;
@@ -1113,7 +1222,7 @@ export function viewerHtml(): string {
     font-family: var(--mono);
   }
   .cmd-item:hover, .cmd-item.active {
-    background: rgba(240, 165, 0, 0.1);
+    background: var(--amber-glow);
   }
   .cmd-item-label {
     font-size: 0.75rem;
@@ -1139,7 +1248,7 @@ export function viewerHtml(): string {
     position: fixed;
     inset: 0;
     z-index: 290;
-    background: rgba(6, 10, 15, 0.84);
+    background: var(--overlay-bg);
     padding: 8vh 1rem 1rem;
     align-items: flex-start;
     justify-content: center;
@@ -1148,8 +1257,8 @@ export function viewerHtml(): string {
   .shortcuts-box {
     width: min(620px, 100%);
     border: 1px solid var(--border-bright);
-    background: rgba(13, 18, 25, 0.98);
-    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.42);
+    background: var(--panel-bg);
+    box-shadow: 0 20px 42px var(--panel-shadow);
     padding: 0.9rem;
   }
   .shortcuts-head {
@@ -1205,7 +1314,7 @@ export function viewerHtml(): string {
     position: fixed;
     inset: 0;
     z-index: 295;
-    background: rgba(6, 10, 15, 0.84);
+    background: var(--overlay-bg);
     padding: 8vh 1rem 1rem;
     align-items: flex-start;
     justify-content: center;
@@ -1215,8 +1324,8 @@ export function viewerHtml(): string {
     width: min(760px, 100%);
     max-height: min(84vh, 820px);
     border: 1px solid var(--border-bright);
-    background: rgba(13, 18, 25, 0.98);
-    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.42);
+    background: var(--panel-bg);
+    box-shadow: 0 20px 42px var(--panel-shadow);
     padding: 0.9rem;
     display: flex;
     flex-direction: column;
@@ -1276,11 +1385,11 @@ export function viewerHtml(): string {
   }
   .settings-folder {
     border: 1px solid var(--border);
-    background: rgba(8, 12, 16, 0.64);
+    background: var(--surface);
   }
   .settings-folder[open] {
     border-color: var(--border-bright);
-    background: rgba(10, 15, 21, 0.8);
+    background: var(--surface-raised);
   }
   .settings-folder summary {
     list-style: none;
@@ -1316,7 +1425,7 @@ export function viewerHtml(): string {
   }
   .setting-row {
     border: 1px solid var(--border);
-    background: rgba(8, 12, 16, 0.64);
+    background: var(--surface);
     padding: 0.55rem 0.62rem;
     display: flex;
     flex-direction: column;
@@ -1384,16 +1493,16 @@ export function viewerHtml(): string {
   }
   .semantic-status-pill {
     border: 1px solid var(--border);
-    background: rgba(8, 12, 16, 0.78);
+    background: var(--surface);
     color: var(--teal);
     font-size: 0.54rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     padding: 0.14rem 0.32rem;
   }
-  .semantic-status-pill.ready { color: #2eca75; border-color: rgba(46, 202, 117, 0.45); }
-  .semantic-status-pill.not-ready { color: var(--amber); border-color: rgba(240, 165, 0, 0.45); }
-  .semantic-status-pill.running { color: #66a9ff; border-color: rgba(102, 169, 255, 0.45); }
+  .semantic-status-pill.ready { color: var(--success); border-color: var(--success); }
+  .semantic-status-pill.not-ready { color: var(--amber); border-color: var(--amber); }
+  .semantic-status-pill.running { color: var(--info); border-color: var(--info); }
   .settings-actions {
     display: flex;
     gap: 0.5rem;
@@ -1442,12 +1551,45 @@ export function viewerHtml(): string {
     width: 100%;
     height: 100%;
   }
+  .theme-mode-picker {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    width: fit-content;
+    margin-top: 0.25rem;
+  }
+  .theme-mode-btn {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    padding: 0.4rem 1rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    font-family: inherit;
+  }
+  .theme-mode-btn + .theme-mode-btn {
+    border-left: 1px solid var(--border);
+  }
+  .theme-mode-btn:hover {
+    background: var(--amber-glow);
+    color: var(--text);
+  }
+  .theme-mode-btn.active {
+    background: var(--amber);
+    color: var(--bg);
+    font-weight: 600;
+  }
+  
   .changelog-overlay {
     display: none;
     position: fixed;
     inset: 0;
     z-index: 296;
-    background: rgba(6, 10, 15, 0.84);
+    background: var(--overlay-bg);
     padding: 8vh 1rem 1rem;
     align-items: flex-start;
     justify-content: center;
@@ -1456,8 +1598,8 @@ export function viewerHtml(): string {
   .changelog-box {
     width: min(860px, 100%);
     border: 1px solid var(--border-bright);
-    background: rgba(13, 18, 25, 0.98);
-    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.42);
+    background: var(--panel-bg);
+    box-shadow: 0 20px 42px var(--panel-shadow);
     padding: 0.9rem;
   }
   .changelog-head {
@@ -1484,7 +1626,7 @@ export function viewerHtml(): string {
   }
   .changelog-list {
     border: 1px solid var(--border);
-    background: rgba(8, 12, 16, 0.64);
+    background: var(--surface);
     padding: 0.7rem;
     max-height: min(62vh, 720px);
     overflow: auto;
@@ -1774,9 +1916,9 @@ export function viewerHtml(): string {
     100% { box-shadow: 0 0 0 1px rgba(0,200,180,0.45), 0 0 18px rgba(0,200,180,0.24); }
   }
   @keyframes livePulse {
-    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 200, 180, 0.35); opacity: 1; }
-    70% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(0, 200, 180, 0); opacity: 0.9; }
-    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 200, 180, 0); opacity: 1; }
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.35); opacity: 1; }
+    70% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); opacity: 0.9; }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); opacity: 1; }
   }
   @keyframes toastIn {
     0% { opacity: 0; transform: translateY(8px); }
@@ -1821,7 +1963,7 @@ export function viewerHtml(): string {
         <div id="hdr-count">— entries</div>
         <div id="hdr-time"></div>
       </div>
-      <div id="live-indicator" style="font-size:0.6rem;letter-spacing:0.15em;color:var(--text-dim);display:none;align-items:center">
+      <div id="live-indicator" style="font-size:0.6rem;letter-spacing:0.15em;color:var(--text-dim);display:none;align-items:center;margin:0 0.6rem">
         <span class="live-dot"></span>LIVE
       </div>
       <button class="logout-btn" data-action="logout">LOCK</button>
@@ -2056,11 +2198,30 @@ export function viewerHtml(): string {
           <div class="settings-folder-body">
             <div class="settings-grid">
               <div class="setting-row setting-span-2">
-                <label for="settings-theme">Theme</label>
-                <div class="setting-help">Choose a color theme for the viewer.</div>
+                <label>Theme Mode</label>
+                <div class="setting-help">Auto follows your device's light or dark preference.</div>
+                <div class="theme-mode-picker" id="theme-mode-picker">
+                  <button type="button" class="theme-mode-btn" data-mode="auto">Auto</button>
+                  <button type="button" class="theme-mode-btn" data-mode="light">Light</button>
+                  <button type="button" class="theme-mode-btn" data-mode="dark">Dark</button>
+                </div>
+              </div>
+              <div class="setting-row setting-span-2">
+                <label>Light Theme</label>
+                <div class="setting-help">Color palette used in light mode.</div>
+                <div class="theme-picker" id="light-theme-picker">
+                  <button type="button" class="theme-swatch" data-theme-value="cyberpunk" title="Cyberpunk"><span style="background:#f5f5f5;border:2px solid #c07800"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="midnight" title="Midnight"><span style="background:#f2f0fa;border:2px solid #6050d0"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="solarized" title="Solarized"><span style="background:#fdf6e3;border:2px solid #b58900"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="ember" title="Ember"><span style="background:#fdf4ee;border:2px solid #d05020"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="arctic" title="Arctic"><span style="background:#f0f7fc;border:2px solid #1898b0"></span></button>
+                </div>
+              </div>
+              <div class="setting-row setting-span-2">
+                <label>Dark Theme</label>
+                <div class="setting-help">Color palette used in dark mode.</div>
                 <div class="theme-picker" id="theme-picker">
                   <button type="button" class="theme-swatch" data-theme-value="cyberpunk" title="Cyberpunk"><span style="background:#080c10;border:2px solid #f0a500"></span></button>
-                  <button type="button" class="theme-swatch" data-theme-value="light" title="Light"><span style="background:#f5f5f5;border:2px solid #c07800"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="midnight" title="Midnight"><span style="background:#0a0a1a;border:2px solid #7c6aff"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="solarized" title="Solarized"><span style="background:#002b36;border:2px solid #b58900"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="ember" title="Ember"><span style="background:#1a0a08;border:2px solid #ff6b35"></span></button>
@@ -2145,6 +2306,66 @@ export function viewerHtml(): string {
             </div>
           </div>
         </details>
+
+        <details class="settings-folder" id="settings-data-management">
+          <summary>Data Management</summary>
+          <div class="settings-folder-body">
+            <div class="settings-grid">
+
+              <div class="setting-row setting-span-2">
+                <div class="setting-label" style="font-size:0.75rem;letter-spacing:0.12em;margin-bottom:0.15rem">EXPORT</div>
+                <div class="setting-help">Save a backup of all your memories, links, and settings to a <code>.json</code> file. The export does not contain any account identifiers — only your content.</div>
+                <div style="margin-top:0.4rem">
+                  <button class="refresh-btn utility-btn" id="export-btn" data-action="run-export">EXPORT DATA</button>
+                  <div class="semantic-status-line dim" id="export-status-line" style="margin-top:0.3rem"></div>
+                </div>
+              </div>
+
+              <div class="setting-row setting-span-2" style="border-top:1px solid var(--border);padding-top:0.8rem;margin-top:0.3rem">
+                <div class="setting-label" style="font-size:0.75rem;letter-spacing:0.12em;margin-bottom:0.15rem">IMPORT</div>
+                <div class="setting-help">Restore data from a previously exported <code>.json</code> backup file.</div>
+                <div style="margin-top:0.4rem">
+                  <input type="file" accept=".json,application/json" id="import-file-input" style="display:none">
+                  <button class="refresh-btn utility-btn" id="import-choose-btn" data-action="choose-import-file">SELECT .JSON FILE</button>
+                  <div class="semantic-status-line dim" id="import-file-name" style="margin-top:0.3rem"></div>
+
+                  <div id="import-step-strategy" style="display:none;margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--border)">
+                    <div class="setting-help" style="margin-bottom:0.3rem">How should existing data be handled?</div>
+                    <select class="setting-input" id="import-strategy">
+                      <option value="merge">Merge — add new entries, update existing</option>
+                      <option value="skip_existing">Skip existing — only add new entries</option>
+                      <option value="overwrite">Overwrite — erase everything, then import (destructive!)</option>
+                    </select>
+                    <div class="setting-help" id="import-strategy-help" style="margin-top:0.2rem">Safest option. New entries are added, existing ones are updated.</div>
+                  </div>
+
+                  <div id="import-step-run" style="display:none;margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--border)">
+                    <button class="refresh-btn utility-btn" id="import-btn" data-action="run-import">IMPORT DATA</button>
+                  </div>
+
+                  <div class="semantic-status-line dim" id="import-status-line" style="margin-top:0.4rem"></div>
+                  <div class="semantic-status-meta" id="import-status-meta"></div>
+                </div>
+              </div>
+
+              <div class="setting-row setting-span-2" style="border-top:1px solid var(--border);padding-top:0.8rem;margin-top:0.3rem">
+                <div class="setting-label" style="font-size:0.75rem;letter-spacing:0.12em;margin-bottom:0.15rem;color:var(--red,#e05050)">DANGER ZONE</div>
+                <div class="setting-help">Permanently delete <strong>all</strong> memories, links, changelog, snapshots, and settings from this brain. This cannot be undone. Consider exporting a backup first.</div>
+                <div style="margin-top:0.4rem">
+                  <button class="refresh-btn utility-btn" id="purge-btn" data-action="run-purge" style="border-color:var(--red,#e05050);color:var(--red,#e05050)">PURGE ALL DATA</button>
+                  <div class="semantic-status-line dim" id="purge-status-line" style="margin-top:0.3rem"></div>
+                </div>
+              </div>
+
+              <div class="setting-row setting-span-2" style="border-top:1px solid var(--border);padding-top:0.6rem;margin-top:0.3rem">
+                <div class="setting-help" style="font-size:0.55rem;opacity:0.6;line-height:1.5">
+                  Privacy note: Exported files contain the full text of your memories and metadata. Review the file contents before sharing. Do not share exports that contain passwords, API keys, or other sensitive information.
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </details>
       </div>
     </div>
     <div class="settings-actions">
@@ -2183,14 +2404,18 @@ export function viewerScript(): string {
   const BASE = location.origin;
   const VIEWER_SERVER_VERSION = '${escapeHtml(SERVER_VERSION)}';
   const GRAPH_RELATION_TYPES = ['related', 'supports', 'contradicts', 'supersedes', 'causes', 'example_of'];
-  const GRAPH_RELATION_COLOR = {
-    related: '#2a4060',
-    supports: '#2eca75',
-    contradicts: '#e05050',
-    supersedes: '#f0a500',
-    causes: '#ff9e4f',
-    example_of: '#66a9ff',
-  };
+  function getGraphRelationColors() {
+    const s = getComputedStyle(document.documentElement);
+    const v = (name) => s.getPropertyValue(name).trim();
+    return {
+      related: v('--border-bright') || '#2a4060',
+      supports: v('--success') || '#2eca75',
+      contradicts: v('--red') || '#e05050',
+      supersedes: v('--amber') || '#f0a500',
+      causes: v('--causes') || '#ff9e4f',
+      example_of: v('--info') || '#66a9ff',
+    };
+  }
   let TOKEN = '';
   let SESSION_MODE = 'none';
   let activeFilter = '';
@@ -2229,6 +2454,8 @@ export function viewerScript(): string {
   function buildDefaultViewerSettings() {
     return {
       theme: 'cyberpunk',
+      light_theme: 'cyberpunk',
+      theme_mode: 'auto',
       live_poll_enabled: true,
       live_poll_interval_sec: 10,
       time_mode: 'utc',
@@ -2271,10 +2498,15 @@ export function viewerScript(): string {
     const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
       ? source.default_memory_filter
       : '';
-    const validThemes = ['cyberpunk', 'light', 'midnight', 'solarized', 'ember', 'arctic'];
-    const theme = validThemes.includes(source.theme) ? source.theme : defaults.theme;
+    const validThemes = ['cyberpunk', 'midnight', 'solarized', 'ember', 'arctic'];
+    const theme = validThemes.includes(source.theme) ? source.theme : (source.theme === 'light' ? 'cyberpunk' : defaults.theme);
+    const light_theme = validThemes.includes(source.light_theme) ? source.light_theme : defaults.light_theme;
+    const validModes = ['auto', 'light', 'dark'];
+    const theme_mode = validModes.includes(source.theme_mode) ? source.theme_mode : defaults.theme_mode;
     return {
       theme,
+      light_theme,
+      theme_mode,
       live_poll_enabled: source.live_poll_enabled !== false,
       live_poll_interval_sec: Math.min(Math.max(Math.round(interval), 5), 120),
       time_mode: source.time_mode === 'local' ? 'local' : 'utc',
@@ -2316,6 +2548,18 @@ export function viewerScript(): string {
     } catch {}
   }
 
+  const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+  function resolveActiveTheme() {
+    if (!viewerSettings) return 'cyberpunk';
+    const dark = viewerSettings.theme || 'cyberpunk';
+    const light = (viewerSettings.light_theme || 'cyberpunk') + '-light';
+    const mode = viewerSettings.theme_mode || 'auto';
+    if (mode === 'light') return light;
+    if (mode === 'dark') return dark;
+    return darkModeMediaQuery.matches ? dark : light;
+  }
+
   function applyViewerSettingsToRuntime(options = {}) {
     if (!viewerSettings) return;
     const restartPolling = options.restartPolling !== false;
@@ -2327,7 +2571,7 @@ export function viewerScript(): string {
     document.body.classList.toggle('compact-cards', viewerSettings.compact_cards);
     document.body.classList.toggle('scanlines-off', !viewerSettings.show_scanlines);
     document.body.classList.toggle('motion-reduced', viewerSettings.reduce_motion);
-    document.documentElement.setAttribute('data-theme', viewerSettings.theme || 'cyberpunk');
+    document.documentElement.setAttribute('data-theme', resolveActiveTheme());
     syncThemePicker();
     syncGraphToolbarState();
     if (restartPolling) startLivePolling(true);
@@ -2342,6 +2586,13 @@ export function viewerScript(): string {
 
   initializeViewerSettings();
   fillSettingsForm();
+
+  darkModeMediaQuery.addEventListener('change', () => {
+    if (viewerSettings?.theme_mode === 'auto') {
+      document.documentElement.setAttribute('data-theme', resolveActiveTheme());
+    }
+  });
+
   restoreUserSession();
 
   function setLoginError(message) {
@@ -2715,6 +2966,241 @@ export function viewerScript(): string {
     return runSemanticReindex('settings');
   }
 
+  let importSelectedFile = null;
+  let importRunning = false;
+  let exportRunning = false;
+
+  function updateImportStrategyHelp() {
+    const select = document.getElementById('import-strategy');
+    const help = document.getElementById('import-strategy-help');
+    if (!select || !help) return;
+    const v = select.value;
+    if (v === 'merge') help.textContent = 'Safest option. New entries are added, existing ones are updated.';
+    else if (v === 'skip_existing') help.textContent = 'Conservative. Only adds new entries. Your current data is never modified.';
+    else if (v === 'overwrite') help.textContent = 'Destructive! All existing data is permanently deleted before import. You will be asked to confirm.';
+  }
+
+  async function runExport() {
+    if (!ensureAppReady('Export')) return;
+    if (exportRunning) { showToast('Export already in progress.', 'info'); return; }
+    exportRunning = true;
+    const statusEl = document.getElementById('export-status-line');
+    const btn = document.getElementById('export-btn');
+    if (btn) btn.disabled = true;
+    if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Preparing backup file...'; }
+    try {
+      const r = await apiFetch(BASE + '/api/export');
+      if (r.status === 401) { doLogout(true); return; }
+      if (!r.ok) throw new Error('Export failed (' + r.status + ')');
+      const disposition = r.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="(.+?)"/);
+      const filename = match ? match[1] : 'memoryvault-export.json';
+      const text = await r.text();
+      const parsed = JSON.parse(text);
+      const stats = parsed.stats || {};
+      const blob = new Blob([text], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+      const summary = (stats.memories || 0) + ' memories, ' + (stats.memory_links || 0) + ' links';
+      if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Backup saved: ' + filename + ' (' + summary + ')'; }
+      showToast('Backup downloaded — ' + summary + '.', 'success');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Export failed.';
+      if (statusEl) { statusEl.className = 'semantic-status-line error'; statusEl.textContent = msg; }
+      showToast(msg, 'error');
+    } finally {
+      exportRunning = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function chooseImportFile() {
+    const input = document.getElementById('import-file-input');
+    if (input) input.click();
+  }
+
+  function resetImportSteps() {
+    const nameEl = document.getElementById('import-file-name');
+    const stepStrategy = document.getElementById('import-step-strategy');
+    const stepRun = document.getElementById('import-step-run');
+    const statusEl = document.getElementById('import-status-line');
+    const metaEl = document.getElementById('import-status-meta');
+    importSelectedFile = null;
+    if (nameEl) nameEl.textContent = '';
+    if (stepStrategy) stepStrategy.style.display = 'none';
+    if (stepRun) stepRun.style.display = 'none';
+    if (statusEl) { statusEl.className = 'semantic-status-line dim'; statusEl.textContent = ''; }
+    if (metaEl) metaEl.innerHTML = '';
+  }
+
+  function showImportStep(step) {
+    const stepStrategy = document.getElementById('import-step-strategy');
+    const stepRun = document.getElementById('import-step-run');
+    if (step >= 2 && stepStrategy) stepStrategy.style.display = 'block';
+    if (step >= 3 && stepRun) stepRun.style.display = 'block';
+    if (step < 3 && stepRun) stepRun.style.display = 'none';
+    if (step < 2 && stepStrategy) stepStrategy.style.display = 'none';
+  }
+
+  function onImportFileSelected(event) {
+    const input = event.target;
+    const file = input && input.files && input.files[0];
+    const nameEl = document.getElementById('import-file-name');
+    const statusEl = document.getElementById('import-status-line');
+    const metaEl = document.getElementById('import-status-meta');
+    if (!file) {
+      resetImportSteps();
+      return;
+    }
+    if (!file.name.endsWith('.json')) {
+      showToast('Please select a .json file.', 'error');
+      resetImportSteps();
+      return;
+    }
+    importSelectedFile = file;
+    if (nameEl) nameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+    if (statusEl) { statusEl.className = 'semantic-status-line dim'; statusEl.textContent = ''; }
+    if (metaEl) metaEl.innerHTML = '';
+    showImportStep(3);
+  }
+
+  function onImportStrategyChanged() {
+    updateImportStrategyHelp();
+  }
+
+  async function runImport(source) {
+    if (!ensureAppReady('Import')) return;
+    if (importRunning) { showToast('Import already in progress.', 'info'); return; }
+    if (!importSelectedFile) { showToast('Select a file first.', 'info'); return; }
+
+    const strategySelect = document.getElementById('import-strategy');
+    const strategy = strategySelect ? strategySelect.value : 'merge';
+
+    if (strategy === 'overwrite') {
+      const confirmed = window.confirm(
+        'OVERWRITE will permanently delete ALL existing memories, links, changelog, and settings in this brain before importing. This cannot be undone.\\n\\nContinue?'
+      );
+      if (!confirmed) return;
+    }
+
+    importRunning = true;
+    const statusEl = document.getElementById('import-status-line');
+    const metaEl = document.getElementById('import-status-meta');
+    const importBtn = document.getElementById('import-btn');
+    if (importBtn) importBtn.disabled = true;
+    if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Importing (' + strategy + ')...'; }
+    if (metaEl) metaEl.innerHTML = '';
+
+    try {
+      const text = await importSelectedFile.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { throw new Error('File is not valid JSON.'); }
+      if (!parsed || typeof parsed !== 'object') throw new Error('File content is not a valid object.');
+      if (parsed.schema !== 'memoryvault_export_v1') throw new Error('Unsupported file format. Expected memoryvault_export_v1 schema.');
+
+      parsed.strategy = strategy;
+
+      const r = await apiFetch(BASE + '/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      if (r.status === 401) { doLogout(true); return; }
+      const result = await r.json();
+      if (!r.ok) throw new Error(result.error || 'Import failed (' + r.status + ')');
+
+      const imported = result.imported || {};
+
+      showImportStep(1);
+      importSelectedFile = null;
+      const nameEl = document.getElementById('import-file-name');
+      if (nameEl) nameEl.textContent = '';
+      const fileInput = document.getElementById('import-file-input');
+      if (fileInput) fileInput.value = '';
+
+      if (statusEl) {
+        statusEl.className = 'semantic-status-line';
+        statusEl.textContent = 'Import completed (' + strategy + ').';
+      }
+      if (metaEl) {
+        metaEl.innerHTML = '';
+        const addPill = (text, cls) => {
+          const pill = document.createElement('span');
+          pill.className = 'semantic-status-pill' + (cls ? (' ' + cls) : '');
+          pill.textContent = text;
+          metaEl.appendChild(pill);
+        };
+        if (imported.memories > 0) addPill(imported.memories + ' memories');
+        if (imported.memory_links > 0) addPill(imported.memory_links + ' links');
+        if (imported.memory_changelog > 0) addPill(imported.memory_changelog + ' changelog');
+        if (imported.brain_source_trust > 0) addPill(imported.brain_source_trust + ' trust rules');
+        if (imported.memory_watches > 0) addPill(imported.memory_watches + ' watches');
+        if (imported.skipped > 0) addPill(imported.skipped + ' skipped');
+        if (imported.memory_conflict_resolutions > 0) addPill(imported.memory_conflict_resolutions + ' resolutions');
+        if (imported.memory_entity_aliases > 0) addPill(imported.memory_entity_aliases + ' aliases');
+      }
+      showToast('Import completed: ' + (imported.memories || 0) + ' memories, ' + (imported.memory_links || 0) + ' links.', 'success');
+      loadMemories(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Import failed.';
+      if (statusEl) { statusEl.className = 'semantic-status-line error'; statusEl.textContent = msg; }
+      showToast(msg, 'error');
+    } finally {
+      importRunning = false;
+      if (importBtn) importBtn.disabled = false;
+    }
+  }
+
+  function runImportFromSettings() { return runImport('settings'); }
+
+  async function runPurge() {
+    if (!ensureAppReady('Purge')) return;
+    const statusEl = document.getElementById('purge-status-line');
+    const btn = document.getElementById('purge-btn');
+
+    const first = window.confirm(
+      'This will permanently delete ALL memories, links, changelog, snapshots, and settings from this brain.\\n\\nThis cannot be undone. Are you sure?'
+    );
+    if (!first) return;
+
+    const second = window.prompt(
+      'To confirm, type PURGE below:'
+    );
+    if (second !== 'PURGE') {
+      showToast('Purge cancelled.', 'info');
+      return;
+    }
+
+    if (btn) btn.disabled = true;
+    if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Purging all data...'; }
+
+    try {
+      const r = await apiFetch(BASE + '/api/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'PURGE ALL DATA' }),
+      });
+      if (r.status === 401) { doLogout(true); return; }
+      const result = await r.json();
+      if (!r.ok) throw new Error(result.error || 'Purge failed.');
+      const purged = result.purged || {};
+      if (statusEl) { statusEl.className = 'semantic-status-line'; statusEl.textContent = 'Purged ' + (purged.memories || 0) + ' memories and ' + (purged.links || 0) + ' links.'; }
+      showToast('All data has been purged.', 'success', true);
+      loadMemories(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Purge failed.';
+      if (statusEl) { statusEl.className = 'semantic-status-line error'; statusEl.textContent = msg; }
+      showToast(msg, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function doTokenLogin() {
     clearLoginError();
     const val = document.getElementById('token-input').value.trim();
@@ -2941,7 +3427,7 @@ export function viewerScript(): string {
     if (!m) return;
     const date = new Date(m.created_at * 1000).toLocaleString();
     const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';
-    const typeColors = { note: 'var(--teal)', fact: 'var(--amber)', journal: '#8888ff' };
+    const typeColors = { note: 'var(--teal)', fact: 'var(--amber)', journal: 'var(--journal)' };
     const qualityChips = [
       m.source ? \`<span class="tag">src:\${esc(m.source)}</span>\` : '',
       Number.isFinite(Number(m.dynamic_confidence ?? m.confidence)) ? \`<span class="tag">conf:\${Math.round(Number(m.dynamic_confidence ?? m.confidence) * 100)}%</span>\` : '',
@@ -3116,6 +3602,34 @@ export function viewerScript(): string {
         },
       },
       {
+        label: 'Export brain data',
+        detail: 'Download all data as JSON file',
+        run: async () => {
+          if (!ensureAppReady('Export')) return;
+          await runExport();
+        },
+      },
+      {
+        label: 'Import brain data',
+        detail: 'Restore from a backup file',
+        run: () => {
+          if (!ensureAppReady('Import')) return;
+          openSettingsOverlay();
+          setTimeout(() => {
+            const section = document.getElementById('settings-data-management');
+            if (section) { section.open = true; section.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+          }, 120);
+        },
+      },
+      {
+        label: 'Purge all data',
+        detail: 'Permanently delete everything (danger)',
+        run: async () => {
+          if (!ensureAppReady('Purge')) return;
+          await runPurge();
+        },
+      },
+      {
         label: 'Open settings',
         detail: 'Viewer preferences',
         run: () => openSettingsOverlay(),
@@ -3285,7 +3799,9 @@ export function viewerScript(): string {
 
   function readSettingsFromForm() {
     const raw = {
-      theme: document.querySelector('.theme-swatch.active')?.dataset?.themeValue || viewerSettings?.theme || 'cyberpunk',
+      theme: document.querySelector('#theme-picker .theme-swatch.active')?.dataset?.themeValue || viewerSettings?.theme || 'cyberpunk',
+      light_theme: document.querySelector('#light-theme-picker .theme-swatch.active')?.dataset?.themeValue || viewerSettings?.light_theme || 'cyberpunk',
+      theme_mode: document.querySelector('.theme-mode-btn.active')?.dataset?.mode || viewerSettings?.theme_mode || 'auto',
       live_poll_enabled: document.getElementById('settings-live-poll-enabled')?.checked !== false,
       live_poll_interval_sec: Number(document.getElementById('settings-live-poll-interval')?.value ?? 10),
       time_mode: document.getElementById('settings-time-mode')?.value === 'local' ? 'local' : 'utc',
@@ -3443,9 +3959,17 @@ export function viewerScript(): string {
   }
 
   function syncThemePicker() {
-    const current = viewerSettings?.theme || 'cyberpunk';
-    document.querySelectorAll('.theme-swatch').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.themeValue === current);
+    const darkTheme = viewerSettings?.theme || 'cyberpunk';
+    document.querySelectorAll('#theme-picker .theme-swatch').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.themeValue === darkTheme);
+    });
+    const lightTheme = viewerSettings?.light_theme || 'cyberpunk';
+    document.querySelectorAll('#light-theme-picker .theme-swatch').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.themeValue === lightTheme);
+    });
+    const currentMode = viewerSettings?.theme_mode || 'auto';
+    document.querySelectorAll('.theme-mode-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === currentMode);
     });
   }
 
@@ -3711,7 +4235,8 @@ export function viewerScript(): string {
     const width = svgEl.clientWidth || 800;
     const height = svgEl.clientHeight || 600;
     const isMobile = window.matchMedia('(max-width: 640px)').matches;
-    const typeColor = { note: '#00c8b4', fact: '#f0a500', journal: '#8888ff' };
+    const _cs = getComputedStyle(document.documentElement);
+    const typeColor = { note: _cs.getPropertyValue('--teal').trim(), fact: _cs.getPropertyValue('--amber').trim(), journal: _cs.getPropertyValue('--journal').trim() };
     const relationDistance = {
       related: isMobile ? 88 : 112,
       supports: isMobile ? 94 : 118,
@@ -3841,7 +4366,7 @@ export function viewerScript(): string {
     const svg = d3.select('#graph-svg');
     graphSvgSelection = svg;
     const defs = svg.append('defs');
-    Object.entries(GRAPH_RELATION_COLOR).forEach(([relation, color]) => {
+    Object.entries(getGraphRelationColors()).forEach(([relation, color]) => {
       const markerId = 'arrow-' + relation.replace(/_/g, '-');
       defs.append('marker')
         .attr('id', markerId)
@@ -4126,6 +4651,18 @@ export function viewerScript(): string {
         case 'run-semantic-reindex':
           runSemanticReindexFromSettings();
           break;
+        case 'run-export':
+          runExport();
+          break;
+        case 'choose-import-file':
+          chooseImportFile();
+          break;
+        case 'run-import':
+          runImportFromSettings();
+          break;
+        case 'run-purge':
+          runPurge();
+          break;
         case 'open-changelog-overlay':
           openChangelogOverlay();
           break;
@@ -4156,14 +4693,34 @@ export function viewerScript(): string {
     });
 
     document.addEventListener('click', (event) => {
-      const target = event.target instanceof Element ? event.target.closest('.theme-swatch') : null;
-      if (!target) return;
-      const themeValue = target.getAttribute('data-theme-value');
-      if (!themeValue) return;
-      viewerSettings = readSettingsFromForm();
-      viewerSettings.theme = themeValue;
-      persistViewerSettings();
-      applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: false, rerenderGrid: false });
+      const el = event.target instanceof Element ? event.target : null;
+      if (!el) return;
+
+      const swatch = el.closest('.theme-swatch');
+      if (swatch) {
+        const themeValue = swatch.getAttribute('data-theme-value');
+        if (!themeValue) return;
+        viewerSettings = readSettingsFromForm();
+        if (swatch.closest('#light-theme-picker')) {
+          viewerSettings.light_theme = themeValue;
+        } else {
+          viewerSettings.theme = themeValue;
+        }
+        persistViewerSettings();
+        applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: false, rerenderGrid: false });
+        return;
+      }
+
+      const modeBtn = el.closest('.theme-mode-btn');
+      if (modeBtn) {
+        const mode = modeBtn.getAttribute('data-mode');
+        if (!mode) return;
+        viewerSettings = readSettingsFromForm();
+        viewerSettings.theme_mode = mode;
+        persistViewerSettings();
+        applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: false, rerenderGrid: false });
+        return;
+      }
     });
 
     bindInput('search-input', onSearch);
@@ -4173,6 +4730,11 @@ export function viewerScript(): string {
 
   syncGraphToolbarState();
   bindViewerEventHandlers();
+
+  const importFileInput = document.getElementById('import-file-input');
+  if (importFileInput) importFileInput.addEventListener('change', onImportFileSelected);
+  const importStrategySelect = document.getElementById('import-strategy');
+  if (importStrategySelect) importStrategySelect.addEventListener('change', onImportStrategyChanged);
 
   // Enter key on login
   document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') doTokenLogin(); });
