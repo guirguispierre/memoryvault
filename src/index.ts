@@ -182,6 +182,7 @@ export default {
       }
 
       if (url.pathname === '/api/export') {
+        if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
         const authCtx = await authRequestWithOAuth(request, env);
         if (!authCtx) return unauthorized(url);
         return handleApiExport(env, authCtx.brainId);

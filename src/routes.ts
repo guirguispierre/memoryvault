@@ -582,6 +582,7 @@ export async function handleApiImport(request: Request, env: Env, brainId: strin
     await env.DB.prepare('DELETE FROM memory_changelog WHERE brain_id = ?').bind(brainId).run();
     await env.DB.prepare('DELETE FROM memory_watches WHERE brain_id = ?').bind(brainId).run();
     await env.DB.prepare('DELETE FROM brain_source_trust WHERE brain_id = ?').bind(brainId).run();
+    await env.DB.prepare('DELETE FROM brain_snapshots WHERE brain_id = ?').bind(brainId).run();
     await env.DB.prepare('DELETE FROM memories WHERE brain_id = ?').bind(brainId).run();
   }
 
@@ -844,6 +845,9 @@ export function rootLandingHtml(url: URL): string {
     { path: '/api/tools', label: '/api/tools' },
     { path: '/api/graph', label: '/api/graph' },
     { path: '/api/links/sample-memory-id', label: '/api/links/:memoryId' },
+    { path: '/api/export', label: '/api/export' },
+    { path: '/api/import', label: '/api/import' },
+    { path: '/api/purge', label: '/api/purge' },
   ];
   const devRows = devEntries.map((entry) => {
     const guide = endpointGuideForPath(entry.path);
@@ -1525,6 +1529,51 @@ export function endpointGuideForPath(pathname: string): EndpointGuide | null {
       details: [
         'Returns outbound/inbound links for one memory.',
         'Path parameter is the target memory id.',
+      ],
+    };
+  }
+  if (pathname === '/api/export') {
+    return {
+      title: 'Data Export API',
+      subtitle: 'Download a full backup of brain data as JSON',
+      endpointPath: '/api/export',
+      methods: 'GET',
+      auth: 'Requires Authorization: Bearer <access_token>, auth_token cookie, or legacy AUTH_SECRET.',
+      details: [
+        'Returns a JSON file containing all memories, links, changelog, source trust, conflict resolutions, aliases, watches, and brain policy.',
+        'Sensitive fields like webhook_url and secret are stripped from watch entries.',
+        'Response includes a Content-Disposition header for browser download.',
+        'Limited to 50,000 records per entity type.',
+      ],
+    };
+  }
+  if (pathname === '/api/import') {
+    return {
+      title: 'Data Import API',
+      subtitle: 'Restore brain data from a previously exported backup',
+      endpointPath: '/api/import',
+      methods: 'POST',
+      auth: 'Requires Authorization: Bearer <access_token>, auth_token cookie, or legacy AUTH_SECRET.',
+      details: [
+        'Accepts a JSON body matching the memoryvault_export_v1 schema.',
+        'Supports three strategies: merge (add/update), skip_existing (add only), overwrite (delete all then import).',
+        'Imported memories are synced to the vector index for semantic search.',
+        'Links referencing non-existent memories are silently skipped.',
+      ],
+    };
+  }
+  if (pathname === '/api/purge') {
+    return {
+      title: 'Data Purge API',
+      subtitle: 'Permanently delete all brain data (destructive)',
+      endpointPath: '/api/purge',
+      methods: 'POST',
+      auth: 'Requires Authorization: Bearer <access_token>, auth_token cookie, or legacy AUTH_SECRET.',
+      details: [
+        'Permanently deletes all memories, links, changelog, snapshots, watches, source trust, aliases, and conflict resolutions.',
+        'Requires a confirmation body: { "confirm": "PURGE ALL DATA" }.',
+        'Vector index entries are also deleted.',
+        'This action cannot be undone.',
       ],
     };
   }
