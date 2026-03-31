@@ -3543,6 +3543,386 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       return { content: [{ type: 'text', text: 'Invalid mode. Use create|list|delete|set_active|test.' }] };
     }
 
+    case 'memory_merge': {
+      const { memory_ids, primary_id, merged_content, merged_title } = args as {
+        memory_ids?: unknown;
+        primary_id?: unknown;
+        merged_content?: unknown;
+        merged_title?: unknown;
+      };
+      if (!Array.isArray(memory_ids) || memory_ids.length < 2) {
+        return { content: [{ type: 'text', text: 'memory_ids must be an array of at least 2 memory IDs.' }] };
+      }
+      const ids = memory_ids.map(String).filter(Boolean);
+      if (ids.length < 2) return { content: [{ type: 'text', text: 'Need at least 2 valid memory IDs.' }] };
+
+      // Load all memories
+      const placeholders = ids.map(() => '?').join(',');
+      const rows = await env.DB.prepare(
+        `SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at
+         FROM memories WHERE brain_id = ? AND id IN (${placeholders}) AND archived_at IS NULL`
+      ).bind(brainId, ...ids).all<Record<string, unknown>>();
+
+      if (rows.results.length < 2) {
+        return { content: [{ type: 'text', text: `Found only ${rows.results.length} active memories from the provided IDs.` }] };
+      }
+
+      // Select primary: explicit or highest importance then newest
+      let primary: Record<string, unknown>;
+      if (typeof primary_id === 'string' && primary_id) {
+        const found = rows.results.find((r) => r.id === primary_id);
+        if (!found) return { content: [{ type: 'text', text: `primary_id "${primary_id}" not found among provided memories.` }] };
+        primary = found;
+      } else {
+        const sorted = [...rows.results].sort((a, b) => {
+          const impA = clampToRange(a.importance, 0.5);
+          const impB = clampToRange(b.importance, 0.5);
+          if (impB !== impA) return impB - impA;
+          return Number(b.created_at ?? 0) - Number(a.created_at ?? 0);
+        });
+        primary = sorted[0];
+      }
+      const primaryId = String(primary.id);
+      const others = rows.results.filter((r) => r.id !== primaryId);
+
+      // Merge content
+      const finalContent = typeof merged_content === 'string' && merged_content.trim()
+        ? merged_content.trim()
+        : [primary, ...others].map((r) => String(r.content ?? '')).filter(Boolean).join('\n\n---\n\n');
+
+      // Merge tags
+      const allTags = new Set<string>();
+      for (const r of rows.results) {
+        if (typeof r.tags === 'string') {
+          r.tags.split(',').map((t: string) => t.trim()).filter(Boolean).forEach((t: string) => allTags.add(t));
+        }
+      }
+      const mergedTags = allTags.size > 0 ? Array.from(allTags).join(',') : null;
+
+      // Use the highest importance and confidence from all sources
+      const maxImportance = Math.max(...rows.results.map((r) => clampToRange(r.importance, 0.5)));
+      const maxConfidence = Math.max(...rows.results.map((r) => clampToRange(r.confidence, 0.7)));
+
+      // Title
+      const finalTitle = typeof merged_title === 'string' && merged_title.trim()
+        ? merged_title.trim()
+        : typeof primary.title === 'string' ? primary.title : null;
+
+      const ts = now();
+
+      // Update primary memory with merged data
+      await env.DB.prepare(
+        `UPDATE memories SET content = ?, tags = ?, title = ?, confidence = ?, importance = ?, updated_at = ?
+         WHERE brain_id = ? AND id = ?`
+      ).bind(finalContent, mergedTags, finalTitle, maxConfidence, maxImportance, ts, brainId, primaryId).run();
+
+      // Archive others and create supersedes links
+      const archivedIds: string[] = [];
+      for (const other of others) {
+        const otherId = String(other.id);
+        await env.DB.prepare(
+          'UPDATE memories SET archived_at = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+        ).bind(ts, ts, brainId, otherId).run();
+        archivedIds.push(otherId);
+
+        // Create supersedes link
+        const existingLink = await env.DB.prepare(
+          'SELECT id FROM memory_links WHERE brain_id = ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))'
+        ).bind(brainId, primaryId, otherId, otherId, primaryId).first<{ id: string }>();
+        if (existingLink?.id) {
+          await env.DB.prepare(
+            'UPDATE memory_links SET relation_type = ?, label = ? WHERE brain_id = ? AND id = ?'
+          ).bind('supersedes', 'merged', brainId, existingLink.id).run();
+        } else {
+          await env.DB.prepare(
+            'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(generateId(), brainId, primaryId, otherId, 'supersedes', 'merged', ts).run();
+        }
+
+        // Transfer links from archived memories to primary
+        const incomingLinks = await env.DB.prepare(
+          'SELECT id, from_id, relation_type, label FROM memory_links WHERE brain_id = ? AND to_id = ? AND from_id != ?'
+        ).bind(brainId, otherId, primaryId).all<Record<string, unknown>>();
+        for (const link of incomingLinks.results) {
+          const fromId = String(link.from_id);
+          const exists = await env.DB.prepare(
+            'SELECT id FROM memory_links WHERE brain_id = ? AND from_id = ? AND to_id = ? AND relation_type = ?'
+          ).bind(brainId, fromId, primaryId, link.relation_type).first<{ id: string }>();
+          if (!exists) {
+            await env.DB.prepare(
+              'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ).bind(generateId(), brainId, fromId, primaryId, link.relation_type, link.label ?? null, ts).run();
+          }
+        }
+
+        const outgoingLinks = await env.DB.prepare(
+          'SELECT id, to_id, relation_type, label FROM memory_links WHERE brain_id = ? AND from_id = ? AND to_id != ?'
+        ).bind(brainId, otherId, primaryId).all<Record<string, unknown>>();
+        for (const link of outgoingLinks.results) {
+          const toId = String(link.to_id);
+          const exists = await env.DB.prepare(
+            'SELECT id FROM memory_links WHERE brain_id = ? AND from_id = ? AND to_id = ? AND relation_type = ?'
+          ).bind(brainId, primaryId, toId, link.relation_type).first<{ id: string }>();
+          if (!exists) {
+            await env.DB.prepare(
+              'INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ).bind(generateId(), brainId, primaryId, toId, link.relation_type, link.label ?? null, ts).run();
+          }
+        }
+      }
+
+      // Sync vectors
+      await safeDeleteMemoryVectors(env, brainId, archivedIds, 'memory_merge');
+      const updatedRow = await env.DB.prepare(
+        'SELECT * FROM memories WHERE brain_id = ? AND id = ?'
+      ).bind(brainId, primaryId).first<Record<string, unknown>>();
+      if (updatedRow) {
+        await safeSyncMemoriesToVectorIndex(env, brainId, [updatedRow], 'memory_merge');
+      }
+
+      await logChangelog(env, brainId, 'memory_merged', 'memory', primaryId, 'Merged memories', {
+        primary_id: primaryId,
+        archived_ids: archivedIds,
+        source_count: rows.results.length,
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            primary_id: primaryId,
+            merged_count: rows.results.length,
+            archived_ids: archivedIds,
+            tags: mergedTags,
+            confidence: maxConfidence,
+            importance: maxImportance,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_temporal_cluster': {
+      const { start, end, window: windowArg, type, tag, include_links, limit_per_window } = args as {
+        start?: unknown;
+        end?: unknown;
+        window?: unknown;
+        type?: unknown;
+        tag?: unknown;
+        include_links?: unknown;
+        limit_per_window?: unknown;
+      };
+      if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
+
+      const tsNow = now();
+      const endTs = Number.isFinite(Number(end)) ? Math.floor(Number(end)) : tsNow;
+      const startTs = Number.isFinite(Number(start)) ? Math.floor(Number(start)) : endTs - 7 * 86400;
+      if (startTs >= endTs) return { content: [{ type: 'text', text: 'start must be before end.' }] };
+
+      const windowSize = windowArg === 'hour' ? 3600 : windowArg === 'week' ? 604800 : 86400;
+      const windowName = windowArg === 'hour' ? 'hour' : windowArg === 'week' ? 'week' : 'day';
+      const perWindow = Math.min(Math.max(Number.isFinite(Number(limit_per_window)) ? Math.floor(Number(limit_per_window)) : 50, 1), 200);
+      const wantLinks = include_links !== false;
+
+      // Query memories in the time range
+      const params: unknown[] = [brainId, startTs, endTs];
+      let query = 'SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at FROM memories WHERE brain_id = ? AND archived_at IS NULL AND created_at >= ? AND created_at <= ?';
+      if (type) {
+        query += ' AND type = ?';
+        params.push(type);
+      }
+      if (typeof tag === 'string' && tag.trim()) {
+        query += ' AND tags LIKE ?';
+        params.push(`%${tag.trim()}%`);
+      }
+      query += ' ORDER BY created_at ASC';
+
+      const allRows = await env.DB.prepare(query).bind(...params).all<Record<string, unknown>>();
+
+      // Group into time windows
+      const clusters = new Map<number, { window_start: number; window_end: number; label: string; memories: Record<string, unknown>[] }>();
+
+      for (const row of allRows.results) {
+        const createdAt = Number(row.created_at ?? 0);
+        const windowStart = startTs + Math.floor((createdAt - startTs) / windowSize) * windowSize;
+        const windowEnd = windowStart + windowSize;
+
+        let cluster = clusters.get(windowStart);
+        if (!cluster) {
+          const date = new Date(windowStart * 1000);
+          let label: string;
+          if (windowName === 'hour') {
+            label = `${date.toISOString().slice(0, 13)}:00Z`;
+          } else if (windowName === 'week') {
+            label = `week of ${date.toISOString().slice(0, 10)}`;
+          } else {
+            label = date.toISOString().slice(0, 10);
+          }
+          cluster = { window_start: windowStart, window_end: windowEnd, label, memories: [] };
+          clusters.set(windowStart, cluster);
+        }
+        if (cluster.memories.length < perWindow) {
+          cluster.memories.push(row);
+        }
+      }
+
+      // Optionally load links between memories in each cluster
+      const result: Array<Record<string, unknown>> = [];
+      for (const cluster of clusters.values()) {
+        const clusterOut: Record<string, unknown> = {
+          window_start: cluster.window_start,
+          window_end: cluster.window_end,
+          label: cluster.label,
+          memory_count: cluster.memories.length,
+          memories: cluster.memories.map((m) => ({
+            id: m.id,
+            type: m.type,
+            title: m.title,
+            key: m.key,
+            content: String(m.content ?? '').slice(0, 300),
+            tags: m.tags,
+            source: m.source,
+            confidence: m.confidence,
+            importance: m.importance,
+            created_at: m.created_at,
+          })),
+        };
+
+        if (wantLinks && cluster.memories.length > 1) {
+          const memIds = cluster.memories.map((m) => String(m.id));
+          const linkPlaceholders = memIds.map(() => '?').join(',');
+          const clusterLinks = await env.DB.prepare(
+            `SELECT id, from_id, to_id, relation_type, label FROM memory_links
+             WHERE brain_id = ? AND from_id IN (${linkPlaceholders}) AND to_id IN (${linkPlaceholders})`
+          ).bind(brainId, ...memIds, ...memIds).all<Record<string, unknown>>();
+          clusterOut.links = clusterLinks.results;
+        }
+
+        result.push(clusterOut);
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            range: { start: startTs, end: endTs },
+            window: windowName,
+            total_memories: allRows.results.length,
+            cluster_count: result.length,
+            clusters: result,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_spaced_repetition': {
+      const { min_importance, min_age_days, max_confidence, limit: rawLimit, include_score_breakdown } = args as {
+        min_importance?: unknown;
+        min_age_days?: unknown;
+        max_confidence?: unknown;
+        limit?: unknown;
+        include_score_breakdown?: unknown;
+      };
+
+      const minImp = clamp01(Number.isFinite(Number(min_importance)) ? Number(min_importance) : 0.4);
+      const minAgeDays = Math.max(0, Number.isFinite(Number(min_age_days)) ? Number(min_age_days) : 7);
+      const maxConf = clamp01(Number.isFinite(Number(max_confidence)) ? Number(max_confidence) : 0.8);
+      const limit = Math.min(Math.max(Number.isFinite(Number(rawLimit)) ? Math.floor(Number(rawLimit)) : 15, 1), 50);
+      const wantBreakdown = include_score_breakdown !== false;
+
+      const tsNow = now();
+      const ageCutoff = tsNow - Math.floor(minAgeDays * 86400);
+
+      // Find important memories that have low confidence or haven't been accessed recently
+      const candidates = await env.DB.prepare(
+        `SELECT
+          m.id, m.type, m.title, m.key, m.content, m.tags, m.source,
+          m.confidence, m.importance, m.created_at, m.updated_at,
+          (SELECT COUNT(*) FROM memory_links ml WHERE ml.brain_id = ? AND (ml.from_id = m.id OR ml.to_id = m.id)) AS link_count
+        FROM memories m
+        WHERE m.brain_id = ?
+          AND m.archived_at IS NULL
+          AND m.importance >= ?
+          AND m.created_at <= ?
+        ORDER BY m.updated_at ASC
+        LIMIT 500`
+      ).bind(brainId, brainId, minImp, ageCutoff).all<Record<string, unknown>>();
+
+      // Score each memory for review urgency
+      const scored: Array<{ memory: Record<string, unknown>; urgency: number; breakdown: Record<string, unknown> }> = [];
+
+      for (const row of candidates.results) {
+        const confidence = clamp01(toFiniteNumber(row.confidence, 0.7));
+        const importance = clamp01(toFiniteNumber(row.importance, 0.5));
+        const updatedAt = Number(row.updated_at ?? row.created_at ?? 0);
+        const createdAt = Number(row.created_at ?? 0);
+        const linkCount = toFiniteNumber(row.link_count, 0);
+
+        // Skip if confidence is already high (doesn't need review)
+        if (confidence > maxConf) continue;
+
+        const daysSinceUpdate = (tsNow - updatedAt) / 86400;
+        const daysSinceCreation = (tsNow - createdAt) / 86400;
+
+        // Urgency scoring: higher = more urgently needs review
+        // Importance drives base urgency
+        const importanceSignal = importance * 0.35;
+        // Low confidence = needs reinforcement
+        const confidenceGap = (1 - confidence) * 0.25;
+        // Staleness: longer since last update = more urgent
+        const stalenessSignal = Math.min(daysSinceUpdate / 90, 1) * 0.25;
+        // Isolation: fewer links = more likely to be forgotten
+        const isolationSignal = (1 / (1 + linkCount)) * 0.15;
+
+        const urgency = round3(importanceSignal + confidenceGap + stalenessSignal + isolationSignal);
+
+        scored.push({
+          memory: {
+            id: row.id,
+            type: row.type,
+            title: row.title,
+            key: row.key,
+            content: String(row.content ?? '').slice(0, 300),
+            tags: row.tags,
+            source: row.source,
+            confidence,
+            importance,
+            created_at: createdAt,
+            updated_at: updatedAt,
+            link_count: linkCount,
+            age_days: round3(daysSinceCreation),
+            stale_days: round3(daysSinceUpdate),
+          },
+          urgency,
+          breakdown: {
+            importance_signal: round3(importanceSignal),
+            confidence_gap: round3(confidenceGap),
+            staleness_signal: round3(stalenessSignal),
+            isolation_signal: round3(isolationSignal),
+          },
+        });
+      }
+
+      // Sort by urgency descending
+      scored.sort((a, b) => b.urgency - a.urgency);
+      const topResults = scored.slice(0, limit);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            candidates_scanned: candidates.results.length,
+            review_count: topResults.length,
+            filters: { min_importance: minImp, min_age_days: minAgeDays, max_confidence: maxConf },
+            memories: topResults.map((r) => ({
+              ...r.memory,
+              urgency_score: r.urgency,
+              ...(wantBreakdown ? { urgency_breakdown: r.breakdown } : {}),
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+
     default:
       throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32601 });
   }

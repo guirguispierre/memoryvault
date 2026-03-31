@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-03-30
+
+### Added
+- `memory_merge` MCP tool for merging two or more overlapping memories into a single richer memory, combining content, tags, and graph links while archiving duplicates with supersedes relationships.
+- `memory_temporal_cluster` MCP tool for retrieving memories grouped by time windows (hour/day/week) with surrounding graph context — episodic memory recall by time period.
+- `memory_spaced_repetition` MCP tool for surfacing important but fading memories due for review, scored by urgency based on importance, confidence gap, staleness, and graph isolation.
+
 ## [Unreleased]
 
 ### Added
