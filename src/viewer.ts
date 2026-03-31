@@ -3031,6 +3031,8 @@ export function viewerScript(): string {
     const statusEl = document.getElementById('import-status-line');
     const metaEl = document.getElementById('import-status-meta');
     importSelectedFile = null;
+    const fileInput = document.getElementById('import-file-input');
+    if (fileInput) fileInput.value = '';
     if (nameEl) nameEl.textContent = '';
     if (stepStrategy) stepStrategy.style.display = 'none';
     if (stepRun) stepRun.style.display = 'none';
@@ -3057,7 +3059,7 @@ export function viewerScript(): string {
       resetImportSteps();
       return;
     }
-    if (!file.name.endsWith('.json')) {
+    if (!file.name.toLowerCase().endsWith('.json')) {
       showToast('Please select a .json file.', 'error');
       resetImportSteps();
       return;
@@ -4707,7 +4709,7 @@ export function viewerScript(): string {
           viewerSettings.theme = themeValue;
         }
         persistViewerSettings();
-        applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: false, rerenderGrid: false });
+        applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: graphVisible, rerenderGrid: false });
         return;
       }
 
@@ -4718,7 +4720,7 @@ export function viewerScript(): string {
         viewerSettings = readSettingsFromForm();
         viewerSettings.theme_mode = mode;
         persistViewerSettings();
-        applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: false, rerenderGrid: false });
+        applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: graphVisible, rerenderGrid: false });
         return;
       }
     });

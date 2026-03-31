@@ -36,9 +36,7 @@ import {
   loadSourceTrustMap,
   getBrainPolicy,
   setBrainPolicy,
-  loadExplicitMemoryLinks,
   logChangelog,
-  parseJsonObject,
 } from './db.js';
 
 import {
@@ -450,7 +448,11 @@ export async function handleApiExport(env: Env, brainId: string): Promise<Respon
      FROM memories WHERE brain_id = ? ORDER BY created_at DESC LIMIT 50000`
   ).bind(brainId).all<Record<string, unknown>>();
 
-  const links = await loadExplicitMemoryLinks(env, brainId, 50000);
+  const linksRows = await env.DB.prepare(
+    `SELECT id, from_id, to_id, relation_type, label, created_at
+     FROM memory_links WHERE brain_id = ? ORDER BY created_at DESC LIMIT 50000`
+  ).bind(brainId).all<Record<string, unknown>>();
+  const links = linksRows.results;
 
   const changelog = await env.DB.prepare(
     `SELECT id, event_type, entity_type, entity_id, summary, payload, created_at
@@ -514,6 +516,8 @@ export async function handleApiExport(env: Env, brainId: string): Promise<Respon
       ...CORS_HEADERS,
       'Content-Type': 'application/json',
       'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store',
+      'Pragma': 'no-cache',
     },
   });
 }
@@ -569,6 +573,13 @@ export async function handleApiImport(request: Request, env: Env, brainId: strin
   const aliasesPayload = Array.isArray(data.memory_entity_aliases) ? data.memory_entity_aliases as Array<Record<string, unknown>> : [];
   const watchesPayload = Array.isArray(data.memory_watches) ? data.memory_watches as Array<Record<string, unknown>> : [];
 
+  // Validate payload has restorable content before destructive overwrite
+  if (strategy === 'overwrite' && memoriesPayload.length === 0) {
+    return new Response(JSON.stringify({ error: 'Overwrite import requires at least one memory in the payload. Aborting to prevent data loss.' }), {
+      status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
   const ts = now();
   const counts = { memories: 0, memory_links: 0, memory_changelog: 0, brain_source_trust: 0, memory_conflict_resolutions: 0, memory_entity_aliases: 0, memory_watches: 0, skipped: 0 };
   const restoredMemoryRows: Array<Record<string, unknown>> = [];
@@ -608,10 +619,11 @@ export async function handleApiImport(request: Request, env: Env, brainId: strin
       `INSERT INTO memories (id, brain_id, type, title, key, content, tags, source, confidence, importance, archived_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
-         brain_id = excluded.brain_id, type = excluded.type, title = excluded.title, key = excluded.key,
+         type = excluded.type, title = excluded.title, key = excluded.key,
          content = excluded.content, tags = excluded.tags, source = excluded.source,
          confidence = excluded.confidence, importance = excluded.importance,
-         archived_at = excluded.archived_at, created_at = excluded.created_at, updated_at = excluded.updated_at`
+         archived_at = excluded.archived_at, created_at = excluded.created_at, updated_at = excluded.updated_at
+       WHERE memories.brain_id = excluded.brain_id`
     ).bind(
       memoryId, brainId, type,
       typeof m.title === 'string' ? m.title : null,
@@ -624,7 +636,13 @@ export async function handleApiImport(request: Request, env: Env, brainId: strin
       archivedAt, createdAt, updatedAt
     ).run();
 
-    restoredMemoryRows.push({ id: memoryId, type, content, tags: typeof m.tags === 'string' ? m.tags : null });
+    restoredMemoryRows.push({
+      id: memoryId, type, content,
+      title: typeof m.title === 'string' ? m.title : null,
+      key: typeof m.key === 'string' ? m.key : null,
+      tags: typeof m.tags === 'string' ? m.tags : null,
+      source: typeof m.source === 'string' ? m.source : null,
+    });
     counts.memories++;
   }
 
@@ -653,8 +671,9 @@ export async function handleApiImport(request: Request, env: Env, brainId: strin
       `INSERT INTO memory_links (id, brain_id, from_id, to_id, relation_type, label, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
-         brain_id = excluded.brain_id, from_id = excluded.from_id, to_id = excluded.to_id,
-         relation_type = excluded.relation_type, label = excluded.label`
+         from_id = excluded.from_id, to_id = excluded.to_id,
+         relation_type = excluded.relation_type, label = excluded.label
+       WHERE memory_links.brain_id = excluded.brain_id`
     ).bind(
       linkId, brainId, fromId, toId,
       normalizeRelation(link.relation_type),
@@ -673,7 +692,7 @@ export async function handleApiImport(request: Request, env: Env, brainId: strin
     const entityId = typeof entry.entity_id === 'string' ? entry.entity_id : '';
     const summary = typeof entry.summary === 'string' ? entry.summary : '';
     if (!eventType || !entityType || !entityId || !summary) continue;
-    await env.DB.prepare(
+    const result = await env.DB.prepare(
       `INSERT OR IGNORE INTO memory_changelog (id, brain_id, event_type, entity_type, entity_id, summary, payload, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
@@ -681,7 +700,7 @@ export async function handleApiImport(request: Request, env: Env, brainId: strin
       typeof entry.payload === 'string' ? entry.payload : (entry.payload ? stableJson(entry.payload) : null),
       Math.floor(toFiniteNumber(entry.created_at, ts))
     ).run();
-    counts.memory_changelog++;
+    if (result.meta.changes > 0) counts.memory_changelog++;
   }
 
   for (const raw of sourceTrustPayload) {
@@ -810,6 +829,7 @@ export async function handleApiPurge(request: Request, env: Env, brainId: string
   await env.DB.prepare('DELETE FROM memory_watches WHERE brain_id = ?').bind(brainId).run();
   await env.DB.prepare('DELETE FROM brain_source_trust WHERE brain_id = ?').bind(brainId).run();
   await env.DB.prepare('DELETE FROM brain_snapshots WHERE brain_id = ?').bind(brainId).run();
+  await env.DB.prepare('DELETE FROM brain_policies WHERE brain_id = ?').bind(brainId).run();
   await env.DB.prepare('DELETE FROM memories WHERE brain_id = ?').bind(brainId).run();
 
   return new Response(JSON.stringify({ ok: true, purged: { memories: memoryCount, links: linkCount } }), {
