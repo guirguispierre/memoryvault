@@ -36,7 +36,7 @@
     "@hono/node-server": ">=1.19.10"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260329.1",
+    "@cloudflare/workers-types": "^4.20260519.1",
     "typescript": "^6.0.2",
     "wrangler": "^4.78.0"
   }
