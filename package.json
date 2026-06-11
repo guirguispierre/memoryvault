@@ -7,6 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "type-check": "tsc",
+    "test:crypto": "node --import ./tests/register-ts-loader.mjs --test tests/crypto.test.mjs",
     "smoke:oauth-isolation": "bash scripts/smoke_oauth_isolation.sh"
   },
   "keywords": [
