@@ -23,7 +23,7 @@ import {
   handleAuthorizationServerMetadata,
 } from './oauth.js';
 import { TOOLS } from './tools-schema.js';
-import { viewerHtml, viewerScript } from './viewer.js';
+import { viewerHtml, viewerScript } from './viewer/index.js';
 import {
   handleMcp,
   handleApiMemories,

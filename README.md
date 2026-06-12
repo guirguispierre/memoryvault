@@ -112,8 +112,8 @@ https://<your-worker>.<your-subdomain>.workers.dev/mcp
 | `src/vectorize.ts` | Semantic search and Vectorize integration |
 | `src/scoring.ts` | Dynamic confidence/importance scoring |
 | `src/tools-schema.ts` | MCP tool definitions and metadata |
-| `src/tools.ts` | MCP tool handler implementations |
-| `src/viewer.ts` | Web viewer UI (`/view`) |
+| `src/tools/` | MCP tool handlers, split by domain (memory, graph, knowledge, trust-policy, snapshots, objectives, observability) |
+| `src/viewer/` | Web viewer UI (`/view`), split into markup, styles, themes, and client script modules |
 | `src/routes.ts` | API and HTML route handlers |
 
 **Tech stack:** Cloudflare Workers, D1 (SQLite), Vectorize, Workers AI (`@cf/baai/bge-base-en-v1.5`), MCP SDK
