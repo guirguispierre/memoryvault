@@ -8,6 +8,9 @@
     "deploy": "wrangler deploy",
     "type-check": "tsc",
     "test:crypto": "node --import ./tests/register-ts-loader.mjs --test tests/crypto.test.mjs",
+    "test:isolation": "node --test tests/isolation.mjs",
+    "dev:isolation": "wrangler dev --config tests/wrangler.isolation.toml --port 8787 --persist-to .wrangler/isolation-state",
+    "db:isolation": "wrangler d1 execute ai-memory-test --local --file=schema.sql --config tests/wrangler.isolation.toml --persist-to .wrangler/isolation-state",
     "smoke:oauth-isolation": "bash scripts/smoke_oauth_isolation.sh"
   },
   "keywords": [

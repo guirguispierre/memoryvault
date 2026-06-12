@@ -22,3 +22,6 @@ jobs:
 
       - name: Type check
         run: npm run type-check
+
+      - name: Crypto unit tests
+        run: npm run test:crypto

@@ -1,0 +1,51 @@
+name: Tenant Isolation
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply schema to local D1
+        run: npm run db:isolation
+
+      - name: Boot local worker
+        run: |
+          npm run dev:isolation > wrangler-dev.log 2>&1 &
+          echo $! > wrangler.pid
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/mcp || true)
+            if [ "$code" = "401" ]; then
+              echo "worker ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "worker did not become ready" >&2
+          cat wrangler-dev.log >&2
+          exit 1
+
+      - name: Run isolation suite
+        run: BASE_URL=http://127.0.0.1:8787 npm run test:isolation
+
+      - name: Show worker log on failure
+        if: failure()
+        run: cat wrangler-dev.log
+
+      - name: Tear down worker
+        if: always()
+        run: kill "$(cat wrangler.pid)" 2>/dev/null || true
