@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="vanilla-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemoryVault — Open your index</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;1,9..144,420&family=Schibsted+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#181511; --ground-2:#201C16; --ground-3:#26211A;
+    --rule:#332C22; --rule-soft:#2A2419;
+    --cream:#F0E7D5; --cream-dim:#B5AB97; --cream-faint:#7E7666;
+    --butter:#E3C98F; --butter-deep:#A98F5C;
+    --disp:'Fraunces',Georgia,serif; --body:'Schibsted Grotesk',system-ui,sans-serif; --mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--body);color:var(--cream);display:flex;align-items:center;justify-content:center;
+    -webkit-font-smoothing:antialiased;
+    background:radial-gradient(820px 460px at 50% 6%,rgba(227,201,143,0.07),transparent 62%),var(--ground)}
+  .card{width:392px;background:var(--ground-2);border:1px solid var(--rule);border-radius:14px;
+    padding:36px 34px 28px;box-shadow:0 32px 80px rgba(0,0,0,0.5)}
+  .pour{display:flex;align-items:flex-end;gap:3px;height:20px;margin-bottom:22px}
+  .pour i{width:4px;border-radius:2px;background:var(--cream)}
+  .wm{font-family:var(--disp);font-weight:560;font-size:26px;margin-bottom:6px}
+  .wm em{font-style:italic;color:var(--butter)}
+  .lead{font-size:14px;line-height:1.5;color:var(--cream-dim);margin-bottom:24px}
+  .lbl{font-family:var(--mono);font-size:10px;letter-spacing:0.09em;text-transform:uppercase;color:var(--cream-faint);margin:15px 1px 6px}
+  .lbl:first-of-type{margin-top:0}
+  input{width:100%;background:var(--ground-3);border:1px solid var(--rule);border-radius:8px;color:var(--cream);
+    font-family:var(--body);font-size:14px;padding:11px 13px;outline:none;transition:.16s}
+  input::placeholder{color:var(--cream-faint)}
+  input:focus{border-color:var(--butter-deep);background:#2B251C}
+  .row{display:flex;gap:10px;margin-top:22px}
+  .btn{flex:1;font-family:var(--body);font-weight:600;font-size:13.5px;padding:12px;border-radius:8px;cursor:pointer;transition:.16s;border:1px solid var(--rule);background:transparent;color:var(--cream-dim)}
+  .btn.primary{background:var(--butter);border-color:var(--butter);color:#241c0d}
+  .btn.primary:hover{filter:brightness(1.05)}
+  .btn.secondary:hover{border-color:var(--butter-deep);color:var(--cream)}
+  .foot{margin-top:22px;padding-top:16px;border-top:1px solid var(--rule-soft);font-size:13px;color:var(--cream-faint);text-align:center}
+  .foot em{font-family:var(--disp);font-style:italic;color:var(--cream-dim)}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="pour"><i style="height:4px;opacity:.14"></i><i style="height:6px;opacity:.18"></i><i style="height:5px;opacity:.22"></i><i style="height:9px;opacity:.3"></i><i style="height:7px;opacity:.38"></i><i style="height:12px;opacity:.5"></i><i style="height:10px;opacity:.6"></i><i style="height:15px;opacity:.74"></i><i style="height:18px;opacity:.88"></i><i style="height:20px;opacity:1"></i></div>
+    <div class="wm">Memory<em>Vault</em></div>
+    <div class="lead">Open your index — a second brain you host yourself.</div>
+
+    <div class="lbl">Email</div>
+    <input type="email" placeholder="you@example.com">
+    <div class="lbl">Password</div>
+    <input type="password" placeholder="••••••••••••">
+    <div class="lbl">Brain name — for a new account</div>
+    <input type="text" placeholder="e.g. Pierre’s index">
+
+    <div class="row"><button class="btn primary">Open index</button><button class="btn secondary">Create account</button></div>
+    <div class="foot">Connecting an agent? <em>Use a bearer token instead.</em></div>
+  </div>
+</body>
+</html>

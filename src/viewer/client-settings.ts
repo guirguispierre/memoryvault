@@ -44,8 +44,8 @@ export const clientSettings = `  function fillSettingsForm() {
 
   function readSettingsFromForm() {
     const raw = {
-      theme: document.querySelector('#theme-picker .theme-swatch.active')?.dataset?.themeValue || viewerSettings?.theme || 'cyberpunk',
-      light_theme: document.querySelector('#light-theme-picker .theme-swatch.active')?.dataset?.themeValue || viewerSettings?.light_theme || 'cyberpunk',
+      theme: document.querySelector('#theme-picker .theme-swatch.active')?.dataset?.themeValue || viewerSettings?.theme || 'vanilla',
+      light_theme: document.querySelector('#light-theme-picker .theme-swatch.active')?.dataset?.themeValue || viewerSettings?.light_theme || 'vanilla',
       theme_mode: document.querySelector('.theme-mode-btn.active')?.dataset?.mode || viewerSettings?.theme_mode || 'auto',
       live_poll_enabled: document.getElementById('settings-live-poll-enabled')?.checked !== false,
       live_poll_interval_sec: Number(document.getElementById('settings-live-poll-interval')?.value ?? 10),
@@ -173,7 +173,7 @@ export const clientSettings = `  function fillSettingsForm() {
     } catch (err) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to load changelog.';
       subtitle.textContent = 'Unable to load release notes.';
-      list.innerHTML = '<div class="setting-help" style="color:var(--red)">' + esc(message) + '</div>';
+      list.innerHTML = '<div class="setting-help" style="color:var(--clay)">' + esc(message) + '</div>';
     }
   }
 
@@ -204,11 +204,11 @@ export const clientSettings = `  function fillSettingsForm() {
   }
 
   function syncThemePicker() {
-    const darkTheme = viewerSettings?.theme || 'cyberpunk';
+    const darkTheme = viewerSettings?.theme || 'vanilla';
     document.querySelectorAll('#theme-picker .theme-swatch').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.themeValue === darkTheme);
     });
-    const lightTheme = viewerSettings?.light_theme || 'cyberpunk';
+    const lightTheme = viewerSettings?.light_theme || 'vanilla';
     document.querySelectorAll('#light-theme-picker .theme-swatch').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.themeValue === lightTheme);
     });
@@ -254,8 +254,8 @@ export const clientSettings = `  function fillSettingsForm() {
       const connEl = document.getElementById('expand-connections');
       if (connEl) {
         const note = document.createElement('div');
-        note.style.cssText = 'font-size:0.65rem;color:var(--text-dim);letter-spacing:0.1em;margin-top:0.5rem';
-        note.textContent = '⚠ Linked memory not visible in current filter.';
+        note.style.cssText = 'font-size:12px;color:var(--cream-faint);margin-top:0.5rem';
+        note.textContent = 'That linked memory is not visible in the current filter.';
         const existing = connEl.querySelector('.connections-section');
         if (existing) {
           existing.appendChild(note);
@@ -439,7 +439,7 @@ export const clientSettings = `  function fillSettingsForm() {
     if (legendEl) legendEl.innerHTML = '';
 
     const svg = document.getElementById('graph-svg');
-    svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--amber);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">LOADING GRAPH...</text>';
+    svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--cream-faint);font-family:var(--mono);font-size:12px;letter-spacing:0.06em">Loading graph…</text>';
 
     try {
       const r = await apiFetch(BASE + '/api/graph');
@@ -459,7 +459,7 @@ export const clientSettings = `  function fillSettingsForm() {
       rerenderGraphFromCache();
       showToast('Graph loaded: ' + lastGraphData.nodes.length + ' nodes.', 'success');
     } catch(e) {
-      document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--red);font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em">ERROR LOADING GRAPH</text>';
+      document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--clay);font-family:var(--mono);font-size:12px;letter-spacing:0.06em">The graph could not load — try again.</text>';
       showToast('Graph load failed.', 'error');
     }
   }

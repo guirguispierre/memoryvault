@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="vanilla-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemoryVault — Vanilla</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,420;9..144,560;9..144,640&family=Schibsted+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#181511;        /* dark espresso, warm brown undertone */
+    --ground-2:#201C16;
+    --ground-3:#26211A;
+    --rule:#332C22; --rule-soft:#2A2419;
+    --cream:#F0E7D5;         /* vanilla ink */
+    --cream-dim:#B5AB97;
+    --cream-faint:#7E7666;
+    --butter:#E3C98F;        /* the single accent — vanilla custard */
+    --butter-deep:#A98F5C;
+    --latte:#8C8170;         /* dormant tier */
+    --sage:#9DB39A;          /* verified — quiet, off the vanilla axis */
+    --disp:'Fraunces',Georgia,serif;
+    --body:'Schibsted Grotesk',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--ground);color:var(--cream)}
+  body{font-family:var(--body);-webkit-font-smoothing:antialiased;min-height:100vh;
+    background:
+      radial-gradient(1000px 460px at 50% -12%, rgba(227,201,143,0.06), transparent 62%),
+      var(--ground);}
+
+  /* header */
+  .top{display:flex;align-items:center;gap:26px;padding:20px 40px;border-bottom:1px solid var(--rule)}
+  .wm{font-family:var(--disp);font-weight:560;font-size:21px;letter-spacing:0.005em;color:var(--cream)}
+  .wm em{font-style:italic;color:var(--butter)}
+  .wm .sub{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;color:var(--cream-faint);margin-left:12px;text-transform:uppercase}
+  .search{flex:1;max-width:500px;position:relative}
+  .search input{width:100%;background:var(--ground-3);border:1px solid var(--rule);border-radius:9px;
+    color:var(--cream);font-family:var(--body);font-size:13.5px;padding:11px 13px 11px 36px;outline:none;transition:.18s}
+  .search input::placeholder{color:var(--cream-faint)}
+  .search input:focus{border-color:var(--butter-deep);background:#2B251C}
+  .search .mag{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--cream-faint)}
+  .right{margin-left:auto;display:flex;align-items:center;gap:18px}
+  .seg{display:flex;border:1px solid var(--rule);border-radius:9px;overflow:hidden;background:var(--ground-2)}
+  .seg button{font-family:var(--body);font-weight:500;font-size:12.5px;color:var(--cream-dim);background:transparent;border:none;padding:8px 14px;cursor:pointer;transition:.14s}
+  .seg button + button{border-left:1px solid var(--rule-soft)}
+  .seg button.on{background:var(--butter);color:#241c0d;font-weight:600}
+  .lock{font-family:var(--mono);font-size:11px;letter-spacing:0.06em;color:var(--cream-faint);background:none;border:none;cursor:pointer}
+  .lock:hover{color:var(--butter)}
+
+  /* the pour — vanilla activity seam */
+  .pour{position:relative;padding:16px 40px 14px;border-bottom:1px solid var(--rule);
+    background:linear-gradient(180deg,rgba(227,201,143,0.045),transparent 80%)}
+  .pour .cap{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+  .pour .cap .l{font-family:var(--disp);font-style:italic;font-weight:420;font-size:14px;color:var(--cream-dim)}
+  .pour .cap .l b{font-style:normal;font-weight:560;color:var(--cream)}
+  .pour .cap .r{font-family:var(--mono);font-size:10px;letter-spacing:0.05em;color:var(--cream-faint)}
+  .ticks{display:flex;align-items:flex-end;gap:3px;height:40px}
+  .ticks i{flex:1;min-width:2px;border-radius:2px 2px 0 0;background:var(--cream)}
+
+  /* list */
+  .list{padding:6px 40px 60px;max-width:980px}
+  .group{display:flex;align-items:baseline;gap:14px;margin:26px 2px 4px}
+  .group .t{font-family:var(--disp);font-style:italic;font-weight:420;font-size:16px;color:var(--butter)}
+  .group .ln{flex:1;height:1px;background:var(--rule-soft);transform:translateY(-4px)}
+  .group .n{font-family:var(--mono);font-size:10px;color:var(--cream-faint)}
+
+  .row{display:grid;grid-template-columns:16px 1fr auto;gap:15px;align-items:start;
+    padding:16px;border:1px solid transparent;border-radius:11px;transition:.15s}
+  .row:hover{background:var(--ground-2);border-color:var(--rule)}
+  .bead{width:9px;height:9px;border-radius:50%;margin-top:6px}
+  .bead.full{background:var(--butter)}
+  .bead.half{background:var(--butter-deep)}
+  .bead.ring{background:transparent;border:1.5px solid var(--latte)}
+  .ttl{font-family:var(--disp);font-weight:560;font-size:16.5px;letter-spacing:0.002em;margin-bottom:4px;display:flex;align-items:baseline;gap:10px;color:var(--cream)}
+  .kind{font-family:var(--mono);font-size:9.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--cream-faint)}
+  .ver{font-family:var(--mono);font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--sage);border:1px solid rgba(157,179,154,0.35);border-radius:4px;padding:1px 6px;transform:translateY(-1px)}
+  .txt{font-size:14px;line-height:1.55;color:var(--cream-dim);max-width:64ch}
+  .ledger .k{font-family:var(--mono);font-size:12.5px;color:var(--butter-deep)}
+  .ledger .a{color:var(--cream-faint);margin:0 7px}
+  .ledger .v{font-size:14.5px;color:var(--cream-dim)}
+  .meta{display:flex;flex-direction:column;align-items:flex-end;gap:7px;white-space:nowrap;padding-top:2px}
+  .acc{font-family:var(--mono);font-size:10.5px;color:var(--cream-faint)}
+  .strength{display:flex;align-items:center;gap:6px}
+  .strength .lab{font-family:var(--mono);font-size:9px;letter-spacing:0.07em;text-transform:uppercase;color:var(--cream-faint)}
+  .strength .bar{width:54px;height:4px;border-radius:2px;background:var(--ground-3);border:1px solid var(--rule);overflow:hidden}
+  .strength .bar i{display:block;height:100%;background:var(--butter)}
+  .links{font-family:var(--mono);font-size:10.5px;color:var(--sage)}
+  .row.dim .strength .bar i{background:var(--latte)}
+  .row.dim .ttl{color:var(--cream-dim)}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="wm">Memory<em>Vault</em><span class="sub">your index</span></div>
+    <div class="search">
+      <svg class="mag" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <input placeholder="recall a memory — text, key, or meaning…">
+    </div>
+    <div class="right">
+      <div class="seg"><button class="on">All</button><button>Notes</button><button>Facts</button><button>Journal</button><button>Graph</button></div>
+      <button class="lock">lock</button>
+    </div>
+  </div>
+
+  <div class="pour">
+    <div class="cap"><span class="l">Recall, <b>last 24 hours</b></span><span class="r">247 entries · 1,084 links · synced 14:02</span></div>
+    <div class="ticks" id="ticks"></div>
+  </div>
+
+  <div class="list">
+    <div class="group"><span class="t">Active</span><span class="ln"></span><span class="n">reinforced this week</span></div>
+
+    <div class="row">
+      <div class="bead full"></div>
+      <div>
+        <div class="ttl">Shipped the isolation suite <span class="kind">journal</span></div>
+        <div class="txt">19 of 19 green against a live worker. Crypto comparisons are constant-time and the JWT algorithm is pinned — the vibe-coded worry is behind us.</div>
+      </div>
+      <div class="meta"><span class="acc">MV·0247 · 14:02</span><span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:88%"></i></span></span><span class="links">↳ 4 linked</span></div>
+    </div>
+
+    <div class="row">
+      <div class="bead full"></div>
+      <div>
+        <div class="ttl">project.license <span class="kind">fact</span><span class="ver">verified</span></div>
+        <div class="ledger"><span class="k">project.license</span><span class="a">→</span><span class="v">MIT — fully open, graph features not paywalled.</span></div>
+      </div>
+      <div class="meta"><span class="acc">MV·0231 · 09:41</span><span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:95%"></i></span></span><span class="links">↳ 2 linked</span></div>
+    </div>
+
+    <div class="group"><span class="t">Settling</span><span class="ln"></span><span class="n">quiet for a few days</span></div>
+
+    <div class="row">
+      <div class="bead half"></div>
+      <div>
+        <div class="ttl">Prefers terse, direct answers <span class="kind">note</span></div>
+        <div class="txt">Dislikes filler openers; wants pushback when an idea is weak rather than agreement.</div>
+      </div>
+      <div class="meta"><span class="acc">MV·0198 · Mon</span><span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:62%"></i></span></span><span class="links">↳ 6 linked</span></div>
+    </div>
+
+    <div class="row">
+      <div class="bead half"></div>
+      <div>
+        <div class="ttl">user.timezone <span class="kind">fact</span><span class="ver">verified</span></div>
+        <div class="ledger"><span class="k">user.timezone</span><span class="a">→</span><span class="v">Europe/Lisbon (WET / WEST)</span></div>
+      </div>
+      <div class="meta"><span class="acc">MV·0177 · Sun</span><span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:55%"></i></span></span><span class="links">↳ 1 linked</span></div>
+    </div>
+
+    <div class="group"><span class="t">Resting</span><span class="ln"></span><span class="n">fading — review soon</span></div>
+
+    <div class="row dim">
+      <div class="bead ring"></div>
+      <div>
+        <div class="ttl">Launch around the security story <span class="kind">note</span></div>
+        <div class="txt">“A memory layer you actually own,” aimed at developers self-hosting on Cloudflare.</div>
+      </div>
+      <div class="meta"><span class="acc">MV·0150 · Jun 4</span><span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:30%"></i></span></span><span class="links">↳ 5 linked</span></div>
+    </div>
+
+    <div class="row dim">
+      <div class="bead ring"></div>
+      <div>
+        <div class="ttl">Early benchmark idea: LoCoMo <span class="kind">note</span></div>
+        <div class="txt">Run LongMemEval + LoCoMo and publish the numbers — required to be visible in comparisons.</div>
+      </div>
+      <div class="meta"><span class="acc">MV·0092 · May 21</span><span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:16%"></i></span></span><span class="links">↳ 2 linked</span></div>
+    </div>
+  </div>
+
+<script>
+  // the pour: cream ticks, brighter and taller toward "now" on the right
+  const ticks=document.getElementById('ticks');const N=52;
+  for(let i=0;i<N;i++){
+    const t=i/(N-1);
+    const active=Math.random()<(0.12+t*0.5);
+    const el=document.createElement('i');
+    el.style.height=(active?(14+Math.random()*24*(0.4+t)):3+Math.random()*4).toFixed(0)+'px';
+    el.style.opacity=active?(0.18+t*0.78).toFixed(2):'0.10';
+    ticks.appendChild(el);
+  }
+</script>
+</body>
+</html>
