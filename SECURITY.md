@@ -19,7 +19,9 @@ same deployment trying to read or modify another tenant's data.
 - **Token forgery.** Access tokens are HS256 JWTs signed with `AUTH_SECRET`.
   Verification pins the algorithm (`alg: HS256`, `typ: JWT` — anything else,
   including `alg: none`, is rejected before any signature work) and compares
-  signatures in constant time.
+  signatures in constant time. Both mitigations are enforced by
+  `tests/crypto.test.mjs` (tampered headers, flipped signature bits, foreign
+  secrets, expired and claim-stripped tokens).
 - **SQL injection.** All SQL uses `?` placeholders with bound parameters.
   The only string interpolation in SQL is generated placeholder lists for
   `IN (...)` clauses.
@@ -34,7 +36,11 @@ same deployment trying to read or modify another tenant's data.
   (S256 only; `plain` is rejected), redirect-URI domain allowlisting, and
   admin-gated client registration.
 - **Brute-force login.** Per-IP rate limiting on the auth endpoints
-  (10 attempts per 15 minutes).
+  (10 attempts per 15 minutes), keyed on the Cloudflare-set
+  `CF-Connecting-IP` header (not client-spoofable behind Cloudflare). The
+  isolation suite proves the limiter fires at the configured budget. It is
+  per-IP, not per-account: a distributed attacker is not throttled per
+  target account.
 
 **Out of scope (not defended against — own these yourself):**
 
@@ -67,14 +73,28 @@ same deployment trying to read or modify another tenant's data.
    `memory_conflict_resolutions`, `memory_entity_aliases`, or
    `memory_watches` carries a `WHERE brain_id = ?` predicate bound to that
    resolved value.
-4. Semantic search is namespaced per brain in Vectorize, so vector hits
-   cannot cross brains either.
+4. Semantic search has three layers: the Vectorize query is namespaced to
+   the caller's brain, any returned match whose metadata names a different
+   brain is dropped, and the surviving ids are re-fetched from D1 with a
+   `brain_id = ?` predicate. A foreign vector would have to defeat all
+   three to surface.
 
-The enforcement mechanism is the black-box isolation suite
-(`tests/isolation.mjs`, run in CI by `.github/workflows/isolation.yml`
-against a real worker and real D1 — no mocks). Every memory-touching tool
-and REST endpoint has a cross-tenant attack case; adding a tool without one
-is a release blocker. See [tests/README.md](./tests/README.md).
+Enforcement is test-backed on both retrieval paths:
+
+- **Lexical path:** the black-box isolation suite (`tests/isolation.mjs`,
+  19 cases, run in CI by `.github/workflows/isolation.yml` against a real
+  worker and real D1 — no mocks). Every memory-touching tool and REST
+  endpoint has a cross-tenant attack case; adding a tool without one is a
+  release blocker.
+- **Semantic path:** the namespace and metadata-filter layers are pure
+  functions covered by `tests/vectorize.test.mjs`, and
+  `tests/vectorize.integration.mjs` runs a live cross-tenant semantic
+  search against a deployed worker with real bindings. Honest caveat: the
+  integration test is credential-gated and does not run in CI, so the
+  semantic path is currently verified by unit tests and code inspection
+  rather than a continuous live run.
+
+See [tests/README.md](./tests/README.md).
 
 ## Authentication summary
 
