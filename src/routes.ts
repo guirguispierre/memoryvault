@@ -11,6 +11,7 @@ import {
 import {
   SERVER_NAME,
   SERVER_VERSION,
+  MCP_SSE_KEEPALIVE_INTERVAL_MS,
 } from './constants.js';
 
 import {
@@ -138,7 +139,7 @@ export async function handleMcp(request: Request, env: Env, url: URL, authCtx: A
         } catch {
           clearInterval(interval);
         }
-      }, 15000);
+      }, MCP_SSE_KEEPALIVE_INTERVAL_MS);
     })();
 
     return new Response(readable, {
