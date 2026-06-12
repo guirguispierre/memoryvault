@@ -367,7 +367,7 @@ export function buildSemanticQueryOptions(
   };
 }
 
-// Second isolation layer, also pure for testability: any match whose
+// Second isolation layer, also pure for testability. Every match whose
 // metadata names a different brain is dropped before the brain-scoped D1
 // re-fetch (the third layer) ever sees its id.
 export function filterSemanticMatches(
