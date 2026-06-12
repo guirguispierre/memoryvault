@@ -290,6 +290,24 @@ test("/api/graph only contains the caller's brain", async () => {
   assert.ok(bobRes.text.includes(bobMemA), "Bob's graph must contain his own nodes");
 });
 
+test('auth rate limiter fires after the configured attempt budget', async () => {
+  // The worker keys the limiter on this header verbatim, so a per-run value
+  // guarantees this case neither inherits stale counters from earlier runs
+  // (15-minute TTL) nor pollutes the signup counters used elsewhere.
+  const ip = `rate-limit-probe-${runId}`;
+  const attempt = () => fetch(`${BASE_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
+    body: JSON.stringify({ email: alice.email, password: 'definitely-wrong-password' }),
+  });
+  for (let i = 1; i <= 10; i++) {
+    const res = await attempt();
+    assert.equal(res.status, 401, `attempt ${i} should be rejected as bad credentials, got ${res.status}`);
+  }
+  const throttled = await attempt();
+  assert.equal(throttled.status, 429, `attempt 11 should be rate limited, got ${throttled.status}`);
+});
+
 test('final cross-check: nothing leaked into either brain', async () => {
   await assertBobIntact();
   const aliceSearch = await api(alice, `/api/memories?search=${encodeURIComponent(bobSecret)}&limit=50`);
