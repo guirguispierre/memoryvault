@@ -66,6 +66,15 @@ Without `VECTORIZE_TEST_URL` it prints a skip message and exits 0, so
 credential-less local/CI runs never fail. It creates two throwaway accounts
 on the target worker (same pattern as `scripts/smoke_oauth_isolation.sh`).
 
+To stand up a throwaway worker for this run, copy
+`tests/wrangler.vec-iso.example.toml` to `tests/wrangler.vec-iso.toml`
+(gitignored) and follow the provisioning commands in its header: create the
+D1 database, the 768-dim cosine Vectorize index, and a KV namespace; set
+`AUTH_SECRET` as a secret; apply `schema.sql` with `--remote`; deploy; run
+the test against the printed URL; then delete the worker, index, and
+database. After a green run, update the semantic-path caveat in
+`SECURITY.md` with the run date.
+
 ## Tenant-isolation suite (`isolation.mjs`)
 
 Black-box HTTP suite against a real worker — real auth path, real D1, no

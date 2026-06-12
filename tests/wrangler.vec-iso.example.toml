@@ -1,0 +1,36 @@
+# Template for the one-off live semantic-isolation run (see tests/README.md).
+# Copy to tests/wrangler.vec-iso.toml, paste your ids, then:
+#   npx wrangler d1 create memoryvault-vec-iso
+#   npx wrangler vectorize create memoryvault-vec-iso-index --dimensions=768 --metric=cosine
+#   npx wrangler kv namespace create RATE_LIMIT_KV          # if you need a fresh KV id
+#   npx wrangler secret put AUTH_SECRET --config tests/wrangler.vec-iso.toml
+#   npx wrangler d1 execute memoryvault-vec-iso --remote --file=schema.sql --config tests/wrangler.vec-iso.toml
+#   npx wrangler deploy --config tests/wrangler.vec-iso.toml
+#   VECTORIZE_TEST_URL=<deployed url> npm run test:vectorize:integration
+# Tear down afterwards: wrangler delete (same --config), vectorize delete, d1 delete.
+#
+# The filled-in copy is gitignored: it carries account-specific resource ids.
+# 768 dimensions matches EMBEDDING_MODEL (@cf/baai/bge-base-en-v1.5) in src/constants.ts.
+name = "memoryvault-vec-iso"
+main = "../src/index.ts"
+compatibility_date = "2026-03-05"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+OAUTH_REDIRECT_DOMAIN_ALLOWLIST = "localhost,127.0.0.1"
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "MEMORY_INDEX"
+index_name = "memoryvault-vec-iso-index"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "memoryvault-vec-iso"
+database_id = "PASTE_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "PASTE_KV_NAMESPACE_ID"
