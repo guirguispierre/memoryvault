@@ -3,6 +3,9 @@ import type { McpResult } from './shared.js';
 import { memoryTools } from './memory.js';
 import { graphTools } from './graph.js';
 import { knowledgeTools } from './knowledge.js';
+import { conflictTools } from './conflicts.js';
+import { entityTools } from './entities.js';
+import { reviewTools } from './review.js';
 import { trustPolicyTools } from './trust-policy.js';
 import { snapshotTools } from './snapshots.js';
 import { objectiveTools } from './objectives.js';
@@ -15,6 +18,9 @@ const domains = [
   memoryTools,
   graphTools,
   knowledgeTools,
+  conflictTools,
+  entityTools,
+  reviewTools,
   trustPolicyTools,
   snapshotTools,
   objectiveTools,
