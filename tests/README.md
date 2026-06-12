@@ -34,6 +34,38 @@ No build step: `register-ts-loader.mjs` rewrites the sources' `./x.js`
 specifiers to `./x.ts` and Node's native type stripping does the rest
 (requires Node 22.18+).
 
+## Vectorize unit tests (`vectorize.test.mjs`)
+
+Pure-function tests for the semantic-search isolation layers in
+`src/vectorize.ts`:
+
+- vector ids are prefixed, 64-byte bounded, and brain-salted in the digest
+  fallback;
+- `buildSemanticQueryOptions` always namespaces the Vectorize query to the
+  caller's `brainId`;
+- `filterSemanticMatches` drops any match whose metadata names a different
+  brain before the (brain-scoped) D1 re-fetch sees its id.
+
+```bash
+npm run test:vectorize
+```
+
+## Semantic-path integration test (`vectorize.integration.mjs`)
+
+The local isolation suite proves the **lexical** path only, because the test
+worker has no AI/Vectorize bindings. This script proves the **semantic**
+path live: Bob saves a memory, waits until his own semantic search returns
+it, then Alice runs the same semantic and hybrid queries and must get
+nothing of Bob's back.
+
+```bash
+VECTORIZE_TEST_URL=https://<worker-with-bindings>.workers.dev npm run test:vectorize:integration
+```
+
+Without `VECTORIZE_TEST_URL` it prints a skip message and exits 0, so
+credential-less local/CI runs never fail. It creates two throwaway accounts
+on the target worker (same pattern as `scripts/smoke_oauth_isolation.sh`).
+
 ## Tenant-isolation suite (`isolation.mjs`)
 
 Black-box HTTP suite against a real worker — real auth path, real D1, no

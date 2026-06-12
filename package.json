@@ -3,8 +3,10 @@
   "version": "1.11.0",
   "description": "MemoryVault MCP server on Cloudflare Workers + D1 with OAuth and graph-based memory tools.",
   "scripts": {
-    "test": "npm run type-check && npm run test:crypto",
+    "test": "npm run type-check && npm run test:crypto && npm run test:vectorize",
     "test:all": "npm test && npm run test:isolation",
+    "test:vectorize": "node --import ./tests/register-ts-loader.mjs --test tests/vectorize.test.mjs",
+    "test:vectorize:integration": "node tests/vectorize.integration.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "type-check": "tsc",
