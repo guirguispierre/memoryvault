@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+let cryptoModule;
+try {
+  cryptoModule = await import('../src/crypto.ts');
+} catch (err) {
+  if (err?.code === 'ERR_MODULE_NOT_FOUND' || err?.code === 'ERR_UNKNOWN_FILE_EXTENSION') {
+    console.error(
+      'This suite imports TypeScript sources directly. Run it via `npm run test:crypto` '
+      + '(which registers tests/ts-loader.mjs; requires Node 22.18+), not bare `node --test`.'
+    );
+  }
+  throw err;
+}
+
 const {
   hashPassword,
   verifyPassword,
@@ -8,7 +21,7 @@ const {
   verifyAccessToken,
   bytesToBase64Url,
   base64UrlToBytes,
-} = await import('../src/crypto.ts');
+} = cryptoModule;
 
 const SECRET = 'test-secret-for-crypto-suite';
 const OTHER_SECRET = 'a-completely-different-secret';

@@ -1,5 +1,26 @@
 # Tests
 
+## Running everything
+
+```bash
+npm test                    # type-check + unit suites; no worker or credentials needed
+npm run test:all            # the above, then the live isolation suite
+```
+
+`test:all` requires a booted worker first: `npm run db:isolation` once, then
+`npm run dev:isolation`, then run `test:all` (or
+`BASE_URL=http://127.0.0.1:8787 npm run test:isolation` on its own) in another
+terminal.
+
+## Always use the npm scripts for the unit suites
+
+The unit suites import the TypeScript sources directly. The npm scripts
+register `tests/ts-loader.mjs` (rewriting the sources' `./x.js` specifiers to
+`./x.ts`) and rely on Node's native type stripping, which needs **Node
+22.18+**. Bare `node --test tests/crypto.test.mjs` skips the loader and fails
+with `ERR_MODULE_NOT_FOUND` / `ERR_UNKNOWN_FILE_EXTENSION`; the suites print a
+pointer to the right command when that happens.
+
 ## Crypto unit tests (`crypto.test.mjs`)
 
 Exercises `src/crypto.ts` directly (password hashing round-trips, JWT
