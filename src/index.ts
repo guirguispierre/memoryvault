@@ -23,13 +23,16 @@ import {
   handleAuthorizationServerMetadata,
 } from './oauth.js';
 import { TOOLS } from './tools-schema.js';
-import { viewerHtml, viewerScript } from './viewer.js';
+import { viewerHtml, viewerScript } from './viewer/index.js';
 import {
   handleMcp,
   handleApiMemories,
   handleApiLinks,
   handleApiGraph,
   handleApiTools,
+  handleApiExport,
+  handleApiImport,
+  handleApiPurge,
   rootLandingHtml,
   mcpLandingHtml,
   endpointGuideForPath,
@@ -176,6 +179,25 @@ export default {
         const authCtx = await authRequestWithOAuth(request, env);
         if (!authCtx) return unauthorized(url);
         return handleApiTools(authCtx);
+      }
+
+      if (url.pathname === '/api/export') {
+        if (request.method !== 'GET') return corsJsonResponse({ error: 'Method not allowed' }, 405);
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiExport(env, authCtx.brainId);
+      }
+
+      if (url.pathname === '/api/import') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiImport(request, env, authCtx.brainId);
+      }
+
+      if (url.pathname === '/api/purge') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiPurge(request, env, authCtx.brainId);
       }
 
       if (url.pathname === '/mcp') {

@@ -1,0 +1,22 @@
+# Test-only config for the black-box isolation suite. No AI / Vectorize
+# bindings: search degrades to lexical, which is all the suite needs, and the
+# worker runs fully local with no Cloudflare credentials. Secrets here are
+# throwaway values for the local test worker only.
+name = "memoryvault-isolation-test"
+main = "../src/index.ts"
+compatibility_date = "2026-03-05"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+AUTH_SECRET = "isolation-test-secret-do-not-use-in-production"
+ADMIN_TOKEN = "isolation-test-admin-token"
+OAUTH_REDIRECT_DOMAIN_ALLOWLIST = "localhost,127.0.0.1"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-memory-test"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "00000000000000000000000000000000"

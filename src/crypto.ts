@@ -55,13 +55,24 @@ export async function hashPassword(password: string): Promise<string> {
   return `pbkdf2_sha256$${PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${hash}`;
 }
 
+// XOR-accumulates across all bytes so comparison time does not depend on
+// where the first mismatch occurs (timing side-channel hardening).
+function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [algo, iterRaw, saltRaw, hashRaw] = stored.split('$');
   if (algo !== 'pbkdf2_sha256' || !iterRaw || !saltRaw || !hashRaw) return false;
   const iterations = Number(iterRaw);
   if (!Number.isFinite(iterations) || iterations < 10_000) return false;
   const recomputed = await derivePasswordHash(password, base64UrlToBytes(saltRaw), iterations);
-  return recomputed === hashRaw;
+  return constantTimeEqual(new TextEncoder().encode(recomputed), new TextEncoder().encode(hashRaw));
 }
 
 export function randomToken(size = 32): string {
@@ -95,6 +106,11 @@ export async function verifyAccessToken(token: string, secret: string): Promise<
   const [headerPart, payloadPart, sigPart] = token.split('.');
   if (!headerPart || !payloadPart || !sigPart) return null;
   try {
+    // Pin the algorithm before any signature work so a tampered header
+    // (alg: none / alg confusion) can never influence verification.
+    const headerJson = new TextDecoder().decode(base64UrlToBytes(headerPart));
+    const header = JSON.parse(headerJson) as { alg?: unknown; typ?: unknown };
+    if (header.alg !== 'HS256' || header.typ !== 'JWT') return null;
     const payloadJson = new TextDecoder().decode(base64UrlToBytes(payloadPart));
     const payload = JSON.parse(payloadJson) as Partial<AccessTokenPayload>;
     if (payload.typ !== 'access' || typeof payload.sub !== 'string' || typeof payload.bid !== 'string' || typeof payload.sid !== 'string') {
@@ -104,10 +120,7 @@ export async function verifyAccessToken(token: string, secret: string): Promise<
     if (payload.exp < now()) return null;
     const expectedSig = await hmacSha256(secret, `${headerPart}.${payloadPart}`);
     const givenSig = base64UrlToBytes(sigPart);
-    if (expectedSig.length !== givenSig.length) return null;
-    for (let i = 0; i < expectedSig.length; i++) {
-      if (expectedSig[i] !== givenSig[i]) return null;
-    }
+    if (!constantTimeEqual(expectedSig, givenSig)) return null;
     return payload as AccessTokenPayload;
   } catch {
     return null;

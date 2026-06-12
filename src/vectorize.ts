@@ -353,26 +353,28 @@ export async function safeDeleteMemoryVectors(env: Env, brainId: string, memoryI
   }
 }
 
-export async function querySemanticMemoryCandidates(
-  env: Env,
+// Pure so tests can prove the query is always namespaced to the caller's
+// brain: the namespace is the first isolation layer for vector search.
+export function buildSemanticQueryOptions(
   brainId: string,
-  query: string,
-  topK: number,
-  minScore: number
-): Promise<SemanticMemoryCandidate[]> {
-  if (!hasSemanticSearchBindings(env)) return [];
-  const [queryEmbedding] = await embedTexts(env, [query.trim()]);
-  if (!queryEmbedding) return [];
-  const matches = await env.MEMORY_INDEX.query(queryEmbedding, {
+  topK: number
+): { topK: number; namespace: string; returnMetadata: 'all'; returnValues: false } {
+  return {
     topK: Math.min(Math.max(topK, 1), VECTORIZE_QUERY_TOP_K_MAX),
     namespace: brainId,
     returnMetadata: 'all',
     returnValues: false,
-  });
-  const matchesAny = matches as unknown as { matches?: unknown[]; results?: unknown[] };
-  const matchesArray = Array.isArray(matchesAny.matches)
-    ? matchesAny.matches
-    : (Array.isArray(matchesAny.results) ? matchesAny.results : []);
+  };
+}
+
+// Second isolation layer, also pure for testability. Every match whose
+// metadata names a different brain is dropped before the brain-scoped D1
+// re-fetch (the third layer) ever sees its id.
+export function filterSemanticMatches(
+  matchesArray: unknown[],
+  brainId: string,
+  minScore: number
+): SemanticMemoryCandidate[] {
   const deduped = new Map<string, SemanticMemoryCandidate>();
   let rank = 0;
   for (const rawMatch of matchesArray) {
@@ -415,6 +417,23 @@ export async function querySemanticMemoryCandidates(
   });
 }
 
+export async function querySemanticMemoryCandidates(
+  env: Env,
+  brainId: string,
+  query: string,
+  topK: number,
+  minScore: number
+): Promise<SemanticMemoryCandidate[]> {
+  if (!hasSemanticSearchBindings(env)) return [];
+  const [queryEmbedding] = await embedTexts(env, [query.trim()]);
+  if (!queryEmbedding) return [];
+  const matches = await env.MEMORY_INDEX.query(queryEmbedding, buildSemanticQueryOptions(brainId, topK));
+  const matchesAny = matches as unknown as { matches?: unknown[]; results?: unknown[] };
+  const matchesArray = Array.isArray(matchesAny.matches)
+    ? matchesAny.matches
+    : (Array.isArray(matchesAny.results) ? matchesAny.results : []);
+  return filterSemanticMatches(matchesArray, brainId, minScore);
+}
 
 export function fuseSearchRows(
   mode: MemorySearchMode,
