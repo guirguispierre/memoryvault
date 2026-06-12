@@ -58,7 +58,7 @@ import {
 
 import {
   callTool,
-} from './tools.js';
+} from './tools/index.js';
 
 export async function processMcpBody(
   body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
