@@ -47,7 +47,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     clearLoginError();
     const val = document.getElementById('token-input').value.trim();
     if (!val) {
-      setLoginError('⚠ ENTER A TOKEN');
+      setLoginError('Paste a bearer token first.');
       return;
     }
     try {
@@ -55,15 +55,15 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
         headers: { 'Authorization': 'Bearer ' + val },
       });
       if (!r.ok) {
-        setLoginError('⚠ ACCESS DENIED — invalid token');
+        setLoginError('That token was not accepted — check it and try again.');
         return;
       }
       TOKEN = val;
       SESSION_MODE = 'legacy';
       enterApp();
-      showToast('Legacy token accepted.', 'success');
+      showToast('Token accepted.', 'success');
     } catch {
-      setLoginError('⚠ NETWORK ERROR');
+      setLoginError('Network error — check your connection and try again.');
       showToast('Network error while validating token.', 'error');
     }
   }
@@ -74,7 +74,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     const password = document.getElementById('password-input').value;
     const brainName = document.getElementById('brain-name-input').value.trim();
     if (!email || !password) {
-      setLoginError('⚠ EMAIL + PASSWORD REQUIRED');
+      setLoginError('Enter your email and password.');
       return;
     }
 
@@ -91,7 +91,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setLoginError('⚠ ' + (data.error || 'AUTH FAILED'));
+        setLoginError(data.error || 'Sign-in failed — check your details and try again.');
         return;
       }
       TOKEN = '';
@@ -99,7 +99,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       enterApp();
       showToast(mode === 'signup' ? 'Account created and signed in.' : 'Signed in successfully.', 'success');
     } catch {
-      setLoginError('⚠ NETWORK ERROR');
+      setLoginError('Network error — check your connection and try again.');
       showToast('Network error during authentication.', 'error');
     }
   }
@@ -139,10 +139,9 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     const el = document.getElementById('hdr-time');
     if (el) {
       if (viewerSettings && viewerSettings.time_mode === 'local') {
-        const local = new Date().toLocaleString();
-        el.textContent = local + ' LOCAL';
+        el.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       } else {
-        el.textContent = new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
+        el.textContent = new Date().toISOString().slice(11, 16) + ' UTC';
       }
     }
   }
@@ -179,7 +178,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       if (r.status === 401) { doLogout(true); return; }
       if (!r.ok) {
         if (!silent) {
-          grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div>ERROR LOADING MEMORIES</div>';
+          grid.innerHTML = '<div class="empty-state"><div class="empty-icon">hm.</div>Memories could not load (' + r.status + ') — try refresh.</div>';
           showToast('Memory load failed (' + r.status + ').', 'error');
         }
         return;
@@ -190,7 +189,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       renderGrid(allMemories);
       if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
-      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div>CONNECTION ERROR</div>';
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">hm.</div>Connection error — check your network and try refresh.</div>';
       showToast('Connection error while loading memories.', 'error');
     } finally {
       if (refreshBtn) refreshBtn.classList.remove('syncing');
@@ -210,58 +209,153 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     pulseStatPill('stat-fact', lastStatsSnapshot.fact !== null && counts.fact !== lastStatsSnapshot.fact);
     pulseStatPill('stat-journal', lastStatsSnapshot.journal !== null && counts.journal !== lastStatsSnapshot.journal);
     lastStatsSnapshot = { all: total, note: counts.note, fact: counts.fact, journal: counts.journal };
-    const confidenceValues = memories
-      .map((m) => Number(m.dynamic_confidence ?? m.confidence))
-      .filter((v) => Number.isFinite(v));
-    const avgConfidence = confidenceValues.length
-      ? Math.round((confidenceValues.reduce((a, b) => a + b, 0) / confidenceValues.length) * 100)
-      : null;
-    document.getElementById('hdr-count').textContent = avgConfidence === null
-      ? (total + ' entries')
-      : (total + ' entries · avg conf ' + avgConfidence + '%');
+    const linkEnds = memories.reduce((sum, m) => sum + (Number.isFinite(Number(m.link_count)) ? Number(m.link_count) : 0), 0);
+    const linkTotal = Math.round(linkEnds / 2);
+    document.getElementById('hdr-count').textContent =
+      total + (total === 1 ? ' entry' : ' entries') + ' · ' + linkTotal + (linkTotal === 1 ? ' link' : ' links');
+    renderPour(memories);
+  }
+
+  function clampUnit(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(Math.max(n, 0), 1);
+  }
+
+  /* Strength = 0.45·importance + 0.20·confidence + 0.35·recency, where
+     recency = exp(-daysSinceUpdate / 14). The server exposes no single
+     strength value, so it is derived here from the dynamic scores it does
+     return; the two-week decay makes recently reinforced memories read as
+     bright cream and untouched ones recede. Tiers cut at 0.62 and 0.38. */
+  function memoryStrength(m, tsNow) {
+    const importance = clampUnit(m.dynamic_importance ?? m.importance, 0.5);
+    const confidence = clampUnit(m.dynamic_confidence ?? m.confidence, 0.7);
+    const updatedAt = Number(m.updated_at ?? m.created_at ?? 0);
+    const days = Math.max(0, (tsNow - updatedAt) / 86400);
+    const recency = Math.exp(-days / 14);
+    return Math.min(Math.max(0.45 * importance + 0.2 * confidence + 0.35 * recency, 0), 1);
+  }
+
+  function strengthTier(strength) {
+    if (strength >= 0.62) return 'active';
+    if (strength >= 0.38) return 'settling';
+    return 'resting';
+  }
+
+  function formatAccessionTime(ts) {
+    if (!Number.isFinite(ts) || ts <= 0) return '';
+    const then = new Date(ts * 1000);
+    const now = new Date();
+    const sameDay = then.toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
+    if (sameDay) return then.toISOString().slice(11, 16);
+    const ageDays = (now.getTime() / 1000 - ts) / 86400;
+    if (ageDays < 7) return then.toLocaleDateString([], { weekday: 'short' });
+    return then.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
+  function renderPour(memories) {
+    const wrap = document.getElementById('pour-ticks');
+    if (!wrap) return;
+    const tsNow = Date.now() / 1000;
+    const BUCKETS = 48;
+    const windowSec = 24 * 3600;
+    const counts = new Array(BUCKETS).fill(0);
+    const peaks = new Array(BUCKETS).fill(0);
+    let any = false;
+    for (const m of memories) {
+      const ts = Number(m.updated_at ?? m.created_at ?? 0);
+      const age = tsNow - ts;
+      if (age < 0 || age >= windowSec) continue;
+      const bucket = BUCKETS - 1 - Math.floor(age / (windowSec / BUCKETS));
+      counts[bucket] += 1;
+      peaks[bucket] = Math.max(peaks[bucket], memoryStrength(m, tsNow));
+      any = true;
+    }
+    if (!any && memories.length) {
+      // Quiet day: echo the most recently touched memories instead,
+      // newest at the right edge, so the seam still breathes.
+      const recent = [...memories]
+        .sort((a, b) => Number(b.updated_at ?? b.created_at ?? 0) - Number(a.updated_at ?? a.created_at ?? 0))
+        .slice(0, BUCKETS / 2);
+      recent.forEach((m, rank) => {
+        const bucket = BUCKETS - 1 - rank * 2;
+        if (bucket < 0) return;
+        counts[bucket] = 1;
+        peaks[bucket] = memoryStrength(m, tsNow);
+      });
+    }
+    let html = '';
+    for (let i = 0; i < BUCKETS; i++) {
+      const t = i / (BUCKETS - 1);
+      const activeTick = counts[i] > 0;
+      const height = activeTick
+        ? Math.min(38, Math.round((12 + counts[i] * 7 + peaks[i] * 8) * (0.55 + 0.45 * t)))
+        : 2 + ((i * 5) % 3);
+      const opacity = activeTick ? (0.18 + t * 0.78).toFixed(2) : '0.10';
+      html += '<i style="height:' + height + 'px;opacity:' + opacity + ';animation-delay:' + Math.round(t * 240) + 'ms"></i>';
+    }
+    wrap.innerHTML = html;
+  }
+
+  const TIER_ORDER = [
+    { key: 'active', label: 'Active', note: 'reinforced this week', bead: 'full' },
+    { key: 'settling', label: 'Settling', note: 'quiet for a few days', bead: 'half' },
+    { key: 'resting', label: 'Resting', note: 'fading — review soon', bead: 'ring' },
+  ];
+
+  function renderMemoryRow(m, index, strength, bead, dimmed, order) {
+    const accId = 'MV·' + String(m.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase();
+    const accTime = formatAccessionTime(Number(m.updated_at ?? m.created_at ?? 0));
+    const kind = '<span class="kind">' + esc(m.type) + '</span>';
+    const confidence = clampUnit(m.dynamic_confidence ?? m.confidence, 0.7);
+    const verified = m.type === 'fact' && confidence >= 0.85 ? '<span class="ver">verified</span>' : '';
+    const isLedgerFact = m.type === 'fact' && m.key;
+    // For facts the key IS the title; the body shows only the value so the
+    // key is never repeated on both lines.
+    const titleText = isLedgerFact ? m.key : (m.title || m.key || 'untitled');
+    const body = isLedgerFact
+      ? '<div class="txt ledger"><span class="a">&rarr;</span><span class="v">' + esc(m.content) + '</span></div>'
+      : '<div class="txt">' + esc(String(m.content || '').slice(0, 280)) + '</div>';
+    const linked = Number(m.link_count) > 0
+      ? '<span class="links">&#8627; ' + Number(m.link_count) + ' linked</span>'
+      : '';
+    const pct = Math.round(strength * 100);
+    return '<div class="row' + (dimmed ? ' dim' : '') + '" data-type="' + esc(m.type) + '" data-action="expand-card" data-card-index="' + index + '" style="animation-delay:' + Math.min(order * 0.03, 0.36) + 's">' +
+      '<div class="bead ' + bead + '"></div>' +
+      '<div>' +
+        '<div class="ttl">' + esc(titleText) + ' ' + kind + verified + '</div>' +
+        body +
+      '</div>' +
+      '<div class="meta">' +
+        '<span class="acc">' + esc(accId) + (accTime ? ' · ' + esc(accTime) : '') + '</span>' +
+        '<span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:' + pct + '%"></i></span></span>' +
+        linked +
+      '</div>' +
+    '</div>';
   }
 
   function renderGrid(memories) {
     const grid = document.getElementById('grid');
     if (!memories.length) {
-      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">◈</div>NO MEMORIES FOUND</div>';
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">quiet.</div>Nothing here yet — save your first memory.</div>';
       return;
     }
-    grid.innerHTML = memories.map((m, i) => {
-      const date = new Date(m.created_at * 1000).toISOString().slice(0,10);
-      const tags = m.tags ? m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('') : '';
-      const linkBadge = m.link_count > 0 ? \`<span class="card-links-badge">⬡ \${m.link_count} connections</span>\` : '';
-      const titleHtml = m.title ? \`<div class="card-title">\${esc(m.title)}</div>\` : '';
-      const keyHtml = m.key ? \`<div class="card-key"><span>KEY /</span> \${esc(m.key)}</div>\` : '';
-      const confidenceNum = Number(m.dynamic_confidence ?? m.confidence);
-      const importanceNum = Number(m.dynamic_importance ?? m.importance);
-      const confidencePct = Number.isFinite(confidenceNum) ? Math.round(Math.min(Math.max(confidenceNum, 0), 1) * 100) : null;
-      const importancePct = Number.isFinite(importanceNum) ? Math.round(Math.min(Math.max(importanceNum, 0), 1) * 100) : null;
-      const sourceLabel = m.source ? String(m.source).trim() : '';
-      const sourceDisplay = sourceLabel.length > 18 ? (sourceLabel.slice(0, 17) + '…') : sourceLabel;
-      const sourceChip = sourceDisplay ? \`<span class="quality-chip src">SRC \${esc(sourceDisplay)}</span>\` : '';
-      const confChip = confidencePct === null ? '' : \`<span class="quality-chip conf">CONF \${confidencePct}%</span>\`;
-      const impChip = importancePct === null ? '' : \`<span class="quality-chip imp">IMP \${importancePct}%</span>\`;
-      const qualityChips = sourceChip || confChip || impChip
-        ? \`<div class="card-quality">\${sourceChip}\${confChip}\${impChip}</div>\`
-        : '';
-      return \`<div class="card" data-type="\${m.type}" data-idx="\${i}" data-action="expand-card" data-card-index="\${i}" style="animation-delay:\${Math.min(i*0.04,0.4)}s">
-        <div class="card-type-stripe"></div>
-        <div class="card-header">
-          <div>\${titleHtml}\${keyHtml}\${!m.title && !m.key ? '<div class="card-title" style="opacity:0.4">untitled</div>' : ''}</div>
-          <span class="card-type-badge">\${m.type}</span>
-        </div>
-        <div class="card-content">\${esc(m.content)}</div>
-        <div class="card-footer">
-          <div class="card-meta">
-            <div class="card-tags">\${tags}\${linkBadge}</div>
-            \${qualityChips}
-          </div>
-          <div class="card-date">\${date}</div>
-        </div>
-        <div class="card-id">\${m.id}</div>
-      </div>\`;
-    }).join('');
+    const tsNow = Date.now() / 1000;
+    const scored = memories.map((m, index) => ({ m, index, strength: memoryStrength(m, tsNow) }));
+    let html = '';
+    let order = 0;
+    for (const tier of TIER_ORDER) {
+      const group = scored
+        .filter((item) => strengthTier(item.strength) === tier.key)
+        .sort((a, b) => b.strength - a.strength);
+      if (!group.length) continue;
+      html += '<div class="group"><span class="t">' + tier.label + '</span><span class="ln"></span><span class="n">' + tier.note + '</span></div>';
+      for (const item of group) {
+        html += renderMemoryRow(item.m, item.index, item.strength, tier.bead, tier.key === 'resting', order);
+        order += 1;
+      }
+    }
+    grid.innerHTML = html;
   }
 
   function expandCard(idx) {
@@ -269,18 +363,19 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     if (!m) return;
     const date = new Date(m.created_at * 1000).toLocaleString();
     const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';
-    const typeColors = { note: 'var(--teal)', fact: 'var(--amber)', journal: 'var(--journal)' };
     const qualityChips = [
       m.source ? \`<span class="tag">src:\${esc(m.source)}</span>\` : '',
       Number.isFinite(Number(m.dynamic_confidence ?? m.confidence)) ? \`<span class="tag">conf:\${Math.round(Number(m.dynamic_confidence ?? m.confidence) * 100)}%</span>\` : '',
       Number.isFinite(Number(m.dynamic_importance ?? m.importance)) ? \`<span class="tag">imp:\${Math.round(Number(m.dynamic_importance ?? m.importance) * 100)}%</span>\` : '',
     ].filter(Boolean).join('');
+    const headTitle = m.title || m.key || 'untitled';
+    const showKeyLine = m.key && m.title && m.key !== m.title;
     document.getElementById('expand-header').innerHTML =
-      \`<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;flex-wrap:wrap">
-        <span style="font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;border:1px solid \${typeColors[m.type]||'#fff'};color:\${typeColors[m.type]||'#fff'};padding:0.2rem 0.5rem">\${m.type}</span>
-        \${m.title ? \`<span style="font-family:var(--sans);font-weight:700;font-size:1.1rem;color:var(--text-bright)">\${esc(m.title)}</span>\` : ''}
-        \${m.key ? \`<span style="font-size:0.75rem;color:var(--amber)">KEY: \${esc(m.key)}</span>\` : ''}
+      \`<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:0.5rem;flex-wrap:wrap">
+        <span class="expand-title">\${esc(headTitle)}</span>
+        <span class="kind">\${esc(m.type)}</span>
       </div>
+      \${showKeyLine ? \`<div class="expand-key" style="margin-bottom:0.4rem">\${esc(m.key)}</div>\` : ''}
       \${m.tags ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('')}</div>\` : ''}
       \${qualityChips ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${qualityChips}</div>\` : ''}\`;
     document.getElementById('expand-content').textContent = m.content;
@@ -290,7 +385,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
 
     // Lazy-load connections
     const connEl = document.getElementById('expand-connections');
-    connEl.innerHTML = '<div style="font-size:0.65rem;color:var(--text-dim);letter-spacing:0.1em;margin-top:1rem">LOADING CONNECTIONS...</div>';
+    connEl.innerHTML = '<div style="font-size:12px;color:var(--cream-faint);margin-top:1rem">Loading connections…</div>';
     const myGen = ++expandGen;
     apiFetch(BASE + '/api/links/' + m.id)
       .then(r => {
@@ -303,7 +398,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
         if (myGen !== expandGen) return; // card changed, discard stale result
         if (!links || !links.length) { connEl.innerHTML = ''; return; }
         connEl.innerHTML = \`<div class="connections-section">
-          <div class="connections-title">⬡ Connections (\${links.length})</div>
+          <div class="connections-title">Connections (\${links.length})</div>
           \${links.map(l => {
             const cm = l.memory;
             const relationRaw = String(l.relation_type || 'related').toLowerCase();

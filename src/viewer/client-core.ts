@@ -9,12 +9,12 @@ export const clientCore = `
     const s = getComputedStyle(document.documentElement);
     const v = (name) => s.getPropertyValue(name).trim();
     return {
-      related: v('--border-bright') || '#2a4060',
-      supports: v('--success') || '#2eca75',
-      contradicts: v('--red') || '#e05050',
-      supersedes: v('--amber') || '#f0a500',
-      causes: v('--causes') || '#ff9e4f',
-      example_of: v('--info') || '#66a9ff',
+      related: v('--border-bright') || '#453B2C',
+      supports: v('--success') || '#9DB39A',
+      contradicts: v('--red') || '#C9826E',
+      supersedes: v('--amber') || '#E3C98F',
+      causes: v('--causes') || '#A98F5C',
+      example_of: v('--info') || '#8C8170',
     };
   }
   let TOKEN = '';
@@ -54,8 +54,8 @@ export const clientCore = `
 
   function buildDefaultViewerSettings() {
     return {
-      theme: 'cyberpunk',
-      light_theme: 'cyberpunk',
+      theme: 'vanilla',
+      light_theme: 'vanilla',
       theme_mode: 'auto',
       live_poll_enabled: true,
       live_poll_interval_sec: 10,
@@ -99,9 +99,11 @@ export const clientCore = `
     const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
       ? source.default_memory_filter
       : '';
-    const validThemes = ['cyberpunk', 'midnight', 'solarized', 'ember', 'arctic'];
-    const theme = validThemes.includes(source.theme) ? source.theme : (source.theme === 'light' ? 'cyberpunk' : defaults.theme);
-    const light_theme = validThemes.includes(source.light_theme) ? source.light_theme : defaults.light_theme;
+    const validThemes = ['vanilla', 'midnight', 'solarized', 'ember', 'arctic'];
+    // 'cyberpunk' was the pre-vanilla default; migrate stored settings to the new default.
+    const migrateTheme = (value) => (value === 'cyberpunk' ? 'vanilla' : value);
+    const theme = validThemes.includes(migrateTheme(source.theme)) ? migrateTheme(source.theme) : defaults.theme;
+    const light_theme = validThemes.includes(migrateTheme(source.light_theme)) ? migrateTheme(source.light_theme) : defaults.light_theme;
     const validModes = ['auto', 'light', 'dark'];
     const theme_mode = validModes.includes(source.theme_mode) ? source.theme_mode : defaults.theme_mode;
     return {
@@ -152,9 +154,9 @@ export const clientCore = `
   const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
   function resolveActiveTheme() {
-    if (!viewerSettings) return 'cyberpunk';
-    const dark = viewerSettings.theme || 'cyberpunk';
-    const light = (viewerSettings.light_theme || 'cyberpunk') + '-light';
+    if (!viewerSettings) return 'vanilla';
+    const dark = viewerSettings.theme || 'vanilla';
+    const light = (viewerSettings.light_theme || 'vanilla') + '-light';
     const mode = viewerSettings.theme_mode || 'auto';
     if (mode === 'light') return light;
     if (mode === 'dark') return dark;
@@ -199,7 +201,7 @@ export const clientCore = `
   function setLoginError(message) {
     const el = document.getElementById('login-error');
     if (!el) return;
-    el.textContent = message || '⚠ ACCESS DENIED';
+    el.textContent = message || 'Something went wrong — try again.';
     el.style.display = 'block';
   }
 
@@ -246,7 +248,7 @@ export const clientCore = `
     syncFilterPills(activeFilter);
     loadMemories();
     startLivePolling();
-    showToast('Session active. Loading memory stream.', 'success');
+    showToast('Signed in — loading your index.', 'success');
     if (viewerSettings && viewerSettings.auto_open_graph) {
       setTimeout(() => { if (hasAuthenticatedSession()) showGraph(); }, 180);
     }
@@ -460,7 +462,7 @@ export const clientCore = `
     const buttonEl = document.getElementById('semantic-reindex-btn');
     if (!lineEl || !metaEl || !buttonEl) return;
     buttonEl.disabled = semanticReindexRunning;
-    buttonEl.textContent = semanticReindexRunning ? 'RUNNING SEMANTIC REINDEX...' : 'RUN SEMANTIC REINDEX';
+    buttonEl.textContent = semanticReindexRunning ? 'Running semantic reindex…' : 'Run semantic reindex';
     metaEl.innerHTML = '';
 
     const addPill = (text, cls = '') => {
@@ -472,7 +474,7 @@ export const clientCore = `
 
     if (semanticReindexRunning) {
       lineEl.className = 'semantic-status-line';
-      lineEl.textContent = 'Semantic reindex is running. Waiting for MCP response...';
+      lineEl.textContent = 'Semantic reindex is running — waiting for the MCP response.';
       addPill('RUNNING', 'running');
       return;
     }
