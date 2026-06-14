@@ -378,10 +378,12 @@ export const clientSettings = `  function fillSettingsForm() {
     pollIntervalId = setInterval(async () => {
       if (!hasAuthenticatedSession()) return;
       try {
-        const r = await apiFetch(BASE + '/api/memories?limit=1');
+        // Fingerprint covers content, not just per-type counts, so edits,
+        // reinforcement, decay, and link changes also trigger a refresh.
+        const r = await apiFetch(BASE + '/api/memories/signature');
         if (!r.ok) return;
         const data = await r.json();
-        const sig = (data.stats || []).map(s => s.type + ':' + s.count).join('|');
+        const sig = (data.count ?? 0) + ':' + (data.last_updated ?? 0) + ':' + (data.link_total ?? 0);
         if (lastPollSig && sig !== lastPollSig) {
           loadMemories(true); // silent refresh
         }

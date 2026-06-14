@@ -248,6 +248,25 @@ export async function handleApiMemories(request: Request, env: Env, brainId: str
   });
 }
 
+// Cheap change fingerprint for the live poll: count + newest updated_at +
+// total links. This moves on edits, reinforcement, decay, and link changes —
+// not just on a count change — without pulling any memory bodies.
+export async function handleApiMemoriesSignature(env: Env, brainId: string): Promise<Response> {
+  const mem = await env.DB.prepare(
+    'SELECT COUNT(*) as count, COALESCE(MAX(updated_at), 0) as last_updated FROM memories WHERE brain_id = ? AND archived_at IS NULL'
+  ).bind(brainId).first<{ count: number; last_updated: number }>();
+  const links = await env.DB.prepare(
+    'SELECT COUNT(*) as link_total FROM memory_links WHERE brain_id = ?'
+  ).bind(brainId).first<{ link_total: number }>();
+  return new Response(JSON.stringify({
+    count: mem?.count ?? 0,
+    last_updated: mem?.last_updated ?? 0,
+    link_total: links?.link_total ?? 0,
+  }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
 export async function handleApiLinks(memoryId: string, env: Env, brainId: string): Promise<Response> {
   const mem = await env.DB.prepare('SELECT id FROM memories WHERE brain_id = ? AND id = ? AND archived_at IS NULL').bind(brainId, memoryId).first();
   if (!mem) return new Response(JSON.stringify({ error: 'Memory not found.' }), {

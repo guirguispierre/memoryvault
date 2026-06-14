@@ -42,6 +42,7 @@ export const clientCore = `
   let commandActiveIndex = 0;
   let toastCounter = 0;
   let clockIntervalId = null;
+  let pourTickId = null;
   const VIEWER_SETTINGS_KEY = 'memoryvault.viewer.settings.v1';
   let viewerSettings = null;
   let semanticReindexRunning = false;
@@ -409,6 +410,7 @@ export const clientCore = `
     document.getElementById('app').style.display = 'flex';
     document.getElementById('app').style.flexDirection = 'column';
     startClock();
+    startPourTick();
     const defaultFilter = viewerSettings?.default_memory_filter || '';
     activeFilter = defaultFilter;
     syncFilterPills(activeFilter);

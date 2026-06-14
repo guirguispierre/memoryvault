@@ -130,6 +130,10 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       clearInterval(clockIntervalId);
       clockIntervalId = null;
     }
+    if (pourTickId) {
+      clearInterval(pourTickId);
+      pourTickId = null;
+    }
     TOKEN = '';
     SESSION_MODE = 'none';
     location.reload();
@@ -150,6 +154,17 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     if (clockIntervalId) clearInterval(clockIntervalId);
     updateTime();
     clockIntervalId = setInterval(updateTime, 1000);
+  }
+
+  // The recall ribbon is a 24h time window, so it drifts even when no data
+  // changes. Re-render it once a minute so the seam breathes as memories age
+  // out; the data recompute is unconditional, the CSS animation is what the
+  // reduce-motion setting suppresses.
+  function startPourTick() {
+    if (pourTickId) clearInterval(pourTickId);
+    pourTickId = setInterval(() => {
+      if (hasAuthenticatedSession() && allMemories.length) renderPour(allMemories);
+    }, 60000);
   }
 
   function pulseStatPill(id, changed) {

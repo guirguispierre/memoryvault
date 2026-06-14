@@ -27,6 +27,7 @@ import { viewerHtml, viewerScript } from './viewer/index.js';
 import {
   handleMcp,
   handleApiMemories,
+  handleApiMemoriesSignature,
   handleApiLinks,
   handleApiGraph,
   handleApiTools,
@@ -168,6 +169,12 @@ export default {
         const authCtx = await authRequestWithOAuth(request, env);
         if (!authCtx) return unauthorized(url);
         return handleAuthSessionRevoke(request, authCtx, env);
+      }
+
+      if (url.pathname === '/api/memories/signature') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiMemoriesSignature(env, authCtx.brainId);
       }
 
       if (url.pathname === '/api/memories') {

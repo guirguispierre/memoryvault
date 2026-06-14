@@ -57,7 +57,7 @@ async function waitForWorker() {
   throw new Error('worker did not become ready');
 }
 
-async function signup() {
+async function signup(email = EMAIL, brainName = 'Verify UI index') {
   const r = await fetch(`${BASE}/auth/signup`, {
     method: 'POST',
     headers: {
@@ -65,7 +65,7 @@ async function signup() {
       // Synthetic IP so repeated local runs do not trip the signup limiter.
       'CF-Connecting-IP': `198.51.100.${(Date.now() % 200) + 1}`,
     },
-    body: JSON.stringify({ email: EMAIL, password: PASSWORD, brain_name: 'Verify UI index' }),
+    body: JSON.stringify({ email, password: PASSWORD, brain_name: brainName }),
   });
   if (!r.ok) throw new Error(`signup failed: ${r.status} ${await r.text()}`);
   const cookie = r.headers.getSetCookie().find((c) => c.startsWith('auth_token='));
@@ -153,9 +153,27 @@ async function seed(cookie) {
   log(`seeded ${body.imported?.memories ?? 0} memories, ${body.imported?.memory_links ?? 0} links`);
 }
 
-async function loginThroughUi(page) {
+async function mcpCall(cookie, name, args) {
+  const r = await fetch(`${BASE}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ jsonrpc: '2.0', id: name, method: 'tools/call', params: { name, arguments: args } }),
+  });
+  if (!r.ok) throw new Error(`${name} failed: ${r.status} ${await r.text()}`);
+  const rpc = await r.json();
+  if (rpc && rpc.error) throw new Error(`${name} error: ${JSON.stringify(rpc.error)}`);
+  return rpc;
+}
+
+async function listMemoryIds(cookie) {
+  const r = await fetch(`${BASE}/api/memories?limit=500`, { headers: { Cookie: cookie } });
+  const data = await r.json();
+  return (data.memories || []).map((m) => m.id);
+}
+
+async function loginThroughUi(page, email = EMAIL) {
   await page.goto(`${BASE}/view`);
-  await page.fill('#email-input', EMAIL);
+  await page.fill('#email-input', email);
   await page.fill('#password-input', PASSWORD);
   await page.click('button[data-action="login"]');
   await page.waitForSelector('.row', { timeout: 15000 });
@@ -194,6 +212,48 @@ async function applyCustomPalette(page) {
     await page.fill(`[data-custom-token="${token}"][data-custom-kind="hex"]`, value);
   }
   await page.waitForTimeout(200);
+}
+
+async function screenshotReactivity(browser) {
+  log('shooting reactivity before/after');
+  // A dedicated brain so the earlier theme/compact contexts (which save
+  // settings server-side for the shared account) can't override the poll
+  // interval this test relies on.
+  const reactEmail = `verify-ui-react-${Date.now()}@example.com`;
+  const reactCookie = await signup(reactEmail, 'Verify UI reactive');
+  await seed(reactCookie);
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 980 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  // Shorten the poll to its 5s floor so the test doesn't wait a full cycle.
+  await ctx.addInitScript(() => {
+    try { localStorage.setItem('memoryvault.viewer.settings.v1', JSON.stringify({ live_poll_interval_sec: 5 })); } catch (e) {}
+  });
+  const page = await ctx.newPage();
+  await loginThroughUi(page, reactEmail);
+  await page.waitForTimeout(FONT_SETTLE_MS);
+  await page.screenshot({ path: `${SHOTS}/reactive-before.png` });
+
+  // Let one poll establish the baseline fingerprint before mutating, otherwise
+  // the first poll would capture the post-mutation state as its baseline and
+  // never see a diff.
+  await page.waitForTimeout(6000);
+
+  // Mutate via the API only: add a fresh strong memory and reinforce the
+  // oldest. The point is the content fingerprint moves, so the poll refreshes
+  // without a click.
+  await mcpCall(reactCookie, 'memory_save', {
+    type: 'journal',
+    title: 'Reinforced live just now',
+    content: 'Added through the API to prove the view reacts without a manual refresh.',
+    importance: 0.95, confidence: 0.92,
+  });
+  const ids = await listMemoryIds(reactCookie);
+  const oldest = ids[ids.length - 1];
+  if (oldest) await mcpCall(reactCookie, 'memory_reinforce', { id: oldest, delta_importance: 0.4, delta_confidence: 0.2 });
+
+  // Wait past the next 5s poll cycle for the silent refresh, then re-shoot.
+  await page.waitForTimeout(8000);
+  await page.screenshot({ path: `${SHOTS}/reactive-after.png` });
+  await ctx.close();
 }
 
 async function screenshotAll() {
@@ -258,6 +318,8 @@ async function screenshotAll() {
   await compactPage.waitForTimeout(FONT_SETTLE_MS);
   await compactPage.screenshot({ path: `${SHOTS}/main-compact.png` });
   await compactCtx.close();
+
+  await screenshotReactivity(browser);
 
   await browser.close();
 }

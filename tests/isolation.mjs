@@ -115,7 +115,7 @@ async function assertBobIntact() {
 }
 
 test('unauthenticated requests are rejected', async () => {
-  for (const path of ['/mcp', '/api/memories', '/api/export', '/api/graph', '/api/viewer-settings', `/api/links/${bobMemA}`]) {
+  for (const path of ['/mcp', '/api/memories', '/api/memories/signature', '/api/export', '/api/graph', '/api/viewer-settings', `/api/links/${bobMemA}`]) {
     const { status } = await api(null, path);
     assert.equal(status, 401, `${path} must require auth, got ${status}`);
   }
