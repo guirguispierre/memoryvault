@@ -115,7 +115,7 @@ async function assertBobIntact() {
 }
 
 test('unauthenticated requests are rejected', async () => {
-  for (const path of ['/mcp', '/api/memories', '/api/export', '/api/graph', `/api/links/${bobMemA}`]) {
+  for (const path of ['/mcp', '/api/memories', '/api/export', '/api/graph', '/api/viewer-settings', `/api/links/${bobMemA}`]) {
     const { status } = await api(null, path);
     assert.equal(status, 401, `${path} must require auth, got ${status}`);
   }
@@ -123,6 +123,8 @@ test('unauthenticated requests are rejected', async () => {
     const { status } = await api(null, path, { method: 'POST', body: '{}' });
     assert.equal(status, 401, `${path} must require auth, got ${status}`);
   }
+  const unauthPut = await api(null, '/api/viewer-settings', { method: 'PUT', body: '{}' });
+  assert.equal(unauthPut.status, 401, `PUT /api/viewer-settings must require auth, got ${unauthPut.status}`);
 });
 
 test('memory_get / memory_get_fact do not cross brains', async () => {
@@ -288,6 +290,37 @@ test("/api/graph only contains the caller's brain", async () => {
   assert.ok(!res.text.includes(bobMemA) && !res.text.includes(bobSecret), "Alice's graph must not contain Bob's nodes");
   const bobRes = await api(bob, '/api/graph');
   assert.ok(bobRes.text.includes(bobMemA), "Bob's graph must contain his own nodes");
+});
+
+test('/api/viewer-settings is brain-scoped: B can neither read nor overwrite A', async () => {
+  // Alice saves a distinctive custom palette.
+  const aliceAccent = '#abcdef';
+  const savePut = await api(alice, '/api/viewer-settings', {
+    method: 'PUT',
+    body: JSON.stringify({ settings: { theme: 'custom', custom_theme: { butter: aliceAccent } } }),
+  });
+  assert.equal(savePut.status, 200, `Alice PUT should succeed, got ${savePut.status}`);
+
+  // Bob's GET must return his own row (none yet -> defaults), never Alice's.
+  const bobGet = await api(bob, '/api/viewer-settings');
+  assert.equal(bobGet.status, 200);
+  assert.equal(bobGet.json.settings, null, "Bob must not see Alice's saved settings");
+  assert.ok(!bobGet.text.includes(aliceAccent), "Bob's response must not contain Alice's accent");
+
+  // Bob writes his own; it must not touch Alice's row.
+  const bobPut = await api(bob, '/api/viewer-settings', {
+    method: 'PUT',
+    body: JSON.stringify({ settings: { theme: 'ember' } }),
+  });
+  assert.equal(bobPut.status, 200);
+
+  const aliceGet = await api(alice, '/api/viewer-settings');
+  assert.equal(aliceGet.status, 200);
+  assert.equal(aliceGet.json.settings.theme, 'custom', "Alice's theme must be unchanged by Bob's write");
+  assert.equal(aliceGet.json.settings.custom_theme.butter, aliceAccent, "Alice's accent must survive Bob's write");
+
+  const bobGet2 = await api(bob, '/api/viewer-settings');
+  assert.equal(bobGet2.json.settings.theme, 'ember', "Bob must read back his own theme");
 });
 
 test('auth rate limiter fires after the configured attempt budget', async () => {

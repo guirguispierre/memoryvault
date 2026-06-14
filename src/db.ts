@@ -196,6 +196,15 @@ export async function ensureSchema(env: Env): Promise<void> {
         )`
       );
       await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS viewer_settings (
+          brain_id TEXT PRIMARY KEY,
+          settings_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+        )`
+      );
+      await runMigrationStatement(env,
         `CREATE TABLE IF NOT EXISTS brain_snapshots (
           id TEXT PRIMARY KEY,
           brain_id TEXT NOT NULL,
@@ -471,6 +480,26 @@ export async function setBrainPolicy(env: Env, brainId: string, patch: Record<st
      ON CONFLICT(brain_id) DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at`
   ).bind(brainId, stableJson(merged), ts, ts).run();
   return merged;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Viewer settings (brain-scoped UI preferences)                     */
+/* ------------------------------------------------------------------ */
+
+export async function getViewerSettings(env: Env, brainId: string): Promise<Record<string, unknown> | null> {
+  const row = await env.DB.prepare(
+    'SELECT settings_json FROM viewer_settings WHERE brain_id = ? LIMIT 1'
+  ).bind(brainId).first<{ settings_json: string }>();
+  return parseJsonObject(row?.settings_json ?? null);
+}
+
+export async function setViewerSettings(env: Env, brainId: string, settings: Record<string, unknown>): Promise<void> {
+  const ts = now();
+  await env.DB.prepare(
+    `INSERT INTO viewer_settings (brain_id, settings_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(brain_id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at`
+  ).bind(brainId, stableJson(settings), ts, ts).run();
 }
 
 /* ------------------------------------------------------------------ */

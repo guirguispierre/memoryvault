@@ -169,6 +169,14 @@ CREATE TABLE IF NOT EXISTS brain_policies (
   FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS viewer_settings (
+  brain_id TEXT PRIMARY KEY,
+  settings_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS brain_snapshots (
   id TEXT PRIMARY KEY,
   brain_id TEXT NOT NULL,

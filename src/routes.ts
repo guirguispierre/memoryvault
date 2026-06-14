@@ -37,6 +37,8 @@ import {
   loadSourceTrustMap,
   getBrainPolicy,
   setBrainPolicy,
+  getViewerSettings,
+  setViewerSettings,
   logChangelog,
 } from './db.js';
 
@@ -838,6 +840,99 @@ export async function handleApiPurge(request: Request, env: Env, brainId: string
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  Viewer settings                                                   */
+/* ------------------------------------------------------------------ */
+
+// Server-side whitelist for viewer preferences. The client normalizes too,
+// but this is the trust boundary: only known keys survive, numbers are
+// clamped to the same ranges the UI enforces, and the custom palette is
+// reduced to six hex colours plus a vetted font key.
+const VIEWER_THEME_NAMES = new Set(['vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
+const VIEWER_THEME_MODES = new Set(['auto', 'light', 'dark']);
+const VIEWER_FONT_KEYS = new Set(['fraunces', 'grotesk', 'system', 'typewriter']);
+const VIEWER_FILTERS = new Set(['', 'note', 'fact', 'journal']);
+const VIEWER_HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const VIEWER_CUSTOM_DEFAULTS: Record<string, string> = {
+  ground: '#181511', ground_2: '#201c16', cream: '#f0e7d5',
+  cream_dim: '#b5ab97', butter: '#e3c98f', rule: '#332c22',
+};
+
+function clampViewerInt(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.round(n), min), max);
+}
+
+function asViewerBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function sanitizeCustomTheme(raw: unknown): Record<string, string> {
+  const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(VIEWER_CUSTOM_DEFAULTS)) {
+    const v = typeof src[key] === 'string' ? (src[key] as string).trim().toLowerCase() : '';
+    out[key] = VIEWER_HEX_RE.test(v) ? v : VIEWER_CUSTOM_DEFAULTS[key];
+  }
+  out.font = typeof src.font === 'string' && VIEWER_FONT_KEYS.has(src.font) ? src.font : 'fraunces';
+  return out;
+}
+
+function sanitizeViewerSettings(raw: unknown): Record<string, unknown> {
+  const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'vanilla';
+  const lightTheme = typeof src.light_theme === 'string' && VIEWER_THEME_NAMES.has(src.light_theme) ? src.light_theme : 'vanilla';
+  const mode = typeof src.theme_mode === 'string' && VIEWER_THEME_MODES.has(src.theme_mode) ? src.theme_mode : 'auto';
+  const filter = typeof src.default_memory_filter === 'string' && VIEWER_FILTERS.has(src.default_memory_filter) ? src.default_memory_filter : '';
+  return {
+    theme,
+    light_theme: lightTheme,
+    theme_mode: mode,
+    custom_theme: sanitizeCustomTheme(src.custom_theme),
+    live_poll_enabled: asViewerBool(src.live_poll_enabled, true),
+    live_poll_interval_sec: clampViewerInt(src.live_poll_interval_sec, 5, 120, 10),
+    time_mode: src.time_mode === 'local' ? 'local' : 'utc',
+    default_memory_filter: filter,
+    search_debounce_ms: clampViewerInt(src.search_debounce_ms, 120, 1500, 300),
+    compact_cards: asViewerBool(src.compact_cards, false),
+    graph_show_inferred: asViewerBool(src.graph_show_inferred, true),
+    graph_show_labels: asViewerBool(src.graph_show_labels, true),
+    graph_physics_enabled: asViewerBool(src.graph_physics_enabled, true),
+    graph_focus_highlight: asViewerBool(src.graph_focus_highlight, true),
+    auto_open_graph: asViewerBool(src.auto_open_graph, false),
+    toasts_enabled: asViewerBool(src.toasts_enabled, true),
+    toast_duration_ms: clampViewerInt(src.toast_duration_ms, 1200, 8000, 2300),
+    confirm_logout: asViewerBool(src.confirm_logout, false),
+    show_scanlines: asViewerBool(src.show_scanlines, true),
+    reduce_motion: asViewerBool(src.reduce_motion, false),
+    semantic_reindex_wait_for_index: asViewerBool(src.semantic_reindex_wait_for_index, true),
+    semantic_reindex_wait_timeout_seconds: clampViewerInt(src.semantic_reindex_wait_timeout_seconds, 1, 900, 180),
+    semantic_reindex_limit: clampViewerInt(src.semantic_reindex_limit, 1, 2000, 500),
+  };
+}
+
+export async function handleApiViewerSettings(request: Request, env: Env, brainId: string): Promise<Response> {
+  const jsonHeaders = { ...CORS_HEADERS, 'Content-Type': 'application/json' };
+  if (request.method === 'GET') {
+    const stored = await getViewerSettings(env, brainId);
+    const settings = stored ? sanitizeViewerSettings(stored) : null;
+    return new Response(JSON.stringify({ settings }), { headers: jsonHeaders });
+  }
+  if (request.method === 'PUT') {
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json() as Record<string, unknown>;
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400, headers: jsonHeaders });
+    }
+    const sanitized = sanitizeViewerSettings(body && typeof body === 'object' ? body.settings : null);
+    await setViewerSettings(env, brainId, sanitized);
+    return new Response(JSON.stringify({ settings: sanitized }), { headers: jsonHeaders });
+  }
+  return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: jsonHeaders });
+}
+
 
 
 export function rootLandingHtml(url: URL): string {
@@ -869,6 +964,7 @@ export function rootLandingHtml(url: URL): string {
     { path: '/api/export', label: '/api/export' },
     { path: '/api/import', label: '/api/import' },
     { path: '/api/purge', label: '/api/purge' },
+    { path: '/api/viewer-settings', label: '/api/viewer-settings' },
   ];
   const devRows = devEntries.map((entry) => {
     const guide = endpointGuideForPath(entry.path);

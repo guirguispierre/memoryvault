@@ -33,6 +33,7 @@ import {
   handleApiExport,
   handleApiImport,
   handleApiPurge,
+  handleApiViewerSettings,
   rootLandingHtml,
   mcpLandingHtml,
   endpointGuideForPath,
@@ -198,6 +199,12 @@ export default {
         const authCtx = await authRequestWithOAuth(request, env);
         if (!authCtx) return unauthorized(url);
         return handleApiPurge(request, env, authCtx.brainId);
+      }
+
+      if (url.pathname === '/api/viewer-settings') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiViewerSettings(request, env, authCtx.brainId);
       }
 
       if (url.pathname === '/mcp') {
