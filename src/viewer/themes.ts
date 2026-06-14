@@ -1,52 +1,8 @@
-export const rootVariables = `  :root {
-    --ground: #181511;
-    --ground-2: #201C16;
-    --ground-3: #26211A;
-    --rule: #332C22;
-    --rule-soft: #2A2419;
-    --rule-bright: #453B2C;
-    --cream: #F0E7D5;
-    --cream-dim: #B5AB97;
-    --cream-faint: #7E7666;
-    --butter: #E3C98F;
-    --butter-deep: #A98F5C;
-    --latte: #8C8170;
-    --sage: #9DB39A;
-    --clay: #C9826E;
-    --on-butter: #241C0D;
-    --butter-glow: rgba(227, 201, 143, 0.07);
-    --disp: 'Fraunces', Georgia, serif;
-    --body: 'Schibsted Grotesk', system-ui, sans-serif;
-    --mono: 'IBM Plex Mono', ui-monospace, monospace;
-    --overlay-bg: rgba(16, 13, 10, 0.78);
-    --panel-bg: #201C16;
-    --panel-shadow: rgba(0, 0, 0, 0.5);
-    --surface: rgba(32, 28, 22, 0.6);
-    --surface-raised: #241F18;
-    --toast-bg: #241F18;
-    --card-glow: rgba(0, 0, 0, 0.35);
+import { vanillaTokensCss } from './tokens.js';
 
-    /* Legacy aliases: graph client reads these via getComputedStyle and
-       relation styling keys off them, so they track the vanilla tokens. */
-    --bg: var(--ground);
-    --bg2: var(--ground-2);
-    --bg3: var(--ground-3);
-    --border: var(--rule);
-    --border-bright: var(--rule-bright);
-    --amber: var(--butter);
-    --amber-dim: var(--butter-deep);
-    --amber-glow: var(--butter-glow);
-    --teal: var(--sage);
-    --red: var(--clay);
-    --text: var(--cream-dim);
-    --text-dim: var(--cream-faint);
-    --text-bright: var(--cream);
-    --journal: var(--latte);
-    --success: var(--sage);
-    --info: var(--latte);
-    --causes: var(--butter-deep);
-  }
-
+// The :root token block lives in tokens.ts so the server-rendered pages can
+// share it; the theme variants below extend it.
+export const rootVariables = vanillaTokensCss + `
   /* ── THEME VARIANTS ── */
 `;
 

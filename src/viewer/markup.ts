@@ -1,5 +1,6 @@
 import { SERVER_VERSION } from '../constants.js';
 import { escapeHtml } from '../utils.js';
+import { FONT_LINK_TAGS } from './tokens.js';
 
 export const documentOpen = `<!DOCTYPE html>
 <html lang="en" data-theme="vanilla">
@@ -7,9 +8,7 @@ export const documentOpen = `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault — your index</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,640;1,9..144,420;1,9..144,560&family=Schibsted+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+${FONT_LINK_TAGS}
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <style>
 `;

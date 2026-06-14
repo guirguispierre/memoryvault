@@ -62,6 +62,12 @@ import {
   callTool,
 } from './tools/index.js';
 
+import {
+  FONT_LINK_TAGS,
+  vanillaTokensCss,
+  pageChromeCss,
+} from './viewer/tokens.js';
+
 export async function processMcpBody(
   body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
   env: Env,
@@ -995,203 +1001,76 @@ export function rootLandingHtml(url: URL): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault Dev Portal</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+${FONT_LINK_TAGS}
 <style>
-  :root {
-    --bg: #060b12;
-    --bg2: #0f1927;
-    --line: #27466c;
-    --line-soft: #1c334c;
-    --text: #d6e5f4;
-    --dim: #7390aa;
-    --amber: #f0a500;
-    --teal: #00c8b4;
-    --mono: 'Share Tech Mono', monospace;
-    --sans: 'Syne', sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: var(--mono);
-    color: var(--text);
-    background:
-      radial-gradient(78% 55% at 10% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
-      radial-gradient(70% 58% at 100% 100%, rgba(240, 165, 0, 0.1), transparent 72%),
-      var(--bg);
-    min-height: 100vh;
-  }
-  .wrap {
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 2rem 1.1rem 2.6rem;
-  }
-  .title {
-    margin: 0;
-    font-family: var(--sans);
-    font-size: clamp(1.65rem, 3vw, 2.75rem);
-    letter-spacing: -0.02em;
-    font-weight: 800;
-    line-height: 1.05;
-  }
-  .title span { color: var(--amber); }
-  .sub {
-    margin: 0.5rem 0 1.2rem;
-    color: var(--dim);
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    font-size: 0.72rem;
-  }
-  .pill {
-    display: inline-flex;
-    align-items: center;
-    border: 1px solid var(--line);
-    background: rgba(15, 25, 39, 0.78);
-    color: var(--teal);
-    font-size: 0.68rem;
-    letter-spacing: 0.13em;
-    text-transform: uppercase;
-    padding: 0.3rem 0.55rem;
-    margin-bottom: 1rem;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: 1.05fr 1fr;
-    gap: 1rem;
-  }
-  .card {
-    border: 1px solid var(--line);
-    background: rgba(15, 25, 39, 0.84);
-    padding: 1rem 1rem 0.95rem;
-  }
-  .card h2 {
-    margin: 0 0 0.65rem;
-    color: var(--amber);
-    font-size: 0.79rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-  p, li {
-    margin: 0;
-    line-height: 1.58;
-    font-size: 0.84rem;
-  }
-  ul {
-    margin: 0;
-    padding-left: 1.1rem;
-    display: grid;
-    gap: 0.45rem;
-  }
-  .metrics {
-    margin-top: 0.8rem;
-    display: flex;
-    gap: 0.55rem;
-    flex-wrap: wrap;
-  }
+${vanillaTokensCss}${pageChromeCss}  .wrap { max-width: 1180px; }
+  .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 1rem; }
+  .metrics { margin-top: 1rem; display: flex; gap: 0.55rem; flex-wrap: wrap; }
   .metric {
-    border: 1px solid var(--line-soft);
-    padding: 0.45rem 0.55rem;
+    border: 1px solid var(--rule-soft);
+    border-radius: 9px;
+    padding: 0.55rem 0.65rem;
     min-width: 150px;
-    background: rgba(6, 11, 18, 0.68);
+    background: var(--surface);
   }
   .metric .k {
-    color: var(--dim);
+    color: var(--cream-faint);
     display: block;
-    font-size: 0.66rem;
+    font-family: var(--mono);
+    font-size: 0.62rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
   .metric .v {
-    color: var(--teal);
+    color: var(--cream);
     display: block;
-    margin-top: 0.3rem;
-    font-size: 0.84rem;
-  }
-  .actions {
-    margin-top: 0.85rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .btn {
-    border: 1px solid var(--line);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.7rem;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    padding: 0.46rem 0.62rem;
-    display: inline-block;
-  }
-  .btn.primary {
-    border-color: var(--amber);
-    color: var(--amber);
+    margin-top: 0.32rem;
+    font-family: var(--disp);
+    font-size: 1.05rem;
   }
   .dev {
-    margin-top: 1rem;
-    border: 1px solid var(--line);
-    background: rgba(15, 25, 39, 0.84);
+    margin-top: 1.2rem;
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    background: var(--surface-raised);
     overflow: hidden;
   }
   .dev-head {
-    padding: 0.75rem 0.9rem;
-    border-bottom: 1px solid var(--line-soft);
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--rule-soft);
     display: flex;
     gap: 0.5rem;
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
   }
-  .dev-head h2 {
-    margin: 0;
-    color: var(--amber);
-    font-size: 0.8rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-  .dev-head p {
-    color: var(--dim);
-    font-size: 0.72rem;
-  }
+  .dev-head h2 { margin: 0; color: var(--cream); font-family: var(--disp); font-weight: 560; font-size: 0.95rem; }
+  .dev-head p { color: var(--cream-faint); font-size: 0.78rem; }
   .table-wrap { overflow-x: auto; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 920px;
-  }
+  table { width: 100%; border-collapse: collapse; min-width: 920px; }
   th, td {
     text-align: left;
     vertical-align: top;
-    border-bottom: 1px solid var(--line-soft);
-    padding: 0.62rem 0.72rem;
-    font-size: 0.77rem;
+    border-bottom: 1px solid var(--rule-soft);
+    padding: 0.66rem 0.78rem;
+    font-size: 0.82rem;
     line-height: 1.45;
   }
   th {
-    color: var(--dim);
+    color: var(--cream-faint);
+    font-family: var(--mono);
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    font-size: 0.62rem;
     position: sticky;
     top: 0;
-    background: #0f1927;
+    background: var(--ground-2);
     z-index: 2;
   }
-  td code {
-    color: var(--teal);
-    font-family: var(--mono);
-    font-size: 0.74rem;
-  }
-  .endpoint {
-    color: var(--teal);
-    text-decoration: none;
-    display: inline-block;
-    max-width: 320px;
-    overflow-wrap: anywhere;
-  }
-  @media (max-width: 930px) {
-    .grid { grid-template-columns: 1fr; }
-  }
+  td { color: var(--cream-dim); }
+  td code { font-size: 0.78rem; }
+  .endpoint { display: inline-block; max-width: 320px; font-size: 0.82rem; }
+  @media (max-width: 930px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -1265,119 +1144,21 @@ export function mcpLandingHtml(url: URL): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault MCP</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+${FONT_LINK_TAGS}
 <style>
-  :root {
-    --bg: #070b10;
-    --bg2: #101824;
-    --line: #234061;
-    --text: #d8e8f8;
-    --dim: #6f8ea9;
-    --amber: #f0a500;
-    --teal: #00c8b4;
-    --mono: 'Share Tech Mono', monospace;
-    --sans: 'Syne', sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: var(--mono);
-    color: var(--text);
-    background:
-      radial-gradient(70% 50% at 12% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
-      radial-gradient(60% 60% at 100% 100%, rgba(240, 165, 0, 0.12), transparent 70%),
-      var(--bg);
-    min-height: 100vh;
-  }
-  .wrap {
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2rem 1.2rem 2.6rem;
-  }
-  .title {
-    font-family: var(--sans);
-    font-size: clamp(1.55rem, 3vw, 2.5rem);
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin: 0 0 0.35rem;
-  }
-  .title span { color: var(--amber); }
-  .sub {
-    margin: 0 0 1.4rem;
-    color: var(--dim);
-    letter-spacing: 0.08em;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 1rem;
-  }
-  .card {
-    border: 1px solid var(--line);
-    background: rgba(16, 24, 36, 0.88);
-    padding: 1rem 1rem 0.95rem;
-  }
-  .card h2 {
-    margin: 0 0 0.65rem;
-    color: var(--amber);
-    font-size: 0.8rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-  p, li {
-    margin: 0;
-    color: var(--text);
-    line-height: 1.6;
-    font-size: 0.86rem;
-  }
-  ul, ol {
-    margin: 0;
-    padding-left: 1.1rem;
-    display: grid;
-    gap: 0.45rem;
-  }
-  .actions {
-    margin-top: 1rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-  }
-  .btn {
-    border: 1px solid var(--line);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.72rem;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    padding: 0.48rem 0.62rem;
-    display: inline-block;
-  }
-  .btn.primary {
-    border-color: var(--amber);
-    color: var(--amber);
-  }
+${vanillaTokensCss}${pageChromeCss}  .wrap { max-width: 980px; }
+  .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1rem; }
   .endpoint {
-    margin-top: 0.5rem;
     display: block;
-    color: var(--teal);
-    background: rgba(7, 11, 16, 0.85);
-    border: 1px solid var(--line);
-    padding: 0.45rem 0.5rem;
-    font-size: 0.76rem;
-    overflow-wrap: anywhere;
-  }
-  .small { color: var(--dim); font-size: 0.72rem; }
-  code {
-    font-family: var(--mono);
-    color: var(--teal);
+    margin-top: 0.5rem;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 0.5rem 0.55rem;
     font-size: 0.8rem;
   }
-  @media (max-width: 860px) {
-    .grid { grid-template-columns: 1fr; }
-  }
+  .small { color: var(--cream-faint); font-size: 0.74rem; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -1710,108 +1491,28 @@ export function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${guide.title} · MemoryVault</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+${FONT_LINK_TAGS}
 <style>
-  :root {
-    --bg: #070b10;
-    --bg2: #101824;
-    --line: #234061;
-    --text: #d8e8f8;
-    --dim: #6f8ea9;
-    --amber: #f0a500;
-    --teal: #00c8b4;
-    --mono: 'Share Tech Mono', monospace;
-    --sans: 'Syne', sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: var(--mono);
-    color: var(--text);
-    background:
-      radial-gradient(70% 50% at 12% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
-      radial-gradient(60% 60% at 100% 100%, rgba(240, 165, 0, 0.12), transparent 70%),
-      var(--bg);
-    min-height: 100vh;
-  }
-  .wrap {
-    max-width: 920px;
-    margin: 0 auto;
-    padding: 2rem 1.2rem 2.6rem;
-  }
-  .title {
-    font-family: var(--sans);
-    font-size: clamp(1.4rem, 3vw, 2.2rem);
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin: 0;
-  }
-  .title span { color: var(--amber); }
-  .sub {
-    margin: 0.35rem 0 1.2rem;
-    color: var(--dim);
-    letter-spacing: 0.08em;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.95rem;
-  }
-  .card {
-    border: 1px solid var(--line);
-    background: rgba(16, 24, 36, 0.88);
-    padding: 0.95rem 1rem;
-  }
+${vanillaTokensCss}${pageChromeCss}  .wrap { max-width: 920px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.95rem; }
   .span-2 { grid-column: 1 / -1; }
   .label {
-    color: var(--amber);
-    font-size: 0.7rem;
+    color: var(--butter);
+    font-family: var(--mono);
+    font-size: 0.64rem;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.12em;
     margin: 0 0 0.45rem;
-  }
-  p, li {
-    margin: 0;
-    line-height: 1.6;
-    font-size: 0.84rem;
-  }
-  ul {
-    margin: 0;
-    padding-left: 1.05rem;
-    display: grid;
-    gap: 0.4rem;
   }
   .endpoint {
     display: block;
     margin-top: 0.35rem;
-    color: var(--teal);
-    background: rgba(7, 11, 16, 0.85);
-    border: 1px solid var(--line);
-    padding: 0.45rem 0.5rem;
-    font-size: 0.76rem;
-    overflow-wrap: anywhere;
-    text-decoration: none;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 0.5rem 0.55rem;
+    font-size: 0.8rem;
   }
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-    margin-top: 0.8rem;
-  }
-  .btn {
-    border: 1px solid var(--line);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.7rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 0.45rem 0.6rem;
-  }
-  .btn.primary { border-color: var(--amber); color: var(--amber); }
-  code { color: var(--teal); }
   @media (max-width: 800px) {
     .grid { grid-template-columns: 1fr; }
     .span-2 { grid-column: auto; }
