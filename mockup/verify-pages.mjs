@@ -87,6 +87,27 @@ async function shoot(browser, name, url, width, height) {
   await ctx.close();
 }
 
+// Seed the viewer settings the page bootstrap reads, so the page renders in the
+// chosen theme exactly as it would after the user picked it in /view.
+async function shootThemed(browser, name, url, settings, width, height) {
+  log(`shooting ${name} (${width}×${height})`);
+  const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  await ctx.addInitScript((s) => {
+    try { localStorage.setItem('memoryvault.viewer.settings.v1', JSON.stringify(s)); } catch (e) {}
+  }, settings);
+  const page = await ctx.newPage();
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(FONT_SETTLE_MS);
+  await page.screenshot({ path: `${SHOTS}/${name}.png` });
+  await ctx.close();
+}
+
+const MIDNIGHT = { theme: 'midnight', theme_mode: 'dark' };
+const CUSTOM = {
+  theme: 'custom', theme_mode: 'dark',
+  custom_theme: { ground: '#0f1a2b', ground_2: '#16243a', cream: '#eaf2ff', cream_dim: '#9fb3d0', butter: '#6fb7ff', rule: '#2a3b55', font: 'fraunces' },
+};
+
 async function screenshotAll() {
   mkdirSync(SHOTS, { recursive: true });
   const authorizeUrl = await buildAuthorizeUrl();
@@ -95,6 +116,13 @@ async function screenshotAll() {
   await shoot(browser, 'page-mcp', `${BASE}/mcp`, 1280, 900);
   await shoot(browser, 'page-endpoint-guide', `${BASE}/api/memories`, 1280, 900);
   await shoot(browser, 'page-oauth-authorize', authorizeUrl, 1280, 860);
+  // Same pages with the saved theme set to midnight: all should follow.
+  await shootThemed(browser, 'page-landing-midnight', `${BASE}/`, MIDNIGHT, 1280, 900);
+  await shootThemed(browser, 'page-mcp-midnight', `${BASE}/mcp`, MIDNIGHT, 1280, 900);
+  await shootThemed(browser, 'page-endpoint-guide-midnight', `${BASE}/api/memories`, MIDNIGHT, 1280, 900);
+  await shootThemed(browser, 'page-oauth-midnight', authorizeUrl, MIDNIGHT, 1280, 860);
+  // And one page on a custom palette, to prove custom tokens propagate too.
+  await shootThemed(browser, 'page-landing-custom', `${BASE}/`, CUSTOM, 1280, 900);
   await browser.close();
 }
 

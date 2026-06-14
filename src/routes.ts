@@ -66,7 +66,10 @@ import {
   FONT_LINK_TAGS,
   vanillaTokensCss,
   pageChromeCss,
+  themeBootstrapTag,
 } from './viewer/tokens.js';
+
+import { themeStyles } from './viewer/themes.js';
 
 export async function processMcpBody(
   body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
@@ -1015,14 +1018,15 @@ export function rootLandingHtml(url: URL): string {
   }).join('');
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="vanilla">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault Dev Portal</title>
 ${FONT_LINK_TAGS}
+${themeBootstrapTag}
 <style>
-${vanillaTokensCss}${pageChromeCss}  .wrap { max-width: 1180px; }
+${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 1180px; }
   .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 1rem; }
   .metrics { margin-top: 1rem; display: flex; gap: 0.55rem; flex-wrap: wrap; }
   .metric {
@@ -1158,14 +1162,15 @@ export function mcpLandingHtml(url: URL): string {
   const authzMetadata = `${origin}/.well-known/oauth-authorization-server`;
   const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="vanilla">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault MCP</title>
 ${FONT_LINK_TAGS}
+${themeBootstrapTag}
 <style>
-${vanillaTokensCss}${pageChromeCss}  .wrap { max-width: 980px; }
+${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 980px; }
   .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1rem; }
   .endpoint {
     display: block;
@@ -1505,14 +1510,15 @@ export function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
     ? `${origin}${guide.endpointPath}`
     : `${origin}${guide.endpointPath}`;
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="vanilla">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${guide.title} · MemoryVault</title>
 ${FONT_LINK_TAGS}
+${themeBootstrapTag}
 <style>
-${vanillaTokensCss}${pageChromeCss}  .wrap { max-width: 920px; }
+${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 920px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.95rem; }
   .span-2 { grid-column: 1 / -1; }
   .label {
