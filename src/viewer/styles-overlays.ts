@@ -131,6 +131,81 @@ export const overlayStyles = `  .semantic-status-box {
     color: var(--on-butter);
     font-weight: 600;
   }
+  /* The custom swatch advertises "your colours" with a small spectrum. */
+  .theme-swatch-custom span {
+    background: conic-gradient(from 210deg, #e3c98f, #c9826e, #9db39a, #8fc7d8, #a99be8, #e3c98f);
+  }
+
+  /* ── CUSTOM THEME BUILDER ── */
+  .custom-builder { gap: 0.5rem; }
+  .custom-builder-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem 0.7rem;
+    margin-top: 0.2rem;
+  }
+  .custom-color-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .custom-color-row label {
+    color: var(--cream-dim);
+    font-size: 12px;
+  }
+  .custom-color-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .custom-color-field input[type="color"] {
+    width: 30px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--ground-3);
+    cursor: pointer;
+  }
+  .custom-color-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+  .custom-color-field input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
+  .custom-hex {
+    width: 78px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--ground-3);
+    color: var(--cream);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 0.3rem 0.4rem;
+    outline: none;
+    transition: border-color 0.16s;
+  }
+  .custom-hex:focus { border-color: var(--butter-deep); }
+  .custom-builder-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-top: 0.2rem;
+  }
+  .custom-builder-row label { color: var(--cream-dim); font-size: 12px; }
+  .custom-builder-row .setting-input { max-width: 230px; }
+  .custom-contrast {
+    border: 1px solid var(--clay);
+    border-radius: 7px;
+    background: var(--ground-3);
+    color: var(--clay);
+    font-size: 11.5px;
+    line-height: 1.4;
+    padding: 0.4rem 0.5rem;
+  }
+  .custom-builder-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.1rem;
+  }
 
   .changelog-overlay {
     display: none;
@@ -242,14 +317,21 @@ export const overlayStyles = `  .semantic-status-box {
     line-height: 1.45;
   }
 
-  /* Compact density (settings toggle) */
-  body.compact-cards .row {
-    padding: 10px 16px;
+  /* Compact density, driven by data-density on the list container. */
+  .grid-wrap[data-density="compact"] .row {
+    padding: 9px 16px;
     gap: 12px;
   }
-  body.compact-cards .ttl { font-size: 15px; margin-bottom: 2px; }
-  body.compact-cards .txt { font-size: 13px; }
-  body.compact-cards .group { margin-top: 18px; }
+  .grid-wrap[data-density="compact"] .ttl { font-size: 15px; margin-bottom: 1px; }
+  .grid-wrap[data-density="compact"] .group { margin-top: 16px; }
+  /* Clamp the body preview to a single line so rows stay tight. */
+  .grid-wrap[data-density="compact"] .txt {
+    font-size: 12.5px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   @media (max-width: 900px) {
     .hdr { padding: 14px 16px; gap: 14px; flex-wrap: wrap; }

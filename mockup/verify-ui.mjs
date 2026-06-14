@@ -166,6 +166,36 @@ async function loginThroughUi(page) {
   }
 }
 
+async function openSettings(page) {
+  await page.click('[data-action="open-settings-overlay"]');
+  await page.waitForSelector('#settings-overlay.open', { timeout: 5000 });
+}
+
+async function openFolder(page, text) {
+  const folder = page.locator('.settings-folder', { has: page.locator('summary', { hasText: text }) });
+  if (!(await folder.evaluate((el) => el.open))) {
+    await folder.locator('summary').click();
+    await page.waitForTimeout(150);
+  }
+}
+
+// A custom palette that matches none of the presets, so the reskin is obvious.
+const CUSTOM_PALETTE = {
+  ground: '#0f1a2b', ground_2: '#16243a', cream: '#eaf2ff',
+  cream_dim: '#9fb3d0', butter: '#6fb7ff', rule: '#2a3b55',
+};
+
+async function applyCustomPalette(page) {
+  await openSettings(page);
+  await openFolder(page, 'Appearance');
+  await page.click('#theme-picker .theme-swatch[data-theme-value="custom"]');
+  await page.waitForSelector('#custom-theme-builder', { state: 'visible' });
+  for (const [token, value] of Object.entries(CUSTOM_PALETTE)) {
+    await page.fill(`[data-custom-token="${token}"][data-custom-kind="hex"]`, value);
+  }
+  await page.waitForTimeout(200);
+}
+
 async function screenshotAll() {
   mkdirSync(SHOTS, { recursive: true });
   const browser = await chromium.launch();
@@ -193,6 +223,41 @@ async function screenshotAll() {
   await mobilePage.waitForTimeout(FONT_SETTLE_MS);
   await mobilePage.screenshot({ path: `${SHOTS}/mobile.png` });
   await mobileCtx.close();
+
+  log('shooting theme picker (presets + Custom)');
+  const pickerCtx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  const pickerPage = await pickerCtx.newPage();
+  await loginThroughUi(pickerPage);
+  await openSettings(pickerPage);
+  await openFolder(pickerPage, 'Appearance');
+  await pickerPage.locator('#theme-picker').scrollIntoViewIfNeeded();
+  await pickerPage.waitForTimeout(FONT_SETTLE_MS);
+  await pickerPage.locator('.settings-box').screenshot({ path: `${SHOTS}/settings-theme-picker.png` });
+  await pickerCtx.close();
+
+  log('shooting custom builder + custom-theme list');
+  const customCtx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  const customPage = await customCtx.newPage();
+  await loginThroughUi(customPage);
+  await applyCustomPalette(customPage);
+  await customPage.locator('#custom-theme-builder').scrollIntoViewIfNeeded();
+  await customPage.waitForTimeout(FONT_SETTLE_MS);
+  await customPage.locator('.settings-box').screenshot({ path: `${SHOTS}/custom-builder.png` });
+  await customPage.click('[data-action="close-settings"]');
+  await customPage.waitForTimeout(600);
+  await customPage.screenshot({ path: `${SHOTS}/main-custom.png` });
+  await customCtx.close();
+
+  log('shooting compact density list');
+  const compactCtx = await browser.newContext({ viewport: { width: 1280, height: 980 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  const compactPage = await compactCtx.newPage();
+  await loginThroughUi(compactPage);
+  await openSettings(compactPage);
+  await compactPage.check('#settings-compact-cards');
+  await compactPage.click('[data-action="apply-settings"]');
+  await compactPage.waitForTimeout(FONT_SETTLE_MS);
+  await compactPage.screenshot({ path: `${SHOTS}/main-compact.png` });
+  await compactCtx.close();
 
   await browser.close();
 }

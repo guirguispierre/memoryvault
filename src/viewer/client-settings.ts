@@ -53,6 +53,7 @@ export const clientSettings = `  function fillSettingsForm() {
       default_memory_filter: document.getElementById('settings-default-filter')?.value || '',
       search_debounce_ms: Number(document.getElementById('settings-search-debounce')?.value ?? 300),
       compact_cards: document.getElementById('settings-compact-cards')?.checked === true,
+      custom_theme: readCustomThemeFromForm(),
       graph_show_inferred: document.getElementById('settings-graph-inferred')?.checked !== false,
       graph_show_labels: document.getElementById('settings-graph-labels')?.checked !== false,
       graph_physics_enabled: document.getElementById('settings-graph-physics')?.checked !== false,
@@ -188,6 +189,7 @@ export const clientSettings = `  function fillSettingsForm() {
   function applySettingsFromForm() {
     viewerSettings = readSettingsFromForm();
     persistViewerSettings();
+    scheduleServerSettingsSave();
     applyViewerSettingsToRuntime({ restartPolling: true, rerenderGraph: true, rerenderGrid: true });
     updateTime();
     closeSettingsOverlay();
@@ -197,6 +199,7 @@ export const clientSettings = `  function fillSettingsForm() {
   function resetViewerSettings() {
     viewerSettings = buildDefaultViewerSettings();
     persistViewerSettings();
+    scheduleServerSettingsSave();
     fillSettingsForm();
     applyViewerSettingsToRuntime({ restartPolling: true, rerenderGraph: true, rerenderGrid: true });
     updateTime();
@@ -216,6 +219,95 @@ export const clientSettings = `  function fillSettingsForm() {
     document.querySelectorAll('.theme-mode-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === currentMode);
     });
+    syncCustomThemeBuilder();
+  }
+
+  function readCustomThemeFromForm() {
+    const base = (viewerSettings && viewerSettings.custom_theme) || buildVanillaCustomTheme();
+    const builder = document.getElementById('custom-theme-builder');
+    if (!builder) return normalizeCustomTheme(base);
+    const out = { font: base.font };
+    const fontSel = document.getElementById('custom-font');
+    if (fontSel && CUSTOM_FONT_KEYS.includes(fontSel.value)) out.font = fontSel.value;
+    for (const token of CUSTOM_COLOR_TOKENS) {
+      const hex = builder.querySelector('[data-custom-token="' + token + '"][data-custom-kind="hex"]');
+      const color = builder.querySelector('[data-custom-token="' + token + '"][data-custom-kind="color"]');
+      const raw = (hex && hex.value) || (color && color.value) || '';
+      out[token] = normalizeHex(raw, base[token]);
+    }
+    return normalizeCustomTheme(out);
+  }
+
+  function syncCustomThemeBuilder() {
+    const builder = document.getElementById('custom-theme-builder');
+    if (!builder) return;
+    const isCustom = !!viewerSettings && (viewerSettings.theme === 'custom' || viewerSettings.light_theme === 'custom');
+    builder.style.display = isCustom ? '' : 'none';
+    const ct = normalizeCustomTheme(viewerSettings && viewerSettings.custom_theme);
+    for (const token of CUSTOM_COLOR_TOKENS) {
+      const color = builder.querySelector('[data-custom-token="' + token + '"][data-custom-kind="color"]');
+      const hex = builder.querySelector('[data-custom-token="' + token + '"][data-custom-kind="hex"]');
+      if (color) color.value = ct[token];
+      if (hex) hex.value = ct[token];
+    }
+    const fontSel = document.getElementById('custom-font');
+    if (fontSel) fontSel.value = ct.font;
+    updateCustomContrastWarning();
+  }
+
+  function updateCustomContrastWarning() {
+    const el = document.getElementById('custom-contrast-warning');
+    if (!el) return;
+    const ct = normalizeCustomTheme(viewerSettings && viewerSettings.custom_theme);
+    const ratio = contrastRatio(ct.cream, ct.ground);
+    // 4.5:1 is the WCAG AA threshold for normal-size body text. Warn, never block.
+    if (ratio < 4.5) {
+      el.style.display = '';
+      el.textContent = 'Low contrast (' + ratio.toFixed(1) + ':1). WCAG AA wants 4.5:1 — text may be hard to read.';
+    } else {
+      el.style.display = 'none';
+      el.textContent = '';
+    }
+  }
+
+  function onCustomThemeFieldInput(token, kind, value) {
+    if (!viewerSettings) return;
+    const next = normalizeCustomTheme(viewerSettings.custom_theme);
+    if (kind === 'font') {
+      if (!CUSTOM_FONT_KEYS.includes(value)) return;
+      next.font = value;
+    } else if (CUSTOM_COLOR_TOKENS.includes(token)) {
+      const normalized = normalizeHex(value, next[token]);
+      next[token] = normalized;
+      const builder = document.getElementById('custom-theme-builder');
+      if (builder) {
+        // Keep the paired color/hex inputs in step without clobbering the one
+        // being typed into (an invalid half-typed hex leaves the field alone).
+        const color = builder.querySelector('[data-custom-token="' + token + '"][data-custom-kind="color"]');
+        const hex = builder.querySelector('[data-custom-token="' + token + '"][data-custom-kind="hex"]');
+        if (color && kind !== 'color') color.value = normalized;
+        if (hex && kind !== 'hex') hex.value = normalized;
+      }
+    } else {
+      return;
+    }
+    viewerSettings.custom_theme = next;
+    persistViewerSettings();
+    applyCustomTheme();
+    document.documentElement.setAttribute('data-theme', resolveActiveTheme());
+    updateCustomContrastWarning();
+    scheduleServerSettingsSave();
+  }
+
+  function resetCustomTheme() {
+    if (!viewerSettings) return;
+    viewerSettings.custom_theme = buildVanillaCustomTheme();
+    persistViewerSettings();
+    syncCustomThemeBuilder();
+    applyCustomTheme();
+    document.documentElement.setAttribute('data-theme', resolveActiveTheme());
+    scheduleServerSettingsSave();
+    showToast('Custom palette reset to vanilla.', 'info', true);
   }
 
   function syncFilterPills(type) {

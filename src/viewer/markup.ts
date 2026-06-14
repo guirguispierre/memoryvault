@@ -309,6 +309,7 @@ export const bodyMarkup = `</style>
                   <button type="button" class="theme-swatch" data-theme-value="solarized" title="Solarized"><span style="background:#FDF6E3;border:2px solid #A37B00"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="ember" title="Ember"><span style="background:#FAF0E8;border:2px solid #C0622E"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="arctic" title="Arctic"><span style="background:#EEF5FA;border:2px solid #1F7E9A"></span></button>
+                  <button type="button" class="theme-swatch theme-swatch-custom" data-theme-value="custom" title="Custom"><span></span></button>
                 </div>
               </div>
               <div class="setting-row setting-span-2">
@@ -320,6 +321,68 @@ export const bodyMarkup = `</style>
                   <button type="button" class="theme-swatch" data-theme-value="solarized" title="Solarized"><span style="background:#002B36;border:2px solid #B58900"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="ember" title="Ember"><span style="background:#1A0E0A;border:2px solid #E8956A"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="arctic" title="Arctic"><span style="background:#0F1B22;border:2px solid #8FC7D8"></span></button>
+                  <button type="button" class="theme-swatch theme-swatch-custom" data-theme-value="custom" title="Custom"><span></span></button>
+                </div>
+              </div>
+              <div class="setting-row setting-span-2 custom-builder" id="custom-theme-builder" style="display:none">
+                <div class="setting-label">Custom palette</div>
+                <div class="setting-help">Six colours theme the whole interface; the rest are derived. The shared palette is used wherever Custom is selected, light or dark.</div>
+                <div class="custom-builder-grid">
+                  <div class="custom-color-row">
+                    <label for="custom-ground">Background</label>
+                    <span class="custom-color-field">
+                      <input type="color" id="custom-ground" data-custom-token="ground" data-custom-kind="color">
+                      <input type="text" class="custom-hex" data-custom-token="ground" data-custom-kind="hex" maxlength="7" spellcheck="false" autocapitalize="off" autocorrect="off">
+                    </span>
+                  </div>
+                  <div class="custom-color-row">
+                    <label for="custom-ground2">Raised surface</label>
+                    <span class="custom-color-field">
+                      <input type="color" id="custom-ground2" data-custom-token="ground_2" data-custom-kind="color">
+                      <input type="text" class="custom-hex" data-custom-token="ground_2" data-custom-kind="hex" maxlength="7" spellcheck="false" autocapitalize="off" autocorrect="off">
+                    </span>
+                  </div>
+                  <div class="custom-color-row">
+                    <label for="custom-cream">Primary text</label>
+                    <span class="custom-color-field">
+                      <input type="color" id="custom-cream" data-custom-token="cream" data-custom-kind="color">
+                      <input type="text" class="custom-hex" data-custom-token="cream" data-custom-kind="hex" maxlength="7" spellcheck="false" autocapitalize="off" autocorrect="off">
+                    </span>
+                  </div>
+                  <div class="custom-color-row">
+                    <label for="custom-creamdim">Secondary text</label>
+                    <span class="custom-color-field">
+                      <input type="color" id="custom-creamdim" data-custom-token="cream_dim" data-custom-kind="color">
+                      <input type="text" class="custom-hex" data-custom-token="cream_dim" data-custom-kind="hex" maxlength="7" spellcheck="false" autocapitalize="off" autocorrect="off">
+                    </span>
+                  </div>
+                  <div class="custom-color-row">
+                    <label for="custom-butter">Accent</label>
+                    <span class="custom-color-field">
+                      <input type="color" id="custom-butter" data-custom-token="butter" data-custom-kind="color">
+                      <input type="text" class="custom-hex" data-custom-token="butter" data-custom-kind="hex" maxlength="7" spellcheck="false" autocapitalize="off" autocorrect="off">
+                    </span>
+                  </div>
+                  <div class="custom-color-row">
+                    <label for="custom-rule">Borders</label>
+                    <span class="custom-color-field">
+                      <input type="color" id="custom-rule" data-custom-token="rule" data-custom-kind="color">
+                      <input type="text" class="custom-hex" data-custom-token="rule" data-custom-kind="hex" maxlength="7" spellcheck="false" autocapitalize="off" autocorrect="off">
+                    </span>
+                  </div>
+                </div>
+                <div class="custom-builder-row">
+                  <label for="custom-font">Font</label>
+                  <select class="setting-input" id="custom-font" data-custom-token="font" data-custom-kind="font">
+                    <option value="fraunces">Fraunces + Grotesk (default)</option>
+                    <option value="grotesk">Schibsted Grotesk</option>
+                    <option value="system">System sans</option>
+                    <option value="typewriter">Fraunces + Plex Mono</option>
+                  </select>
+                </div>
+                <div class="custom-contrast" id="custom-contrast-warning" style="display:none"></div>
+                <div class="custom-builder-actions">
+                  <button type="button" class="refresh-btn utility-btn" data-action="reset-custom-theme">Reset to vanilla</button>
                 </div>
               </div>
               <div class="setting-row setting-inline">

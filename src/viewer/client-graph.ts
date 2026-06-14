@@ -448,6 +448,9 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
         case 'reset-viewer-settings':
           resetViewerSettings();
           break;
+        case 'reset-custom-theme':
+          resetCustomTheme();
+          break;
         case 'apply-settings':
           applySettingsFromForm();
           break;
@@ -486,6 +489,7 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
           viewerSettings.theme = themeValue;
         }
         persistViewerSettings();
+        scheduleServerSettingsSave();
         applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: graphVisible, rerenderGrid: false });
         return;
       }
@@ -497,6 +501,7 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
         viewerSettings = readSettingsFromForm();
         viewerSettings.theme_mode = mode;
         persistViewerSettings();
+        scheduleServerSettingsSave();
         applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: graphVisible, rerenderGrid: false });
         return;
       }
@@ -505,6 +510,22 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
     bindInput('search-input', onSearch);
     bindInput('graph-search-input', onGraphSearch);
     bindInput('cmd-input', onCommandFilter);
+
+    const customBuilder = document.getElementById('custom-theme-builder');
+    if (customBuilder) {
+      const onBuilderChange = (event) => {
+        const t = event.target;
+        if (!(t instanceof Element)) return;
+        const token = t.getAttribute('data-custom-token');
+        const kind = t.getAttribute('data-custom-kind');
+        if (!token || !kind) return;
+        onCustomThemeFieldInput(token, kind, typeof t.value === 'string' ? t.value : '');
+      };
+      // 'input' drives live preview from the color pickers and hex fields;
+      // 'change' covers the font <select>.
+      customBuilder.addEventListener('input', onBuilderChange);
+      customBuilder.addEventListener('change', onBuilderChange);
+    }
   }
 
   syncGraphToolbarState();

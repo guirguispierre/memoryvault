@@ -63,6 +63,7 @@ export const clientCore = `
       default_memory_filter: '',
       search_debounce_ms: 300,
       compact_cards: false,
+      custom_theme: buildVanillaCustomTheme(),
       graph_show_inferred: true,
       graph_show_labels: !window.matchMedia('(max-width: 640px)').matches,
       graph_physics_enabled: true,
@@ -99,7 +100,7 @@ export const clientCore = `
     const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
       ? source.default_memory_filter
       : '';
-    const validThemes = ['vanilla', 'midnight', 'solarized', 'ember', 'arctic'];
+    const validThemes = ['vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom'];
     // 'cyberpunk' was the pre-vanilla default; migrate stored settings to the new default.
     const migrateTheme = (value) => (value === 'cyberpunk' ? 'vanilla' : value);
     const theme = validThemes.includes(migrateTheme(source.theme)) ? migrateTheme(source.theme) : defaults.theme;
@@ -116,6 +117,7 @@ export const clientCore = `
       default_memory_filter: defaultFilter,
       search_debounce_ms: Math.min(Math.max(Math.round(searchDebounce), 120), 1500),
       compact_cards: source.compact_cards === true,
+      custom_theme: normalizeCustomTheme(source.custom_theme),
       graph_show_inferred: source.graph_show_inferred !== false,
       graph_show_labels: source.graph_show_labels === undefined ? defaults.graph_show_labels : source.graph_show_labels !== false,
       graph_physics_enabled: source.graph_physics_enabled !== false,
@@ -151,12 +153,174 @@ export const clientCore = `
     } catch {}
   }
 
+  // ── Custom theme ────────────────────────────────────────────────────
+  // Body/display pairings the page already loads, so choosing one costs no
+  // extra network request. Stored by key in custom_theme.font.
+  const CUSTOM_FONT_PRESETS = {
+    fraunces: { disp: "'Fraunces', Georgia, serif", body: "'Schibsted Grotesk', system-ui, sans-serif" },
+    grotesk: { disp: "'Schibsted Grotesk', system-ui, sans-serif", body: "'Schibsted Grotesk', system-ui, sans-serif" },
+    system: { disp: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif", body: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" },
+    typewriter: { disp: "'Fraunces', Georgia, serif", body: "'IBM Plex Mono', ui-monospace, monospace" },
+  };
+  const CUSTOM_FONT_KEYS = Object.keys(CUSTOM_FONT_PRESETS);
+  const CUSTOM_COLOR_TOKENS = ['ground', 'ground_2', 'cream', 'cream_dim', 'butter', 'rule'];
+
+  function buildVanillaCustomTheme() {
+    // Mirrors the default :root tokens so 'reset' returns to vanilla dark.
+    return { ground: '#181511', ground_2: '#201c16', cream: '#f0e7d5', cream_dim: '#b5ab97', butter: '#e3c98f', rule: '#332c22', font: 'fraunces' };
+  }
+
+  const CUSTOM_HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+  function normalizeHex(value, fallback) {
+    const v = String(value || '').trim().toLowerCase();
+    if (!CUSTOM_HEX_RE.test(v)) return fallback;
+    if (v.length === 4) return '#' + v[1] + v[1] + v[2] + v[2] + v[3] + v[3];
+    return v;
+  }
+  function hexToRgb(hex) {
+    const h = normalizeHex(hex, '#000000').slice(1);
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+  }
+  function rgbToHex(r, g, b) {
+    const c = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+    return '#' + c(r) + c(g) + c(b);
+  }
+  function mixHex(a, b, t) {
+    const ca = hexToRgb(a), cb = hexToRgb(b);
+    return rgbToHex(ca.r + (cb.r - ca.r) * t, ca.g + (cb.g - ca.g) * t, ca.b + (cb.b - ca.b) * t);
+  }
+  function rgbaOf(hex, alpha) {
+    const c = hexToRgb(hex);
+    return 'rgba(' + c.r + ', ' + c.g + ', ' + c.b + ', ' + alpha + ')';
+  }
+  // WCAG relative luminance, used for both contrast checks and dark/light sensing.
+  function relLuminance(hex) {
+    const c = hexToRgb(hex);
+    const lin = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
+    return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+  }
+  function contrastRatio(a, b) {
+    const la = relLuminance(a), lb = relLuminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  function normalizeCustomTheme(raw) {
+    const v = buildVanillaCustomTheme();
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const out = { font: CUSTOM_FONT_KEYS.includes(src.font) ? src.font : v.font };
+    for (const token of CUSTOM_COLOR_TOKENS) out[token] = normalizeHex(src[token], v[token]);
+    return out;
+  }
+
+  // Derive every token the UI keys off from the six the user sets. ground_2/3
+  // step from the surface toward the text colour; rules and faint text
+  // interpolate between background and foreground, so a light or a dark base
+  // both read correctly. Success/error hues aren't user-editable — they only
+  // track light vs dark so status colours stay legible against any base.
+  function deriveCustomTokens(themeRaw) {
+    const ct = normalizeCustomTheme(themeRaw);
+    const ground = ct.ground, ground2 = ct.ground_2, cream = ct.cream;
+    const creamDim = ct.cream_dim, butter = ct.butter, rule = ct.rule;
+    const isDark = relLuminance(ground) < 0.5;
+    const font = CUSTOM_FONT_PRESETS[ct.font] || CUSTOM_FONT_PRESETS.fraunces;
+    return {
+      '--ground': ground,
+      '--ground-2': ground2,
+      '--ground-3': mixHex(ground2, cream, 0.06),
+      '--rule': rule,
+      '--rule-soft': mixHex(rule, ground, 0.45),
+      '--rule-bright': mixHex(rule, cream, 0.3),
+      '--cream': cream,
+      '--cream-dim': creamDim,
+      '--cream-faint': mixHex(creamDim, ground, 0.45),
+      '--butter': butter,
+      '--butter-deep': mixHex(butter, ground, 0.35),
+      '--latte': mixHex(creamDim, butter, 0.3),
+      '--sage': isDark ? '#9DB39A' : '#5F7D5C',
+      '--clay': isDark ? '#C9826E' : '#A85B44',
+      '--on-butter': relLuminance(butter) > 0.55 ? '#241C0D' : '#FBF4E6',
+      '--butter-glow': rgbaOf(butter, 0.08),
+      '--panel-bg': ground2,
+      '--panel-shadow': isDark ? 'rgba(0, 0, 0, 0.5)' : 'rgba(30, 24, 14, 0.14)',
+      '--surface': rgbaOf(ground2, 0.6),
+      '--surface-raised': mixHex(ground2, cream, 0.04),
+      '--toast-bg': mixHex(ground2, cream, 0.04),
+      '--card-glow': isDark ? 'rgba(0, 0, 0, 0.35)' : 'rgba(30, 24, 14, 0.1)',
+      '--overlay-bg': isDark ? rgbaOf(mixHex(ground, '#000000', 0.4), 0.78) : rgbaOf(mixHex(ground, '#000000', 0.05), 0.34),
+      '--disp': font.disp,
+      '--body': font.body,
+    };
+  }
+
+  function ensureCustomThemeStyleEl() {
+    let el = document.getElementById('mv-custom-theme');
+    if (!el) {
+      el = document.createElement('style');
+      el.id = 'mv-custom-theme';
+      document.head.appendChild(el);
+    }
+    return el;
+  }
+
+  // Scoped to [data-theme="custom"] so switching back to a preset deactivates
+  // it with no cleanup — the preset's own block simply wins again.
+  function applyCustomTheme() {
+    const tokens = deriveCustomTokens(viewerSettings && viewerSettings.custom_theme);
+    const decls = Object.keys(tokens).map((k) => '    ' + k + ': ' + tokens[k] + ';').join('\\n');
+    ensureCustomThemeStyleEl().textContent = '[data-theme="custom"] {\\n' + decls + '\\n  }';
+  }
+
+  // ── Server-side persistence ─────────────────────────────────────────
+  // localStorage paints instantly and survives offline; the server copy is
+  // the cross-device source of truth. On load the server wins when reachable;
+  // on change we write through to both, server in the background.
+  const VIEWER_SETTINGS_ENDPOINT = BASE + '/api/viewer-settings';
+  let serverSettingsSaveTimer = null;
+
+  async function saveServerViewerSettings() {
+    if (!viewerSettings || !hasAuthenticatedSession()) return;
+    try {
+      await apiFetch(VIEWER_SETTINGS_ENDPOINT, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: viewerSettings }),
+      });
+    } catch {}
+  }
+
+  function scheduleServerSettingsSave() {
+    if (!hasAuthenticatedSession()) return;
+    clearTimeout(serverSettingsSaveTimer);
+    serverSettingsSaveTimer = setTimeout(saveServerViewerSettings, 500);
+  }
+
+  async function reconcileServerViewerSettings() {
+    if (!hasAuthenticatedSession()) return;
+    try {
+      const r = await apiFetch(VIEWER_SETTINGS_ENDPOINT);
+      if (!r.ok) return; // offline or error: keep the local values already applied
+      const data = await r.json();
+      if (data && data.settings && typeof data.settings === 'object') {
+        viewerSettings = normalizeViewerSettings(data.settings);
+        persistViewerSettings();
+        applyViewerSettingsToRuntime({ restartPolling: true, rerenderGraph: true, rerenderGrid: true });
+        fillSettingsForm();
+        updateTime();
+      } else {
+        // No server row yet: seed it from whatever the client is holding.
+        saveServerViewerSettings();
+      }
+    } catch {}
+  }
+
   const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
   function resolveActiveTheme() {
     if (!viewerSettings) return 'vanilla';
     const dark = viewerSettings.theme || 'vanilla';
-    const light = (viewerSettings.light_theme || 'vanilla') + '-light';
+    const lightBase = viewerSettings.light_theme || 'vanilla';
+    // The custom palette is a single shared set, so it carries no -light suffix.
+    const light = lightBase === 'custom' ? 'custom' : lightBase + '-light';
     const mode = viewerSettings.theme_mode || 'auto';
     if (mode === 'light') return light;
     if (mode === 'dark') return dark;
@@ -171,9 +335,11 @@ export const clientCore = `
     graphShowInferred = viewerSettings.graph_show_inferred;
     graphShowLabels = viewerSettings.graph_show_labels;
     graphPhysicsEnabled = viewerSettings.graph_physics_enabled;
-    document.body.classList.toggle('compact-cards', viewerSettings.compact_cards);
+    const grid = document.getElementById('grid');
+    if (grid) grid.setAttribute('data-density', viewerSettings.compact_cards ? 'compact' : 'comfortable');
     document.body.classList.toggle('scanlines-off', !viewerSettings.show_scanlines);
     document.body.classList.toggle('motion-reduced', viewerSettings.reduce_motion);
+    applyCustomTheme();
     document.documentElement.setAttribute('data-theme', resolveActiveTheme());
     syncThemePicker();
     syncGraphToolbarState();
@@ -248,6 +414,7 @@ export const clientCore = `
     syncFilterPills(activeFilter);
     loadMemories();
     startLivePolling();
+    reconcileServerViewerSettings();
     showToast('Signed in — loading your index.', 'success');
     if (viewerSettings && viewerSettings.auto_open_graph) {
       setTimeout(() => { if (hasAuthenticatedSession()) showGraph(); }, 180);
