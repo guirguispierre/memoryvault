@@ -31,6 +31,8 @@ import {
 
 import { CORS_HEADERS, corsJsonResponse } from './cors.js';
 
+import { FONT_LINK_TAGS, vanillaTokensCss } from './viewer/tokens.js';
+
 import {
   listBrainsForUser,
   findActiveBrain,
@@ -464,7 +466,7 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
     'code_challenge_method',
   ].map((k) => `<input type="hidden" name="${k}" value="${escapeHtml(requestData[k] ?? '')}">`).join('');
   const errorBlock = errorMessage
-    ? `<div style="margin:0 0 12px;color:#ef4444;font-size:13px;">${escapeHtml(errorMessage)}</div>`
+    ? `<div class="err">${escapeHtml(errorMessage)}</div>`
     : '';
 
   return `<!doctype html>
@@ -472,45 +474,100 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Connect Second Brain</title>
+  <title>Connect your second brain · MemoryVault</title>
+  ${FONT_LINK_TAGS}
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0b1220;color:#e6edf5;display:flex;min-height:100vh;align-items:center;justify-content:center}
-    .card{width:min(440px,92vw);background:#111a2c;border:1px solid #24364f;border-radius:16px;padding:20px}
-    h1{font-size:20px;margin:0 0 8px}
-    p{margin:0 0 16px;color:#9fb2c8;font-size:14px}
-    label{display:block;font-size:12px;color:#9fb2c8;margin:10px 0 6px}
-    input{width:100%;box-sizing:border-box;background:#0b1220;border:1px solid #2b3f59;color:#e6edf5;border-radius:10px;padding:10px 12px}
-    .row{display:flex;gap:8px;margin-top:14px}
-    button{flex:1;border:none;border-radius:10px;padding:11px 12px;font-weight:600;cursor:pointer}
-    .primary{background:#22c55e;color:#04110a}
-    .secondary{background:#1d4ed8;color:#e8f0ff}
-    .tertiary{background:#f59e0b;color:#201200}
-    .hr{height:1px;background:#24364f;margin:16px 0}
-    .meta{margin-top:14px;font-size:11px;color:#7f92a8}
-    .version-tag{position:fixed;right:12px;bottom:10px;font-size:11px;color:#7f92a8;letter-spacing:0.04em;user-select:none}
+${vanillaTokensCss}    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      font-family: var(--body);
+      color: var(--cream-dim);
+      -webkit-font-smoothing: antialiased;
+      background:
+        radial-gradient(1000px 460px at 50% -12%, var(--butter-glow), transparent 62%),
+        var(--ground);
+    }
+    .card {
+      width: min(440px, 92vw);
+      background: var(--ground-2);
+      border: 1px solid var(--rule);
+      border-radius: 14px;
+      padding: 32px 30px 26px;
+      box-shadow: 0 32px 80px var(--card-glow);
+    }
+    .pour { display: flex; align-items: flex-end; gap: 3px; height: 20px; margin-bottom: 20px; }
+    .pour i { width: 4px; border-radius: 2px; background: var(--cream); }
+    .wordmark { font-family: var(--disp); font-weight: 560; font-size: 24px; color: var(--cream); margin-bottom: 14px; }
+    .wordmark em { font-style: italic; color: var(--butter); }
+    h1 { font-family: var(--disp); font-weight: 560; font-size: 18px; color: var(--cream); margin: 0 0 6px; }
+    p { margin: 0 0 16px; color: var(--cream-dim); font-size: 14px; line-height: 1.5; }
+    label { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--cream-faint); margin: 14px 1px 6px; }
+    input {
+      width: 100%;
+      background: var(--ground-3);
+      border: 1px solid var(--rule);
+      color: var(--cream);
+      border-radius: 8px;
+      padding: 11px 13px;
+      font-family: var(--body);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.16s, background 0.16s;
+    }
+    input::placeholder { color: var(--cream-faint); }
+    input:focus { border-color: var(--butter-deep); background: var(--surface-raised); }
+    .row { display: flex; gap: 10px; margin-top: 16px; }
+    button {
+      flex: 1;
+      border-radius: 8px;
+      padding: 12px;
+      font-family: var(--body);
+      font-weight: 600;
+      font-size: 13.5px;
+      cursor: pointer;
+      border: 1px solid var(--rule);
+      background: transparent;
+      color: var(--cream-dim);
+      transition: filter 0.16s, border-color 0.16s, color 0.16s;
+    }
+    button.primary { background: var(--butter); border-color: var(--butter); color: var(--on-butter); }
+    button.primary:hover { filter: brightness(1.05); }
+    button.secondary:hover, button.tertiary:hover { border-color: var(--butter-deep); color: var(--cream); }
+    .hr { height: 1px; background: var(--rule-soft); margin: 18px 0; }
+    .meta { margin-top: 14px; font-family: var(--mono); font-size: 11px; color: var(--cream-faint); }
+    .err { margin: 0 0 12px; color: var(--clay); font-size: 13px; line-height: 1.5; }
+    .version-tag { position: fixed; right: 12px; bottom: 10px; font-family: var(--mono); font-size: 11px; color: var(--cream-faint); letter-spacing: 0.04em; user-select: none; }
+    :focus-visible { outline: 2px solid var(--butter); outline-offset: 2px; }
   </style>
 </head>
 <body>
   <form class="card" method="post" action="/authorize">
-    <h1>Connect Your Second Brain</h1>
-    <p>Sign in, create an account, or use a legacy API token to authorize this MCP integration.</p>
+    <div class="pour" aria-hidden="true"><i style="height:4px;opacity:.14"></i><i style="height:6px;opacity:.18"></i><i style="height:5px;opacity:.22"></i><i style="height:9px;opacity:.3"></i><i style="height:7px;opacity:.38"></i><i style="height:12px;opacity:.5"></i><i style="height:10px;opacity:.6"></i><i style="height:15px;opacity:.74"></i><i style="height:18px;opacity:.88"></i><i style="height:20px;opacity:1"></i></div>
+    <div class="wordmark">Memory<em>Vault</em></div>
+    <h1>Connect your second brain</h1>
+    <p>Sign in, create an account, or use a legacy API token to let this agent read and write your memories.</p>
     ${errorBlock}
     ${hidden}
     <label>Email</label>
     <input type="email" name="email" autocomplete="username" />
     <label>Password</label>
     <input type="password" name="password" autocomplete="current-password" />
-    <label>Brain Name (used when signing up)</label>
-    <input type="text" name="brain_name" placeholder="My Second Brain" />
+    <label>Brain name — used when signing up</label>
+    <input type="text" name="brain_name" placeholder="My second brain" />
     <div class="row">
-      <button class="primary" type="submit" name="auth_mode" value="login">Sign In</button>
-      <button class="secondary" type="submit" name="auth_mode" value="signup">Sign Up</button>
+      <button class="primary" type="submit" name="auth_mode" value="login">Sign in</button>
+      <button class="secondary" type="submit" name="auth_mode" value="signup">Sign up</button>
     </div>
     <div class="hr"></div>
-    <label>Legacy API Token</label>
+    <label>Legacy API token</label>
     <input type="password" name="legacy_token" placeholder="sk-... or Bearer ...">
     <div class="row">
-      <button class="tertiary" type="submit" name="auth_mode" value="token">Use Legacy Token</button>
+      <button class="tertiary" type="submit" name="auth_mode" value="token">Use legacy token</button>
     </div>
     <div class="meta">Client: ${escapeHtml(requestData.client_id ?? '')}</div>
   </form>
