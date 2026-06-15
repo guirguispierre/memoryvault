@@ -24,8 +24,9 @@ export const componentStyles = `  .toast {
     padding: 0.6rem 0.9rem;
     /* Clear gap below the sticky header; z-index stays under the header (100)
        so the opaque header occludes the banner cleanly as it scrolls away
-       rather than colliding with it. */
-    margin: 1rem 40px 0;
+       rather than colliding with it. The bottom margin keeps the content below
+       from crowding the banner. */
+    margin: 1rem 40px;
     position: relative;
     z-index: 1;
     border: 1px solid var(--rule);

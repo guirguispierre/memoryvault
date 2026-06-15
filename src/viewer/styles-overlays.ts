@@ -338,7 +338,7 @@ export const overlayStyles = `  .semantic-status-box {
     .pour { padding: 12px 16px 10px; }
     .controls { padding: 8px 16px; }
     .grid-wrap { padding: 4px 16px 48px; }
-    .update-banner { margin: 0.6rem 16px 0; }
+    .update-banner { margin: 0.6rem 16px; }
     .footer { padding: 12px 16px; flex-wrap: wrap; gap: 0.45rem; }
   }
 
