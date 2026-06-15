@@ -1,7 +1,7 @@
 import type { BrainPolicy, LinkStats } from './types.js';
 
 export const SERVER_NAME = 'memoryvault';
-export const SERVER_VERSION = '1.11.0';
+export const SERVER_VERSION = '1.12.0';
 export const LEGACY_BRAIN_ID = 'legacy-default-brain';
 export const LEGACY_USER_ID = 'legacy-token-user';
 export const LEGACY_USER_EMAIL = 'legacy-token@memoryvault.local';
@@ -15,7 +15,8 @@ export const REFRESH_TOKEN_COOKIE_PATH = '/';
 export const SESSION_COOKIE_SAME_SITE = 'Lax' as const;
 export const AUTH_RATE_LIMIT_MAX_ATTEMPTS = 10;
 export const AUTH_RATE_LIMIT_WINDOW_SECONDS = 60 * 15;
-export const PBKDF2_ITERATIONS = 100_000;
+export const PBKDF2_ITERATIONS = 600_000; // OWASP 2023+ minimum for PBKDF2-HMAC-SHA256; stored hashes embed their own count, so old hashes still verify.
+export const MCP_SSE_KEEPALIVE_INTERVAL_MS = 15_000; // SSE ping cadence; keeps idle MCP streams open through proxies.
 export const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5';
 export const VECTORIZE_QUERY_TOP_K_MAX = 20;
 export const VECTORIZE_UPSERT_BATCH_SIZE = 500;

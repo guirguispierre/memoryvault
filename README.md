@@ -1,5 +1,8 @@
 # MemoryVault MCP
 
+[![CI](https://github.com/guirguispierre/memoryvault/actions/workflows/ci.yml/badge.svg)](https://github.com/guirguispierre/memoryvault/actions/workflows/ci.yml)
+[![Tenant Isolation](https://github.com/guirguispierre/memoryvault/actions/workflows/isolation.yml/badge.svg)](https://github.com/guirguispierre/memoryvault/actions/workflows/isolation.yml)
+
 A self-hosted, graph-aware memory server for AI assistants. Built on Cloudflare Workers + D1.
 
 MemoryVault gives AI clients (Claude, ChatGPT, etc.) persistent memory across sessions via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Store notes, facts, and journal entries. Link related memories into a knowledge graph. Search with hybrid lexical + semantic retrieval.
@@ -109,8 +112,8 @@ https://<your-worker>.<your-subdomain>.workers.dev/mcp
 | `src/vectorize.ts` | Semantic search and Vectorize integration |
 | `src/scoring.ts` | Dynamic confidence/importance scoring |
 | `src/tools-schema.ts` | MCP tool definitions and metadata |
-| `src/tools.ts` | MCP tool handler implementations |
-| `src/viewer.ts` | Web viewer UI (`/view`) |
+| `src/tools/` | MCP tool handlers, split by domain (memory, graph, knowledge, trust-policy, snapshots, objectives, observability) |
+| `src/viewer/` | Web viewer UI (`/view`), split into markup, styles, themes, and client script modules |
 | `src/routes.ts` | API and HTML route handlers |
 
 **Tech stack:** Cloudflare Workers, D1 (SQLite), Vectorize, Workers AI (`@cf/baai/bge-base-en-v1.5`), MCP SDK
@@ -147,6 +150,25 @@ ADMIN_TOKEN=... npm run smoke:oauth-isolation
 **Notes:**
 - Semantic search requires Workers AI/Vectorize bindings — use `npx wrangler dev --remote` for full functionality
 - Local dev uses `--local` D1 by default
+
+## Testing
+
+```bash
+npm run test:crypto      # unit tests for src/crypto.ts (node --test, no build step)
+
+npm run db:isolation     # one-time: apply schema.sql to the local test D1
+npm run dev:isolation    # boot the local test worker
+BASE_URL=http://127.0.0.1:8787 npm run test:isolation   # in another terminal
+```
+
+The isolation suite is a black-box cross-tenant attack suite against a real
+worker and real D1 — see [tests/README.md](./tests/README.md). Both run in CI
+on every push.
+
+## Security
+
+See [SECURITY.md](./SECURITY.md) for the threat model, how tenant isolation
+is enforced, auth details, and how to report a vulnerability.
 
 ## Contributing
 

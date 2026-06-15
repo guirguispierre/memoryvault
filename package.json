@@ -3,10 +3,17 @@
   "version": "1.11.0",
   "description": "MemoryVault MCP server on Cloudflare Workers + D1 with OAuth and graph-based memory tools.",
   "scripts": {
-    "test": "npm run type-check",
+    "test": "npm run type-check && npm run test:crypto && npm run test:vectorize",
+    "test:all": "npm test && npm run test:isolation",
+    "test:vectorize": "node --import ./tests/register-ts-loader.mjs --test tests/vectorize.test.mjs",
+    "test:vectorize:integration": "node tests/vectorize.integration.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "type-check": "tsc",
+    "test:crypto": "node --import ./tests/register-ts-loader.mjs --test tests/crypto.test.mjs",
+    "test:isolation": "node --test tests/isolation.mjs",
+    "dev:isolation": "wrangler dev --config tests/wrangler.isolation.toml --port 8787 --persist-to .wrangler/isolation-state",
+    "db:isolation": "wrangler d1 execute ai-memory-test --local --file=schema.sql --config tests/wrangler.isolation.toml --persist-to .wrangler/isolation-state",
     "smoke:oauth-isolation": "bash scripts/smoke_oauth_isolation.sh"
   },
   "keywords": [
@@ -37,6 +44,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260329.1",
+    "playwright": "^1.60.0",
     "typescript": "^6.0.2",
     "wrangler": "^4.78.0"
   }

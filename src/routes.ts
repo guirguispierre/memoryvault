@@ -11,6 +11,7 @@ import {
 import {
   SERVER_NAME,
   SERVER_VERSION,
+  MCP_SSE_KEEPALIVE_INTERVAL_MS,
 } from './constants.js';
 
 import {
@@ -36,6 +37,8 @@ import {
   loadSourceTrustMap,
   getBrainPolicy,
   setBrainPolicy,
+  getViewerSettings,
+  setViewerSettings,
   logChangelog,
 } from './db.js';
 
@@ -57,7 +60,18 @@ import {
 
 import {
   callTool,
-} from './tools.js';
+} from './tools/index.js';
+
+import {
+  FONT_LINK_TAGS,
+  pageChromeCss,
+} from './viewer/tokens.js';
+
+import {
+  constellationTokensCss,
+  constellationHeadTags,
+  constellationCalmField,
+} from './viewer/constellation.js';
 
 export async function processMcpBody(
   body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
@@ -138,7 +152,7 @@ export async function handleMcp(request: Request, env: Env, url: URL, authCtx: A
         } catch {
           clearInterval(interval);
         }
-      }, 15000);
+      }, MCP_SSE_KEEPALIVE_INTERVAL_MS);
     })();
 
     return new Response(readable, {
@@ -235,6 +249,25 @@ export async function handleApiMemories(request: Request, env: Env, brainId: str
   const stats = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NULL GROUP BY type').bind(brainId).all();
   const archived = await env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NOT NULL').bind(brainId).first<{ count: number }>();
   return new Response(JSON.stringify({ memories: sortedMemories, stats: stats.results, archived_count: archived?.count ?? 0 }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+// Cheap change fingerprint for the live poll: count + newest updated_at +
+// total links. This moves on edits, reinforcement, decay, and link changes —
+// not just on a count change — without pulling any memory bodies.
+export async function handleApiMemoriesSignature(env: Env, brainId: string): Promise<Response> {
+  const mem = await env.DB.prepare(
+    'SELECT COUNT(*) as count, COALESCE(MAX(updated_at), 0) as last_updated FROM memories WHERE brain_id = ? AND archived_at IS NULL'
+  ).bind(brainId).first<{ count: number; last_updated: number }>();
+  const links = await env.DB.prepare(
+    'SELECT COUNT(*) as link_total FROM memory_links WHERE brain_id = ?'
+  ).bind(brainId).first<{ link_total: number }>();
+  return new Response(JSON.stringify({
+    count: mem?.count ?? 0,
+    last_updated: mem?.last_updated ?? 0,
+    link_total: links?.link_total ?? 0,
+  }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }
@@ -837,9 +870,461 @@ export async function handleApiPurge(request: Request, env: Env, brainId: string
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  Viewer settings                                                   */
+/* ------------------------------------------------------------------ */
 
+// Server-side whitelist for viewer preferences. The client normalizes too,
+// but this is the trust boundary: only known keys survive, numbers are
+// clamped to the same ranges the UI enforces, and the custom palette is
+// reduced to six hex colours plus a vetted font key.
+const VIEWER_THEME_NAMES = new Set(['slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
+const VIEWER_THEME_MODES = new Set(['auto', 'light', 'dark']);
+const VIEWER_FONT_KEYS = new Set(['fraunces', 'grotesk', 'system', 'typewriter']);
+const VIEWER_FILTERS = new Set(['', 'note', 'fact', 'journal']);
+const VIEWER_HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const VIEWER_CUSTOM_DEFAULTS: Record<string, string> = {
+  ground: '#181511', ground_2: '#201c16', cream: '#f0e7d5',
+  cream_dim: '#b5ab97', butter: '#e3c98f', rule: '#332c22',
+};
+
+function clampViewerInt(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.round(n), min), max);
+}
+
+function asViewerBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function sanitizeCustomTheme(raw: unknown): Record<string, string> {
+  const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(VIEWER_CUSTOM_DEFAULTS)) {
+    const v = typeof src[key] === 'string' ? (src[key] as string).trim().toLowerCase() : '';
+    out[key] = VIEWER_HEX_RE.test(v) ? v : VIEWER_CUSTOM_DEFAULTS[key];
+  }
+  out.font = typeof src.font === 'string' && VIEWER_FONT_KEYS.has(src.font) ? src.font : 'fraunces';
+  return out;
+}
+
+function sanitizeViewerSettings(raw: unknown): Record<string, unknown> {
+  const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'slate';
+  const lightTheme = typeof src.light_theme === 'string' && VIEWER_THEME_NAMES.has(src.light_theme) ? src.light_theme : 'paper';
+  const mode = typeof src.theme_mode === 'string' && VIEWER_THEME_MODES.has(src.theme_mode) ? src.theme_mode : 'auto';
+  const filter = typeof src.default_memory_filter === 'string' && VIEWER_FILTERS.has(src.default_memory_filter) ? src.default_memory_filter : '';
+  return {
+    theme,
+    light_theme: lightTheme,
+    theme_mode: mode,
+    custom_theme: sanitizeCustomTheme(src.custom_theme),
+    live_poll_enabled: asViewerBool(src.live_poll_enabled, true),
+    live_poll_interval_sec: clampViewerInt(src.live_poll_interval_sec, 5, 120, 10),
+    time_mode: src.time_mode === 'local' ? 'local' : 'utc',
+    default_memory_filter: filter,
+    search_debounce_ms: clampViewerInt(src.search_debounce_ms, 120, 1500, 300),
+    compact_cards: asViewerBool(src.compact_cards, false),
+    graph_show_inferred: asViewerBool(src.graph_show_inferred, true),
+    graph_show_labels: asViewerBool(src.graph_show_labels, true),
+    graph_physics_enabled: asViewerBool(src.graph_physics_enabled, true),
+    graph_focus_highlight: asViewerBool(src.graph_focus_highlight, true),
+    auto_open_graph: asViewerBool(src.auto_open_graph, false),
+    toasts_enabled: asViewerBool(src.toasts_enabled, true),
+    toast_duration_ms: clampViewerInt(src.toast_duration_ms, 1200, 8000, 2300),
+    confirm_logout: asViewerBool(src.confirm_logout, false),
+    show_scanlines: asViewerBool(src.show_scanlines, true),
+    reduce_motion: asViewerBool(src.reduce_motion, false),
+    semantic_reindex_wait_for_index: asViewerBool(src.semantic_reindex_wait_for_index, true),
+    semantic_reindex_wait_timeout_seconds: clampViewerInt(src.semantic_reindex_wait_timeout_seconds, 1, 900, 180),
+    semantic_reindex_limit: clampViewerInt(src.semantic_reindex_limit, 1, 2000, 500),
+  };
+}
+
+export async function handleApiViewerSettings(request: Request, env: Env, brainId: string): Promise<Response> {
+  const jsonHeaders = { ...CORS_HEADERS, 'Content-Type': 'application/json' };
+  if (request.method === 'GET') {
+    const stored = await getViewerSettings(env, brainId);
+    const settings = stored ? sanitizeViewerSettings(stored) : null;
+    return new Response(JSON.stringify({ settings }), { headers: jsonHeaders });
+  }
+  if (request.method === 'PUT') {
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json() as Record<string, unknown>;
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400, headers: jsonHeaders });
+    }
+    const sanitized = sanitizeViewerSettings(body && typeof body === 'object' ? body.settings : null);
+    await setViewerSettings(env, brainId, sanitized);
+    return new Response(JSON.stringify({ settings: sanitized }), { headers: jsonHeaders });
+  }
+  return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: jsonHeaders });
+}
+
+
+
+// Served at /landing.js (the page CSP forbids inline scripts). Builds the
+// per-letter blur-up headline, wires scroll reveals via one IntersectionObserver,
+// and runs the FAQ accordion. prefers-reduced-motion is handled by the page CSS
+// plus the early returns here.
+export const landingScript = `(function(){
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Scroll reveals: add .in once, then stop watching.
+  (function(){
+    var els = document.querySelectorAll('.reveal');
+    if (reduce || !('IntersectionObserver' in window)) {
+      for (var i = 0; i < els.length; i++) els[i].classList.add('in');
+      return;
+    }
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    for (var j = 0; j < els.length; j++) io.observe(els[j]);
+  })();
+
+  // FAQ accordion.
+  (function(){
+    var items = document.querySelectorAll('.faq-item');
+    for (var k = 0; k < items.length; k++) {
+      (function(item){
+        var q = item.querySelector('.faq-q');
+        if (!q) return;
+        q.addEventListener('click', function(){
+          var open = item.classList.toggle('open');
+          q.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      })(items[k]);
+    }
+  })();
+
+  // Mobile nav: hamburger toggles the dropdown sheet; tapping a link closes it.
+  (function(){
+    var m = document.getElementById('menu');
+    var sh = document.getElementById('sheet');
+    if (!m || !sh) return;
+    m.addEventListener('click', function(){
+      var open = sh.classList.toggle('open');
+      m.classList.toggle('open', open);
+      m.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    var links = sh.querySelectorAll('a');
+    for (var i = 0; i < links.length; i++) {
+      links[i].addEventListener('click', function(){
+        sh.classList.remove('open');
+        m.classList.remove('open');
+        m.setAttribute('aria-expanded', 'false');
+      });
+    }
+  })();
+})();`;
 
 export function rootLandingHtml(url: URL): string {
+  const origin = url.origin;
+  const endpointsRef = `${origin}/endpoints`;
+  const repo = 'https://github.com/guirguispierre/memoryvault';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemoryVault, open-source memory for AI agents</title>
+<meta name="description" content="MemoryVault gives any AI agent a memory it actually keeps. Open source, self-hosted on your own Cloudflare account, nothing paywalled.">
+${FONT_LINK_TAGS}
+${constellationHeadTags}
+<style>
+${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--ui); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; line-height: 1.5; overflow-x: hidden; }
+  a { color: inherit; text-decoration: none; }
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+
+  /* ── HERO (living memory graph) ── */
+  /* The canvas overflows past the hero and its lower edge is masked off, so the
+     stars thin out below the hero/section boundary instead of stopping on it. */
+  .hero-wrap { position: relative; height: 100vh; overflow: visible; }
+  #sky {
+    position: absolute; top: 0; left: 0; width: 100%; height: 135vh;
+    z-index: 0; display: block; pointer-events: none;
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 60%, transparent 88%);
+            mask-image: linear-gradient(180deg, #000 0%, #000 60%, transparent 88%);
+  }
+  .wrap { position: relative; z-index: 1; }
+
+  nav { display: flex; align-items: center; gap: 24px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; position: relative; z-index: 3; }
+  .brand { font-family: var(--doc); font-size: 18px; font-weight: 600; color: var(--ink); }
+  nav .links { display: flex; gap: 22px; margin-left: 14px; }
+  nav .links a { font-size: 14px; color: var(--dim); }
+  nav .links a:hover { color: var(--ink); }
+  nav .r { margin-left: auto; display: flex; gap: 12px; }
+
+  .btn { font-family: var(--ui); font-weight: 600; font-size: 14px; border-radius: 9px; padding: 10px 18px; border: 1px solid var(--accent); background: var(--accent); color: #070810; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.15s, box-shadow 0.15s; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(138, 176, 255, 0.3); }
+  .btn.g { background: rgba(255, 255, 255, 0.05); color: var(--ink); border-color: rgba(255, 255, 255, 0.18); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .hero { max-width: 1120px; margin: 0 auto; padding: 14vh 32px 0; text-align: center; position: relative; z-index: 2; }
+  .eyebrow { font-weight: 600; font-size: 13px; color: var(--accent); margin-bottom: 22px; }
+  .hero h1 { font-family: var(--doc); font-weight: 500; font-size: 72px; line-height: 1.04; letter-spacing: -0.02em; max-width: 14ch; margin: 0 auto; color: var(--ink); text-shadow: 0 2px 36px rgba(8, 12, 28, 0.55); }
+  .hero h1 em { font-style: italic; color: var(--accent); }
+  .hero .sub { font-size: 19px; color: var(--dim); max-width: 44ch; margin: 26px auto 0; line-height: 1.55; }
+  .cta { margin-top: 32px; display: flex; gap: 14px; justify-content: center; }
+
+  /* ── sections (one continuous space, no dividers) ── */
+  main { position: relative; z-index: 1; background: var(--bg); }
+  main::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(70% 40% at 50% 0%, rgba(40, 52, 110, 0.18), transparent 55%), radial-gradient(60% 50% at 85% 88%, rgba(30, 80, 70, 0.10), transparent 60%); }
+  /* Ease the background tone across a tall band that starts up in the hero and
+     finishes inside the first section, on a different row than the star fade. */
+  main::after { content: ""; position: absolute; top: -40vh; left: 0; right: 0; height: 60vh; z-index: 0; pointer-events: none; background: linear-gradient(180deg, transparent 0%, var(--bg) 70%); }
+  main > * { position: relative; z-index: 1; }
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.7s cubic-bezier(0.2,0.7,0.2,1), transform 0.7s cubic-bezier(0.2,0.7,0.2,1); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  .feature { padding: 90px 0; }
+  .fg { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .feature h2 { font-family: var(--doc); font-weight: 500; font-size: 36px; letter-spacing: -0.02em; line-height: 1.14; margin-bottom: 16px; color: var(--ink); }
+  .feature h2 em { font-style: italic; color: var(--accent); }
+  .feature p { font-size: 16.5px; color: var(--dim); line-height: 1.6; margin-bottom: 12px; }
+  .feature .mini { color: var(--faint); font-size: 14px; }
+  .panel { background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0)), var(--surface); border: 1px solid var(--rule); border-radius: 18px; padding: 28px; box-shadow: 0 30px 80px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.05); }
+  /* genuine config / identifiers are the only monospace on the page */
+  .codeblock { font-family: var(--mono); font-size: 13px; line-height: 2; color: var(--dim); }
+  .codeblock .cm { color: var(--faint); }
+  .codeblock .c1 { color: var(--accent); }
+  .codeblock .s { color: var(--ink); }
+  .codeblock .ok { color: var(--good); }
+  .ll { display: flex; align-items: baseline; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--rule); font-size: 14px; }
+  .ll:last-child { border: none; }
+  .ll .k { color: var(--accent); font-family: var(--mono); font-size: 12.5px; }
+  .ll .arr { color: var(--faint); }
+  .ll .v { color: var(--ink); }
+  .ll .tag { margin-left: auto; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--good); border: 1px solid rgba(134,224,184,0.4); border-radius: 5px; padding: 2px 7px; }
+
+  .how { padding: 90px 0; text-align: center; }
+  .how h2 { font-family: var(--doc); font-weight: 500; font-size: 40px; letter-spacing: -0.02em; margin-bottom: 12px; color: var(--ink); }
+  .how > p { color: var(--dim); max-width: 46ch; margin: 0 auto 50px; font-size: 17px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; text-align: left; }
+  .step { background: var(--surface); border: 1px solid var(--rule); border-radius: 16px; padding: 28px; transition: transform 0.2s, border-color 0.2s; }
+  .step:hover { transform: translateY(-3px); border-color: rgba(138,176,255,0.35); }
+  .step .n { font-family: var(--doc); font-style: italic; font-size: 15px; color: var(--accent); margin-bottom: 12px; }
+  .step h3 { font-family: var(--doc); font-weight: 500; font-size: 20px; margin-bottom: 8px; color: var(--ink); }
+  .step p { font-size: 14.5px; color: var(--dim); line-height: 1.55; }
+
+  .pricing { padding: 90px 0; text-align: center; }
+  .pricing h2 { font-family: var(--doc); font-weight: 500; font-size: 40px; letter-spacing: -0.02em; margin-bottom: 12px; color: var(--ink); }
+  .pricing > p { color: var(--dim); max-width: 46ch; margin: 0 auto 50px; font-size: 17px; }
+  .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; max-width: 760px; margin: 0 auto; text-align: left; }
+  .plan { background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; padding: 30px; display: flex; flex-direction: column; }
+  .plan.feat { border-color: rgba(138,176,255,0.5); box-shadow: 0 0 0 1px rgba(138,176,255,0.2), 0 30px 80px rgba(0,0,0,0.4); }
+  .plan .pname { font-family: var(--doc); font-size: 22px; font-weight: 500; margin-bottom: 4px; color: var(--ink); }
+  .plan .price { font-family: var(--doc); font-size: 36px; margin-bottom: 6px; color: var(--ink); }
+  .plan .price small { font-family: var(--ui); font-size: 14px; color: var(--faint); }
+  .plan .desc { font-size: 14.5px; color: var(--dim); margin-bottom: 18px; line-height: 1.5; }
+  .plan ul { list-style: none; margin-bottom: 22px; display: grid; gap: 9px; }
+  .plan li { font-size: 14px; color: var(--dim); padding-left: 22px; position: relative; }
+  .plan li::before { content: "\\2713"; position: absolute; left: 0; color: var(--good); }
+  .plan .pcta { margin-top: auto; display: block; text-align: center; border-radius: 9px; padding: 11px 16px; font-family: var(--ui); font-weight: 600; font-size: 14px; border: 1px solid var(--rule); color: var(--dim); }
+  .plan .pcta.primary { background: var(--accent); border-color: var(--accent); color: #070810; }
+  .plan .note { font-size: 12px; color: var(--faint); text-align: center; margin-top: 10px; line-height: 1.4; }
+
+  .faq { padding: 90px 0; }
+  .faq h2 { font-family: var(--doc); font-weight: 500; font-size: 40px; letter-spacing: -0.02em; margin-bottom: 28px; text-align: center; color: var(--ink); }
+  .qa { max-width: 760px; margin: 0 auto; }
+  .faq-item { border-bottom: 1px solid var(--rule); }
+  .faq-q { width: 100%; text-align: left; background: none; border: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 22px 0; font-family: var(--doc); font-size: 19px; font-weight: 500; color: var(--ink); }
+  .faq-q .chev { margin-left: auto; flex-shrink: 0; color: var(--faint); transition: transform 0.25s; }
+  .faq-item.open .faq-q .chev { transform: rotate(180deg); }
+  .faq-a-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.3s ease; }
+  .faq-item.open .faq-a-wrap { grid-template-rows: 1fr; }
+  .faq-a-inner { overflow: hidden; }
+  .faq-a { padding: 0 0 22px; font-size: 15.5px; color: var(--dim); line-height: 1.6; max-width: 64ch; }
+
+  /* glow bleeds beyond the section so there is no hard cutoff band */
+  .final { padding: 130px 32px 120px; text-align: center; position: relative; overflow: visible; }
+  .final::before { content: ""; position: absolute; left: 0; right: 0; top: -340px; bottom: -120px; background: radial-gradient(50% 60% at 50% 50%, rgba(138,176,255,0.14), transparent 70%); pointer-events: none; }
+  .final h2 { position: relative; font-family: var(--doc); font-weight: 500; font-size: 46px; letter-spacing: -0.02em; max-width: 18ch; margin: 0 auto 26px; line-height: 1.08; color: var(--ink); }
+  .final h2 em { font-style: italic; color: var(--accent); }
+  .final .cta { position: relative; }
+
+  footer { border-top: 1px solid var(--rule); padding: 36px 0; color: var(--faint); font-size: 13px; }
+  .fi { max-width: 1080px; margin: 0 auto; padding: 0 32px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .fi a:hover { color: var(--accent); }
+
+  /* mobile nav: hamburger + dropdown sheet */
+  .menu { display: none; margin-left: auto; width: 40px; height: 40px; border: 1px solid var(--rule); border-radius: 10px; background: rgba(255,255,255,0.04); cursor: pointer; flex-direction: column; gap: 4px; align-items: center; justify-content: center; }
+  .menu span { display: block; width: 18px; height: 1.5px; background: var(--ink); border-radius: 2px; transition: 0.2s; }
+  .menu.open span:nth-child(1) { transform: translateY(5.5px) rotate(45deg); }
+  .menu.open span:nth-child(2) { opacity: 0; }
+  .menu.open span:nth-child(3) { transform: translateY(-5.5px) rotate(-45deg); }
+  .sheet { display: none; position: fixed; top: 70px; left: 16px; right: 16px; z-index: 60; background: rgba(13,15,26,0.96); backdrop-filter: blur(14px); border: 1px solid var(--rule); border-radius: 16px; padding: 10px; flex-direction: column; box-shadow: 0 30px 80px rgba(0,0,0,0.6); }
+  .sheet.open { display: flex; }
+  .sheet a { padding: 14px 16px; color: var(--ink); font-size: 16px; border-radius: 10px; }
+  .sheet a:active { background: rgba(255,255,255,0.06); }
+  .sheet a.primary { background: var(--accent); color: #070810; font-weight: 600; text-align: center; margin-top: 4px; }
+
+  @media (max-width: 760px) {
+    h1 { font-size: 38px; line-height: 1.06; }
+    .hero { padding: 13vh 22px 0; }
+    .hero .sub { font-size: 17px; margin-top: 20px; }
+    .cta { flex-direction: column; gap: 12px; align-items: center; }
+    .cta .btn { width: 100%; max-width: 300px; justify-content: center; }
+    nav .links, nav .r { display: none; }
+    .menu { display: flex; }
+    .container { padding: 0 22px; }
+    .fg { grid-template-columns: 1fr; gap: 26px; }
+    .steps, .plans { grid-template-columns: 1fr; }
+    .feature, .how, .pricing, .faq { padding: 64px 0; }
+    .feature h2, .how h2, .pricing h2, .faq h2, .final h2 { font-size: 30px; }
+    .final { padding: 90px 22px 100px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+    .faq-a-wrap, .faq-q .chev, .step, .btn { transition: none !important; }
+  }
+</style>
+<noscript><style>.reveal { opacity: 1; transform: none; }</style></noscript>
+</head>
+<body>
+  <div class="space"></div>
+  <div class="hero-wrap">
+    <canvas id="sky" class="sky" aria-hidden="true"></canvas>
+    <div class="wrap">
+      <nav>
+        <span class="brand">MemoryVault</span>
+        <div class="links"><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a></div>
+        <div class="r"><a class="btn g" href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy free</a></div>
+        <button class="menu" id="menu" type="button" aria-label="Menu" aria-expanded="false"><span></span><span></span><span></span></button>
+      </nav>
+      <div class="sheet" id="sheet">
+        <a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="primary" href="${repo}" target="_blank" rel="noopener">Deploy free</a>
+      </div>
+      <section class="hero">
+        <div class="eyebrow">Open-source memory for AI agents</div>
+        <h1>Your agents forget everything. <em>Fix that.</em></h1>
+        <p class="sub">MemoryVault gives any AI agent a memory it actually keeps. It learns what matters, drops what doesn't, and runs entirely on servers you own.</p>
+        <div class="cta">
+          <a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy your own, free</a>
+          <a class="btn g" href="${repo}" target="_blank" rel="noopener">View on GitHub</a>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <main>
+    <section class="feature container">
+      <div class="fg">
+        <div class="reveal">
+          <h2>A graph of memory, <em>nothing paywalled</em></h2>
+          <p>Most tools lock the graph behind a Pro tier, or keep it closed entirely. MemoryVault keeps it open from the first commit. Links, traversal, history, all of it.</p>
+          <p class="mini">Notes, facts, and journal entries. Connected, weighted, searchable.</p>
+        </div>
+        <div class="panel reveal">
+          <div class="ll"><span class="k">project.license</span><span class="arr">&rarr;</span><span class="v">MIT, fully open</span><span class="tag">verified</span></div>
+          <div class="ll"><span class="k">user.timezone</span><span class="arr">&rarr;</span><span class="v">Europe/Lisbon</span><span class="tag">verified</span></div>
+          <div class="ll"><span class="k">graph.enabled</span><span class="arr">&rarr;</span><span class="v">true. no upsell</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="feature container">
+      <div class="fg">
+        <div class="panel reveal">
+          <div class="codeblock">
+            <div class="cm"># wrangler.toml</div>
+            <div><span class="c1">[[vectorize]]</span></div>
+            <div><span class="s">binding = "MEMORY_INDEX"</span></div>
+            <div><span class="c1">[[d1_databases]]</span></div>
+            <div><span class="s">database_name = "your-brain"</span></div>
+            <div class="ok">&#10003; nothing leaves your Cloudflare account</div>
+          </div>
+        </div>
+        <div class="reveal">
+          <h2>Self-hosted. <em>You own the data.</em></h2>
+          <p>Deploy to your own Cloudflare account in a few minutes. There's no server of ours in the middle. Your agent's memory lives under your keys, not ours.</p>
+          <p class="mini">One command. Runs on Workers, D1, and Vectorize.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="how container" id="how">
+      <h2 class="reveal">How it works</h2>
+      <p class="reveal">Connect once. Your agents read your context before they answer, and write back what they learn.</p>
+      <div class="steps">
+        <div class="step reveal"><div class="n">First</div><h3>Deploy your vault</h3><p>One command stands up your own memory server on Cloudflare, under your account.</p></div>
+        <div class="step reveal"><div class="n">Then</div><h3>Connect your agents</h3><p>Point Claude, Codex, or any client at it. They read before they answer, then write back after.</p></div>
+        <div class="step reveal"><div class="n">Over time</div><h3>It gets sharper</h3><p>What you use is reinforced. What you don't fades. You stay in control of what sticks.</p></div>
+      </div>
+    </section>
+
+    <section class="pricing container" id="pricing">
+      <h2 class="reveal">Start free. Host it yourself, or let us.</h2>
+      <p class="reveal">The whole thing is open source. You only pay if you want us to run it for you.</p>
+      <div class="plans">
+        <div class="plan reveal">
+          <div class="pname">Self-host</div>
+          <div class="price">$0</div>
+          <div class="desc">Run it on your own Cloudflare account, forever.</div>
+          <ul><li>Full source, MIT licensed</li><li>Graph and all features</li><li>Your data, your keys</li><li>Community support</li></ul>
+          <a class="pcta" href="${repo}" target="_blank" rel="noopener">Deploy from GitHub</a>
+        </div>
+        <div class="plan feat reveal">
+          <div class="pname">Hosted</div>
+          <div class="price">$12<small>/mo</small></div>
+          <div class="desc">We run it for you. Backups, sync, and support.</div>
+          <ul><li>Everything in Self-host</li><li>Managed multi-device sync</li><li>Automatic backups</li><li>Priority support</li></ul>
+          <a class="pcta primary" href="${repo}" target="_blank" rel="noopener">Join the waitlist</a>
+          <div class="note">Not billable yet. The GitHub repo is where to follow along.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq container" id="faq">
+      <h2 class="reveal">Questions</h2>
+      <div class="qa reveal">
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">Is it really fully open source?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">Yes. MIT licensed, graph and all. There is no paywalled tier of the software itself. The only thing you would ever pay for is optional managed hosting.</div></div></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">Where does my data live?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">In your own Cloudflare account. Your D1 database and Vectorize index, under your keys. If you self-host, your memories never touch our infrastructure.</div></div></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">Which agents does it work with?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">Anything that speaks MCP. Claude, Claude Code, Codex, and custom agents, plus a plain REST API for everything else.</div></div></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">How is it different from other memory tools?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">It is graph-aware and open with nothing paywalled, self-hosted so you own the data, and its tenant isolation is covered by an adversarial test suite, not asserted in a blog post.</div></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="final">
+      <h2>Give your agents a memory <em>you control</em></h2>
+      <div class="cta">
+        <a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy your own, free</a>
+        <a class="btn g" href="${endpointsRef}">Read the docs</a>
+      </div>
+    </section>
+
+    <footer><div class="fi"><span>&copy; 2026 MemoryVault &middot; MIT licensed</span><span>built on Cloudflare</span></div></footer>
+  </main>
+
+  <script src="/starfield.js" defer></script>
+  <script src="/landing.js"></script>
+</body>
+</html>`;
+}
+
+// Developer reference (formerly the bare root page), now served at /endpoints
+// and linked from the marketing landing's Docs/footer.
+export function endpointsIndexHtml(url: URL): string {
   const origin = url.origin;
   const mcpEndpoint = `${origin}/mcp`;
   const viewerEndpoint = `${origin}/view`;
@@ -868,6 +1353,7 @@ export function rootLandingHtml(url: URL): string {
     { path: '/api/export', label: '/api/export' },
     { path: '/api/import', label: '/api/import' },
     { path: '/api/purge', label: '/api/purge' },
+    { path: '/api/viewer-settings', label: '/api/viewer-settings' },
   ];
   const devRows = devEntries.map((entry) => {
     const guide = endpointGuideForPath(entry.path);
@@ -897,211 +1383,86 @@ export function rootLandingHtml(url: URL): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MemoryVault Dev Portal</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<title>Endpoints · MemoryVault</title>
+${FONT_LINK_TAGS}
+${constellationHeadTags}
 <style>
-  :root {
-    --bg: #060b12;
-    --bg2: #0f1927;
-    --line: #27466c;
-    --line-soft: #1c334c;
-    --text: #d6e5f4;
-    --dim: #7390aa;
-    --amber: #f0a500;
-    --teal: #00c8b4;
-    --mono: 'Share Tech Mono', monospace;
-    --sans: 'Syne', sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: var(--mono);
-    color: var(--text);
-    background:
-      radial-gradient(78% 55% at 10% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
-      radial-gradient(70% 58% at 100% 100%, rgba(240, 165, 0, 0.1), transparent 72%),
-      var(--bg);
-    min-height: 100vh;
-  }
-  .wrap {
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 2rem 1.1rem 2.6rem;
-  }
-  .title {
-    margin: 0;
-    font-family: var(--sans);
-    font-size: clamp(1.65rem, 3vw, 2.75rem);
-    letter-spacing: -0.02em;
-    font-weight: 800;
-    line-height: 1.05;
-  }
-  .title span { color: var(--amber); }
-  .sub {
-    margin: 0.5rem 0 1.2rem;
-    color: var(--dim);
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    font-size: 0.72rem;
-  }
-  .pill {
-    display: inline-flex;
-    align-items: center;
-    border: 1px solid var(--line);
-    background: rgba(15, 25, 39, 0.78);
-    color: var(--teal);
-    font-size: 0.68rem;
-    letter-spacing: 0.13em;
-    text-transform: uppercase;
-    padding: 0.3rem 0.55rem;
-    margin-bottom: 1rem;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: 1.05fr 1fr;
-    gap: 1rem;
-  }
-  .card {
-    border: 1px solid var(--line);
-    background: rgba(15, 25, 39, 0.84);
-    padding: 1rem 1rem 0.95rem;
-  }
-  .card h2 {
-    margin: 0 0 0.65rem;
-    color: var(--amber);
-    font-size: 0.79rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-  p, li {
-    margin: 0;
-    line-height: 1.58;
-    font-size: 0.84rem;
-  }
-  ul {
-    margin: 0;
-    padding-left: 1.1rem;
-    display: grid;
-    gap: 0.45rem;
-  }
-  .metrics {
-    margin-top: 0.8rem;
-    display: flex;
-    gap: 0.55rem;
-    flex-wrap: wrap;
-  }
+${constellationTokensCss}${pageChromeCss}  .wrap { max-width: 1180px; }
+  .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 1rem; }
+  .metrics { margin-top: 1rem; display: flex; gap: 0.55rem; flex-wrap: wrap; }
   .metric {
-    border: 1px solid var(--line-soft);
-    padding: 0.45rem 0.55rem;
+    border: 1px solid var(--rule-soft);
+    border-radius: 9px;
+    padding: 0.55rem 0.65rem;
     min-width: 150px;
-    background: rgba(6, 11, 18, 0.68);
+    background: var(--surface);
   }
   .metric .k {
-    color: var(--dim);
+    color: var(--cream-faint);
     display: block;
-    font-size: 0.66rem;
+    font-family: var(--mono);
+    font-size: 0.62rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
   .metric .v {
-    color: var(--teal);
+    color: var(--cream);
     display: block;
-    margin-top: 0.3rem;
-    font-size: 0.84rem;
-  }
-  .actions {
-    margin-top: 0.85rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .btn {
-    border: 1px solid var(--line);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.7rem;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    padding: 0.46rem 0.62rem;
-    display: inline-block;
-  }
-  .btn.primary {
-    border-color: var(--amber);
-    color: var(--amber);
+    margin-top: 0.32rem;
+    font-family: var(--disp);
+    font-size: 1.05rem;
   }
   .dev {
-    margin-top: 1rem;
-    border: 1px solid var(--line);
-    background: rgba(15, 25, 39, 0.84);
+    margin-top: 1.2rem;
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    background: var(--surface-raised);
     overflow: hidden;
   }
   .dev-head {
-    padding: 0.75rem 0.9rem;
-    border-bottom: 1px solid var(--line-soft);
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--rule-soft);
     display: flex;
     gap: 0.5rem;
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
   }
-  .dev-head h2 {
-    margin: 0;
-    color: var(--amber);
-    font-size: 0.8rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-  .dev-head p {
-    color: var(--dim);
-    font-size: 0.72rem;
-  }
+  .dev-head h2 { margin: 0; color: var(--cream); font-family: var(--disp); font-weight: 560; font-size: 0.95rem; }
+  .dev-head p { color: var(--cream-faint); font-size: 0.78rem; }
   .table-wrap { overflow-x: auto; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 920px;
-  }
+  table { width: 100%; border-collapse: collapse; min-width: 920px; }
   th, td {
     text-align: left;
     vertical-align: top;
-    border-bottom: 1px solid var(--line-soft);
-    padding: 0.62rem 0.72rem;
-    font-size: 0.77rem;
+    border-bottom: 1px solid var(--rule-soft);
+    padding: 0.66rem 0.78rem;
+    font-size: 0.82rem;
     line-height: 1.45;
   }
   th {
-    color: var(--dim);
+    color: var(--cream-faint);
+    font-family: var(--mono);
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    font-size: 0.62rem;
     position: sticky;
     top: 0;
-    background: #0f1927;
+    background: var(--ground-2);
     z-index: 2;
   }
-  td code {
-    color: var(--teal);
-    font-family: var(--mono);
-    font-size: 0.74rem;
-  }
-  .endpoint {
-    color: var(--teal);
-    text-decoration: none;
-    display: inline-block;
-    max-width: 320px;
-    overflow-wrap: anywhere;
-  }
-  @media (max-width: 930px) {
-    .grid { grid-template-columns: 1fr; }
-  }
+  td { color: var(--cream-dim); }
+  td code { font-size: 0.78rem; }
+  .endpoint { display: inline-block; max-width: 320px; font-size: 0.82rem; }
+  @media (max-width: 930px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
+  ${constellationCalmField}
   <main class="wrap">
     <div class="pill">${escapeHtml(envLabel)}</div>
-    <h1 class="title">MEMORY<span>VAULT</span> Dev Portal</h1>
-    <p class="sub">Human-Friendly Landing Page For This MCP Host</p>
+    <h1 class="title">MEMORY<span>VAULT</span> Endpoints</h1>
+    <p class="sub"><a href="${origin}/" style="color:var(--cream-faint)">&larr; Home</a> &nbsp;·&nbsp; Developer reference for this MCP host</p>
 
     <div class="grid">
       <section class="card">
@@ -1151,7 +1512,6 @@ export function rootLandingHtml(url: URL): string {
       </div>
     </section>
   </main>
-  <script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async></script>
 </body>
 </html>`;
 }
@@ -1168,122 +1528,26 @@ export function mcpLandingHtml(url: URL): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault MCP</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+${FONT_LINK_TAGS}
+${constellationHeadTags}
 <style>
-  :root {
-    --bg: #070b10;
-    --bg2: #101824;
-    --line: #234061;
-    --text: #d8e8f8;
-    --dim: #6f8ea9;
-    --amber: #f0a500;
-    --teal: #00c8b4;
-    --mono: 'Share Tech Mono', monospace;
-    --sans: 'Syne', sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: var(--mono);
-    color: var(--text);
-    background:
-      radial-gradient(70% 50% at 12% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
-      radial-gradient(60% 60% at 100% 100%, rgba(240, 165, 0, 0.12), transparent 70%),
-      var(--bg);
-    min-height: 100vh;
-  }
-  .wrap {
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2rem 1.2rem 2.6rem;
-  }
-  .title {
-    font-family: var(--sans);
-    font-size: clamp(1.55rem, 3vw, 2.5rem);
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin: 0 0 0.35rem;
-  }
-  .title span { color: var(--amber); }
-  .sub {
-    margin: 0 0 1.4rem;
-    color: var(--dim);
-    letter-spacing: 0.08em;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 1rem;
-  }
-  .card {
-    border: 1px solid var(--line);
-    background: rgba(16, 24, 36, 0.88);
-    padding: 1rem 1rem 0.95rem;
-  }
-  .card h2 {
-    margin: 0 0 0.65rem;
-    color: var(--amber);
-    font-size: 0.8rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-  p, li {
-    margin: 0;
-    color: var(--text);
-    line-height: 1.6;
-    font-size: 0.86rem;
-  }
-  ul, ol {
-    margin: 0;
-    padding-left: 1.1rem;
-    display: grid;
-    gap: 0.45rem;
-  }
-  .actions {
-    margin-top: 1rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-  }
-  .btn {
-    border: 1px solid var(--line);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.72rem;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    padding: 0.48rem 0.62rem;
-    display: inline-block;
-  }
-  .btn.primary {
-    border-color: var(--amber);
-    color: var(--amber);
-  }
+${constellationTokensCss}${pageChromeCss}  .wrap { max-width: 980px; }
+  .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1rem; }
   .endpoint {
-    margin-top: 0.5rem;
     display: block;
-    color: var(--teal);
-    background: rgba(7, 11, 16, 0.85);
-    border: 1px solid var(--line);
-    padding: 0.45rem 0.5rem;
-    font-size: 0.76rem;
-    overflow-wrap: anywhere;
-  }
-  .small { color: var(--dim); font-size: 0.72rem; }
-  code {
-    font-family: var(--mono);
-    color: var(--teal);
+    margin-top: 0.5rem;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 0.5rem 0.55rem;
     font-size: 0.8rem;
   }
-  @media (max-width: 860px) {
-    .grid { grid-template-columns: 1fr; }
-  }
+  .small { color: var(--cream-faint); font-size: 0.74rem; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
+  ${constellationCalmField}
   <main class="wrap">
     <h1 class="title">MEMORY<span>VAULT</span> MCP</h1>
     <p class="sub">Human Guide For The MCP Endpoint</p>
@@ -1613,108 +1877,29 @@ export function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${guide.title} · MemoryVault</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+${FONT_LINK_TAGS}
+${constellationHeadTags}
 <style>
-  :root {
-    --bg: #070b10;
-    --bg2: #101824;
-    --line: #234061;
-    --text: #d8e8f8;
-    --dim: #6f8ea9;
-    --amber: #f0a500;
-    --teal: #00c8b4;
-    --mono: 'Share Tech Mono', monospace;
-    --sans: 'Syne', sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: var(--mono);
-    color: var(--text);
-    background:
-      radial-gradient(70% 50% at 12% 0%, rgba(0, 200, 180, 0.14), transparent 70%),
-      radial-gradient(60% 60% at 100% 100%, rgba(240, 165, 0, 0.12), transparent 70%),
-      var(--bg);
-    min-height: 100vh;
-  }
-  .wrap {
-    max-width: 920px;
-    margin: 0 auto;
-    padding: 2rem 1.2rem 2.6rem;
-  }
-  .title {
-    font-family: var(--sans);
-    font-size: clamp(1.4rem, 3vw, 2.2rem);
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin: 0;
-  }
-  .title span { color: var(--amber); }
-  .sub {
-    margin: 0.35rem 0 1.2rem;
-    color: var(--dim);
-    letter-spacing: 0.08em;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.95rem;
-  }
-  .card {
-    border: 1px solid var(--line);
-    background: rgba(16, 24, 36, 0.88);
-    padding: 0.95rem 1rem;
-  }
+${constellationTokensCss}${pageChromeCss}  .wrap { max-width: 920px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.95rem; }
   .span-2 { grid-column: 1 / -1; }
   .label {
-    color: var(--amber);
-    font-size: 0.7rem;
+    color: var(--butter);
+    font-family: var(--mono);
+    font-size: 0.64rem;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.12em;
     margin: 0 0 0.45rem;
-  }
-  p, li {
-    margin: 0;
-    line-height: 1.6;
-    font-size: 0.84rem;
-  }
-  ul {
-    margin: 0;
-    padding-left: 1.05rem;
-    display: grid;
-    gap: 0.4rem;
   }
   .endpoint {
     display: block;
     margin-top: 0.35rem;
-    color: var(--teal);
-    background: rgba(7, 11, 16, 0.85);
-    border: 1px solid var(--line);
-    padding: 0.45rem 0.5rem;
-    font-size: 0.76rem;
-    overflow-wrap: anywhere;
-    text-decoration: none;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 0.5rem 0.55rem;
+    font-size: 0.8rem;
   }
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-    margin-top: 0.8rem;
-  }
-  .btn {
-    border: 1px solid var(--line);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.7rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 0.45rem 0.6rem;
-  }
-  .btn.primary { border-color: var(--amber); color: var(--amber); }
-  code { color: var(--teal); }
   @media (max-width: 800px) {
     .grid { grid-template-columns: 1fr; }
     .span-2 { grid-column: auto; }
@@ -1722,6 +1907,7 @@ export function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
 </style>
 </head>
 <body>
+  ${constellationCalmField}
   <main class="wrap">
     <h1 class="title">MEMORY<span>VAULT</span> Endpoint Guide</h1>
     <p class="sub">${guide.title}</p>

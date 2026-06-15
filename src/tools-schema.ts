@@ -152,6 +152,44 @@ export const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
 
 export const TOOL_CHANGELOG: ToolChangelogEntry[] = [
   {
+    id: 'viewer-1.12.0',
+    version: '1.12.0',
+    released_at: 1781395200,
+    summary: 'Viewer redesign, theming, and a live full-corpus recall view.',
+    changes: [
+      {
+        type: 'updated',
+        target: 'endpoint',
+        name: 'GET /view redesign',
+        description: 'Warm and dark themes with a new neutral clean-dark default for new sessions.',
+      },
+      {
+        type: 'added',
+        target: 'endpoint',
+        name: 'Custom themes and saved settings',
+        description: 'Theme presets plus a custom palette builder; viewer settings persist per brain via /api/viewer-settings.',
+      },
+      {
+        type: 'updated',
+        target: 'endpoint',
+        name: 'Site-wide theming',
+        description: 'Landing, /mcp, endpoint guides, and OAuth pages share the viewer tokens and apply the saved theme.',
+      },
+      {
+        type: 'added',
+        target: 'endpoint',
+        name: 'Live recall ribbon and strength tiers',
+        description: 'Recall and tiers update on content changes and stay full-corpus under type filters; the open graph refreshes live too.',
+      },
+      {
+        type: 'security',
+        target: 'auth',
+        name: 'Auth hardening',
+        description: 'Constant-time credential comparisons, a pinned JWT algorithm, and tenant- and semantic-isolation test coverage.',
+      },
+    ],
+  },
+  {
     id: 'cognitive-1.11.0',
     version: '1.11.0',
     released_at: 1774934400,

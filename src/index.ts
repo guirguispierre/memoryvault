@@ -23,17 +23,22 @@ import {
   handleAuthorizationServerMetadata,
 } from './oauth.js';
 import { TOOLS } from './tools-schema.js';
-import { viewerHtml, viewerScript } from './viewer.js';
+import { viewerHtml, viewerScript } from './viewer/index.js';
+import { starfieldJs } from './viewer/constellation.js';
 import {
   handleMcp,
   handleApiMemories,
+  handleApiMemoriesSignature,
   handleApiLinks,
   handleApiGraph,
   handleApiTools,
   handleApiExport,
   handleApiImport,
   handleApiPurge,
+  handleApiViewerSettings,
   rootLandingHtml,
+  landingScript,
+  endpointsIndexHtml,
   mcpLandingHtml,
   endpointGuideForPath,
   endpointGuideHtml,
@@ -86,8 +91,26 @@ export default {
         });
       }
 
+      if (url.pathname === '/endpoints') {
+        return new Response(endpointsIndexHtml(url), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
       if (url.pathname === '/view.js') {
         return new Response(viewerScript(), {
+          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
+        });
+      }
+
+      if (url.pathname === '/landing.js') {
+        return new Response(landingScript, {
+          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
+        });
+      }
+
+      if (url.pathname === '/starfield.js') {
+        return new Response(starfieldJs, {
           headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
         });
       }
@@ -169,6 +192,12 @@ export default {
         return handleAuthSessionRevoke(request, authCtx, env);
       }
 
+      if (url.pathname === '/api/memories/signature') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiMemoriesSignature(env, authCtx.brainId);
+      }
+
       if (url.pathname === '/api/memories') {
         const authCtx = await authRequestWithOAuth(request, env);
         if (!authCtx) return unauthorized(url);
@@ -198,6 +227,12 @@ export default {
         const authCtx = await authRequestWithOAuth(request, env);
         if (!authCtx) return unauthorized(url);
         return handleApiPurge(request, env, authCtx.brainId);
+      }
+
+      if (url.pathname === '/api/viewer-settings') {
+        const authCtx = await authRequestWithOAuth(request, env);
+        if (!authCtx) return unauthorized(url);
+        return handleApiViewerSettings(request, env, authCtx.brainId);
       }
 
       if (url.pathname === '/mcp') {
