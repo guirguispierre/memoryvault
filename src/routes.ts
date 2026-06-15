@@ -980,6 +980,9 @@ export const landingScript = `(function(){
     function emit(text, target) {
       for (var i = 0; i < text.length; i++) {
         if (text[i] === '\\n') { target.appendChild(document.createElement('br')); continue; }
+        // Spaces are real, collapsible whitespace (not inline-block spans) so the
+        // headline can wrap between words on narrow screens instead of overflowing.
+        if (text[i] === ' ') { target.appendChild(document.createTextNode(' ')); delay += 0.03; continue; }
         var s = document.createElement('span');
         s.className = 'ch';
         s.textContent = text[i];
@@ -1042,7 +1045,7 @@ ${FONT_LINK_TAGS}
 <style>
 ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
-  body { font-family: var(--body); background: var(--ground); color: var(--cream); -webkit-font-smoothing: antialiased; line-height: 1.5; }
+  body { font-family: var(--body); background: var(--ground); color: var(--cream); -webkit-font-smoothing: antialiased; line-height: 1.5; overflow-x: hidden; }
   a { color: inherit; text-decoration: none; }
   .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
 
@@ -1074,8 +1077,6 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
 
   .hero-nav { position: relative; z-index: 3; display: flex; align-items: center; gap: 28px; padding: 20px 32px; max-width: 1080px; margin: 0 auto; width: 100%; }
   .brand { font-family: var(--disp); font-weight: 600; font-size: 18px; color: rgb(255,255,255); text-shadow: 0 1px 12px rgba(0,0,0,0.25); }
-  .brand .dot { color: rgb(207,224,255); }
-  .brand .md { font-family: var(--mono); font-size: 13px; color: rgba(255,255,255,0.75); }
   .hero-nav .links { display: flex; gap: 6px; margin-left: 6px; }
   .hero-nav .links a { font-size: 13.5px; color: rgba(255,255,255,0.85); padding: 7px 12px; border-radius: 8px; transition: background 0.15s; }
   .hero-nav .links a:hover { background: rgba(255,255,255,0.14); }
@@ -1199,17 +1200,36 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
 
   @media (max-width: 760px) {
     .container { padding: 0 20px; }
+    .hero { min-height: 86vh; }
     .hero-nav { padding: 16px 20px; gap: 14px; }
     .hero-nav .links { display: none; }
-    .hero h1 { font-size: 40px; }
+    .hero-nav .right { gap: 8px; }
+    .hero h1, .hl-fallback { font-size: 40px; }
     .hero p { font-size: 16px; }
-    .hero-body { padding: 0 20px 20vh; }
-    .shot { margin-top: -6vh; }
+    .hero-body { padding: 0 20px 12vh; }
+    .hairline { width: min(280px, 80%); }
+    .shot { margin: -6vh 16px 0; }
     .feature-grid { grid-template-columns: 1fr; gap: 28px; }
     .feature, .how, .pricing, .faq, .final { padding: 56px 0; }
+    .panel { padding: 20px; }
     .steps { grid-template-columns: 1fr; }
     .plans { grid-template-columns: 1fr; }
     .final h2 { font-size: 32px; }
+    .foot-in { justify-content: center; text-align: center; }
+  }
+  @media (max-width: 480px) {
+    .hero-nav { gap: 10px; }
+    .brand { font-size: 16px; }
+    .hero-nav .ghost, .hero-nav .solid { padding: 7px 11px; font-size: 12.5px; }
+    .eyebrow { font-size: 10px; margin-bottom: 16px; }
+    .hero h1, .hl-fallback { font-size: 31px; }
+    .hero p { font-size: 15px; margin-top: 18px; }
+    .hero-sub { margin-top: 18px; }
+    .hero-cta { width: 100%; gap: 10px; }
+    .hero-cta .btn { flex: 1 1 auto; justify-content: center; }
+    .feature h2, .how > h2, .pricing > h2, .faq > h2 { font-size: 26px; }
+    .final h2 { font-size: 26px; }
+    .faq-q { font-size: 16px; }
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
@@ -1234,7 +1254,7 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
     <div class="hero-fade"></div>
 
     <nav class="hero-nav">
-      <a class="brand" href="${origin}/">memoryvault<span class="dot">.</span><span class="md">md</span></a>
+      <a class="brand" href="${origin}/">memoryvault</a>
       <div class="links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div>
       <div class="right"><a class="ghost" href="${endpointsRef}">Docs</a><a class="solid" href="${app}">Get started</a></div>
     </nav>
