@@ -5,6 +5,15 @@
 // authenticated MCP path. Once a memory exists the panel collapses to a small
 // dismissible hint. Everything here uses only this brain's own origin and the
 // shared in-scope helpers (BASE, callMcpTool, loadMemories, showToast, esc).
+// The connection command/labels come from the shared connect-snippets module so
+// this panel and the /docs connect guide are guaranteed to match.
+import {
+  CLAUDE_CODE_PREFIX,
+  MCP_SERVER_LABEL,
+  MCP_TRANSPORT_LABEL,
+  MCP_AUTH_LABEL,
+} from '../connect-snippets.js';
+
 export const clientOnboarding = `
   var onboardingForceOpen = false;
   var ONBOARDING_DISMISS_KEY = 'mv_onboarding_dismissed_v1';
@@ -15,8 +24,8 @@ export const clientOnboarding = `
 
   function onboardingFullHtml() {
     var url = BASE + '/mcp';
-    var claudeCmd = 'claude mcp add --transport http memoryvault ' + url;
-    var jsonCfg = '{\\n  "mcpServers": {\\n    "memoryvault": {\\n      "url": "' + url + '"\\n    }\\n  }\\n}';
+    var claudeCmd = '${CLAUDE_CODE_PREFIX} ' + url;
+    var jsonCfg = '{\\n  "mcpServers": {\\n    "${MCP_SERVER_LABEL}": {\\n      "url": "' + url + '"\\n    }\\n  }\\n}';
     return '' +
       '<div class="ob-card">' +
         '<div class="ob-head">' +
@@ -40,8 +49,8 @@ export const clientOnboarding = `
             '<div class="ob-pane" data-pane="any" hidden>' +
               '<p class="ob-note">Add a remote MCP server with these values. This works for Codex, Cursor, and any custom client.</p>' +
               '<div class="ob-kv"><span>Server URL</span><code>' + esc(url) + '</code></div>' +
-              '<div class="ob-kv"><span>Transport</span><code>HTTP (streamable)</code></div>' +
-              '<div class="ob-kv"><span>Auth</span><code>OAuth 2.1, leave the token blank and sign in once</code></div>' +
+              '<div class="ob-kv"><span>Transport</span><code>${MCP_TRANSPORT_LABEL}</code></div>' +
+              '<div class="ob-kv"><span>Auth</span><code>${MCP_AUTH_LABEL}</code></div>' +
               '<div class="ob-row"><code class="ob-mono ob-pre">' + esc(jsonCfg) + '</code><button class="ob-copy" type="button" data-onb="copy">Copy</button></div>' +
             '</div>' +
           '</div></li>' +
