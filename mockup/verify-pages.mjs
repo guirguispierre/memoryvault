@@ -102,9 +102,9 @@ async function shootThemed(browser, name, url, settings, width, height) {
   await ctx.close();
 }
 
-// The marketing landing. Light uses the paper default (colorScheme light so
-// auto resolves to paper-light); dark forces theme_mode so the nav toggle's
-// result is captured. fullPage so the whole page is in frame.
+// The marketing landing is animated, so capture settled states. Light uses the
+// paper default (colorScheme light so auto resolves to paper-light); dark forces
+// theme_mode. shootLanding keeps the simple full-page/server-page captures.
 async function shootLanding(browser, name, opts) {
   log(`shooting ${name} (${opts.width}×${opts.height})`);
   const ctx = await browser.newContext({ viewport: { width: opts.width, height: opts.height }, deviceScaleFactor: 2, colorScheme: opts.dark ? 'dark' : 'light' });
@@ -114,10 +114,53 @@ async function shootLanding(browser, name, opts) {
     });
   }
   const page = await ctx.newPage();
-  await page.goto(opts.url || `${BASE}/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(opts.url || `${BASE}/`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(FONT_SETTLE_MS);
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: !!opts.fullPage });
   await ctx.close();
+}
+
+// The animated states: hero settled, product-shot overlap, a revealed section,
+// the FAQ with one item open, and the dark hero.
+async function shootLandingMotion(browser) {
+  const newCtx = (dark) =>
+    browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2, colorScheme: dark ? 'dark' : 'light' }).then(async (ctx) => {
+      if (dark) await ctx.addInitScript(() => { try { localStorage.setItem('memoryvault.viewer.settings.v1', JSON.stringify({ theme_mode: 'dark' })); } catch (e) {} });
+      return ctx;
+    });
+
+  log('shooting landing hero + product shot + section + faq (light)');
+  const ctx = await newCtx(false);
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(FONT_SETTLE_MS);
+  await page.screenshot({ path: `${SHOTS}/landing-hero.png` });
+  // Product-shot transition: scroll so the shot overlaps the hero fade.
+  await page.evaluate(() => window.scrollTo(0, window.innerHeight * 0.66));
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: `${SHOTS}/landing-product-shot.png` });
+  // A revealed mid section.
+  await page.locator('#how').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: `${SHOTS}/landing-section.png` });
+  // FAQ with the first item open.
+  await page.locator('#faq').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(600);
+  await page.locator('.faq-q').first().click();
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: `${SHOTS}/landing-faq.png` });
+  await ctx.close();
+
+  log('shooting landing hero + section (dark)');
+  const dctx = await newCtx(true);
+  const dpage = await dctx.newPage();
+  await dpage.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await dpage.waitForTimeout(FONT_SETTLE_MS);
+  await dpage.screenshot({ path: `${SHOTS}/landing-hero-dark.png` });
+  await dpage.locator('#pricing').scrollIntoViewIfNeeded();
+  await dpage.waitForTimeout(900);
+  await dpage.screenshot({ path: `${SHOTS}/landing-section-dark.png` });
+  await dctx.close();
 }
 
 const MIDNIGHT = { theme: 'midnight', theme_mode: 'dark' };
@@ -133,11 +176,12 @@ async function screenshotAll() {
   await shootThemed(browser, 'page-mcp-midnight', `${BASE}/mcp`, MIDNIGHT, 1280, 900);
   await shootThemed(browser, 'page-endpoint-guide-midnight', `${BASE}/api/memories`, MIDNIGHT, 1280, 900);
   await shootThemed(browser, 'page-oauth-midnight', authorizeUrl, MIDNIGHT, 1280, 860);
-  // Marketing landing: light (paper), dark, mobile; plus a server page in paper.
+  // Marketing landing: full-page light/dark/mobile, then the animated states.
   await shootLanding(browser, 'landing-light', { width: 1280, height: 900, fullPage: true });
   await shootLanding(browser, 'landing-dark', { width: 1280, height: 900, fullPage: true, dark: true });
   await shootLanding(browser, 'landing-mobile', { width: 390, height: 844, fullPage: true });
   await shootLanding(browser, 'page-oauth-paper', { width: 1280, height: 860, url: authorizeUrl });
+  await shootLandingMotion(browser);
   await browser.close();
 }
 

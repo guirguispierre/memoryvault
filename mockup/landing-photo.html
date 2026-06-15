@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemoryVault — the memory layer you own</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FBFAF7;--paper-2:#FFFFFF;--paper-3:#F2F0EB;
+    --rule:#E6E3DC;--rule-soft:#EEEBE4;
+    --ink:#1C1B19;--ink-dim:#6B6A66;--ink-faint:#9A988F;
+    --accent:#3B5BDB;--accent-soft:#E8ECFB;--good:#2F8F6B;
+    --ui:'Inter',system-ui,sans-serif;--doc:'Spectral',Georgia,serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--ui);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.5}
+  .container{max-width:1080px;margin:0 auto;padding:0 32px}
+  a{color:inherit;text-decoration:none}
+
+  /* ── HERO with photographic background ── */
+  .hero{position:relative;min-height:92vh;overflow:hidden;display:flex;flex-direction:column}
+  .hero-bg{position:absolute;inset:0;z-index:0}
+  .hero-bg img{width:100%;height:100%;object-fit:cover;object-position:center}
+  /* readability + fade-to-page overlays (same technique as the reference) */
+  .hero-bg::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(180deg, rgba(12,30,60,0.30) 0%, rgba(12,30,60,0.12) 30%, rgba(12,30,60,0.04) 55%, rgba(251,250,247,0) 78%);}
+  .fade-blobs{position:absolute;inset:0;z-index:1;pointer-events:none}
+  .fade-blobs .b{position:absolute;border-radius:100%;filter:blur(60px);background:rgba(251,250,247,0.9)}
+  .fade-blobs .bl{bottom:-17%;left:-12%;height:42%;width:42%}
+  .fade-blobs .br{bottom:-17%;right:-12%;height:42%;width:42%}
+  .fade-blobs .bc{bottom:-12%;left:50%;transform:translateX(-50%);height:20%;width:56%;background:rgba(251,250,247,0.45);filter:blur(72px)}
+  .hero-fade{position:absolute;inset-inline:0;bottom:0;height:22%;z-index:1;pointer-events:none;
+    background:linear-gradient(180deg, rgba(251,250,247,0) 0%, rgba(251,250,247,0.92) 72%, var(--paper) 100%)}
+
+  .hero-nav{position:relative;z-index:3;display:flex;align-items:center;gap:28px;padding:20px 32px;max-width:1080px;margin:0 auto;width:100%}
+  .brand{font-family:var(--doc);font-weight:600;font-size:18px;color:#fff;text-shadow:0 1px 12px rgba(0,0,0,0.25)}
+  .brand .dot{color:#cfe0ff} .brand .md{font-family:var(--mono);font-size:13px;color:rgba(255,255,255,0.75)}
+  .hero-nav .links{display:flex;gap:6px;margin-left:6px}
+  .hero-nav .links a{font-size:13.5px;color:rgba(255,255,255,0.85);padding:7px 12px;border-radius:8px;transition:background .15s}
+  .hero-nav .links a:hover{background:rgba(255,255,255,0.14)}
+  .hero-nav .right{margin-left:auto;display:flex;align-items:center;gap:12px}
+  .hero-nav .ghost{font-size:13px;color:rgba(255,255,255,0.9);border:1px solid rgba(255,255,255,0.35);border-radius:8px;padding:7px 13px;background:rgba(255,255,255,0.08)}
+  .hero-nav .solid{font-size:13.5px;font-weight:600;color:#16325c;background:#fff;border-radius:8px;padding:8px 15px}
+
+  .hero-body{position:relative;z-index:3;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 24px 8vh}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:rgba(255,255,255,0.92);margin-bottom:22px;text-shadow:0 1px 10px rgba(0,0,0,0.3)}
+  .hero h1{font-family:var(--doc);font-weight:500;font-size:64px;line-height:1.04;letter-spacing:-0.02em;max-width:16ch;color:#fff;text-shadow:0 2px 26px rgba(8,20,45,0.4);margin-bottom:6px}
+  .hero h1 em{font-style:italic;color:#dfe9ff}
+  .hero h1 .ch{display:inline-block;white-space:pre;opacity:0;filter:blur(10px);transform:translateY(10px);animation:chin .8s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes chin{to{opacity:1;filter:blur(0);transform:none}}
+  .hairline{height:1px;width:320px;margin:26px auto 0;transform-origin:center;background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,0.5) 18%,rgba(255,255,255,0.5) 82%,rgba(255,255,255,0));opacity:0;animation:fadein .8s ease .5s forwards}
+  .hero p{font-size:18px;color:rgba(255,255,255,0.95);max-width:52ch;margin:24px auto 0;line-height:1.55;text-shadow:0 1px 14px rgba(8,20,45,0.35);opacity:0;animation:riseup .9s cubic-bezier(.2,.7,.2,1) .62s forwards}
+  .hero-cta{margin-top:30px;display:flex;gap:12px;justify-content:center;opacity:0;animation:riseup .9s cubic-bezier(.2,.7,.2,1) .74s forwards}
+  .btn{font-family:var(--ui);font-weight:600;font-size:15px;border-radius:10px;padding:12px 22px;cursor:pointer;border:1px solid transparent;display:inline-flex;align-items:center;gap:8px;transition:transform .15s, box-shadow .15s}
+  .btn.solid{background:#fff;color:#16325c} .btn.solid:hover{transform:translateY(-1px);box-shadow:0 12px 30px rgba(0,0,0,0.22)}
+  .btn.glass{background:rgba(255,255,255,0.12);color:#fff;border-color:rgba(255,255,255,0.4)} .btn.glass:hover{background:rgba(255,255,255,0.2);transform:translateY(-1px)}
+  .hero-sub{margin-top:18px;font-family:var(--mono);font-size:12px;color:rgba(255,255,255,0.8);opacity:0;animation:fadein .9s ease .9s forwards}
+  @keyframes riseup{to{opacity:1;transform:none}}
+  @keyframes fadein{to{opacity:1}}
+
+  /* ── content below ── */
+  .shot{max-width:1000px;margin:-6vh auto 0;position:relative;z-index:4;border:1px solid var(--rule);border-radius:14px;overflow:hidden;box-shadow:0 40px 90px rgba(28,27,25,0.18)}
+  .shot img{display:block;width:100%}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  .feature{padding:88px 0;border-top:1px solid var(--rule-soft)}
+  .feature:first-of-type{border-top:none;padding-top:64px}
+  .feature-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+  .feature h2{font-family:var(--doc);font-weight:500;font-size:34px;letter-spacing:-0.015em;margin-bottom:16px;line-height:1.15}
+  .feature h2 em{font-style:italic;color:var(--accent)}
+  .feature p{font-size:16px;color:var(--ink-dim);margin-bottom:14px;line-height:1.6}
+  .feature .mini{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+  .panel{background:var(--paper-2);border:1px solid var(--rule);border-radius:12px;padding:26px;box-shadow:0 20px 50px rgba(28,27,25,0.06)}
+  .ledger-line{display:flex;align-items:baseline;gap:10px;padding:9px 0;border-bottom:1px solid var(--rule-soft);font-size:14px}
+  .ledger-line:last-child{border:none}
+  .ledger-line .k{font-family:var(--mono);font-size:12px;color:var(--accent)}
+  .ledger-line .arr{color:var(--ink-faint)} .ledger-line .v{font-family:var(--doc);color:var(--ink)}
+  .ledger-line .tag{margin-left:auto;font-family:var(--mono);font-size:9px;text-transform:uppercase;color:var(--good);border:1px solid #BFE0D2;border-radius:4px;padding:1px 5px}
+
+  .final{padding:100px 0;border-top:1px solid var(--rule-soft);text-align:center}
+  .final h2{font-family:var(--doc);font-weight:500;font-size:44px;letter-spacing:-0.02em;max-width:16ch;margin:0 auto 24px;line-height:1.1}
+  .final h2 em{font-style:italic;color:var(--accent)}
+  .final .btn.solid{background:var(--accent);color:#fff}
+
+  footer{border-top:1px solid var(--rule);padding:38px 0;color:var(--ink-faint);font-size:13px}
+  .foot-in{display:flex;justify-content:space-between;align-items:center}
+  .ok{font-family:var(--mono);font-size:11px;color:var(--good)}
+  @media (max-width:760px){.feature-grid{grid-template-columns:1fr;gap:28px}.hero h1{font-size:40px}.hero-nav .links{display:none}}
+  @media (prefers-reduced-motion: reduce){
+    .ch,.hero p,.hero-cta,.hero-sub,.hairline,.reveal{animation:none!important;opacity:1!important;filter:none!important;transform:none!important;transition:none!important}
+    html{scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+  <section class="hero">
+    <div class="hero-bg"><img src="hero-bg.png" alt=""></div>
+    <div class="fade-blobs"><div class="b bl"></div><div class="b br"></div><div class="b bc"></div></div>
+    <div class="hero-fade"></div>
+
+    <nav class="hero-nav">
+      <span class="brand">memoryvault<span class="dot">.</span><span class="md">md</span></span>
+      <div class="links"><a href="#">Features</a><a href="#">How it works</a><a href="#">Pricing</a><a href="#">FAQ</a></div>
+      <div class="right"><a class="ghost" href="#">Docs</a><a class="solid" href="#">Get started</a></div>
+    </nav>
+
+    <div class="hero-body">
+      <div class="eyebrow">open source · self-hosted · graph-aware</div>
+      <h1 id="headline"></h1>
+      <div class="hairline"></div>
+      <p>Persistent, graph-aware memory for any AI agent — fully open, nothing paywalled, running on infrastructure you control. Your memories never touch our servers.</p>
+      <div class="hero-cta">
+        <a class="btn solid" href="#">Deploy your own — free <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+        <a class="btn glass" href="#">View on GitHub</a>
+      </div>
+      <div class="hero-sub">MIT licensed · graph included · deploy to Cloudflare in ~5 min</div>
+    </div>
+  </section>
+
+  <div class="shot reveal"><img src="paper-spectral.png" alt="MemoryVault viewer"></div>
+
+  <section class="feature container">
+    <div class="feature-grid">
+      <div class="reveal">
+        <h2>A graph of memory, <em>nothing paywalled</em></h2>
+        <p>Most memory tools lock the graph behind a Pro tier or keep it closed-source entirely. MemoryVault ships connected, graph-aware memory in the open — links, traversal, and provenance included from the first commit.</p>
+        <p class="mini">notes · facts · journal — linked, scored, and queryable</p>
+      </div>
+      <div class="panel reveal">
+        <div class="ledger-line"><span class="k">project.license</span><span class="arr">→</span><span class="v">MIT, fully open</span><span class="tag">verified</span></div>
+        <div class="ledger-line"><span class="k">user.timezone</span><span class="arr">→</span><span class="v">Europe/Lisbon</span><span class="tag">verified</span></div>
+        <div class="ledger-line"><span class="k">graph.enabled</span><span class="arr">→</span><span class="v">true — no upsell</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature container">
+    <div class="feature-grid">
+      <div class="panel reveal" style="font-family:var(--mono);font-size:12.5px;color:var(--ink-dim);line-height:1.9">
+        <div style="color:var(--ink-faint)"># your account, your data</div>
+        <div><span style="color:var(--accent)">[[vectorize]]</span> binding = "MEMORY_INDEX"</div>
+        <div><span style="color:var(--accent)">[[d1_databases]]</span> name = "your-brain"</div>
+        <div style="color:var(--good)">✓ memories never leave your Cloudflare account</div>
+      </div>
+      <div class="reveal">
+        <h2>Self-hosted. <em>You own the data.</em></h2>
+        <p>Deploy to your own Cloudflare account in minutes. There's no MemoryVault server in the middle — your agent's memory lives in your D1 and Vectorize, under your keys.</p>
+        <p class="mini">one-command deploy · D1 + Vectorize + Workers</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="final container">
+    <h2 class="reveal">Give your agents a memory <em>you control</em></h2>
+    <div class="hero-cta reveal" style="animation:none;opacity:1;justify-content:center"><a class="btn solid" href="#">Deploy your own — free</a><a class="btn glass" style="background:transparent;color:var(--ink-dim);border-color:var(--rule)" href="#">Read the docs</a></div>
+  </section>
+
+  <footer><div class="container foot-in"><span>© 2026 MemoryVault · MIT licensed</span><span class="ok">● all systems operational</span></div></footer>
+
+<script>
+  // per-letter blur-up reveal on the headline
+  (function(){
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var line1 = "The memory layer your";
+    var line2raw = "agents actually own";  // 'actually own' italic+tint
+    var h = document.getElementById('headline');
+    function spanify(text, startDelay){
+      var frag = document.createDocumentFragment(), i, d = startDelay;
+      for(i=0;i<text.length;i++){
+        var s = document.createElement('span'); s.className='ch'; s.textContent=text[i];
+        if(!reduce){ s.style.animationDelay=(d).toFixed(2)+'s'; d+=0.03; }
+        else { s.style.opacity=1; s.style.filter='none'; s.style.transform='none'; }
+        frag.appendChild(s);
+      }
+      return {frag:frag,end:d};
+    }
+    var r1 = spanify(line1, 0.15); h.appendChild(r1.frag);
+    h.appendChild(document.createElement('br'));
+    // line 2: "agents " normal, "actually own" emphasized
+    var r2 = spanify("agents ", r1.end); h.appendChild(r2.frag);
+    var em = document.createElement('em'); h.appendChild(em);
+    var r3 = (function(){
+      var frag=document.createDocumentFragment(), d=r2.end;
+      var t="actually own";
+      for(var i=0;i<t.length;i++){var s=document.createElement('span');s.className='ch';s.textContent=t[i];
+        if(!reduce){s.style.animationDelay=d.toFixed(2)+'s';d+=0.03;}else{s.style.opacity=1;s.style.filter='none';s.style.transform='none';}
+        frag.appendChild(s);}
+      return frag;
+    })();
+    em.appendChild(r3);
+  })();
+  // scroll reveals
+  (function(){
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var els = document.querySelectorAll('.reveal');
+    if(reduce || !('IntersectionObserver' in window)){els.forEach(function(e){e.classList.add('in')});return;}
+    var io = new IntersectionObserver(function(en){en.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}})},{threshold:0.12,rootMargin:'0px 0px -8% 0px'});
+    els.forEach(function(e){io.observe(e)});
+  })();
+</script>
+</body>
+</html>

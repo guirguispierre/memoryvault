@@ -282,6 +282,9 @@ export const themeRuntimeJs = `  var CUSTOM_FONT_PRESETS = {
 // failure-tolerant.
 export const themeBootstrapJs = `(function(){
 ${themeRuntimeJs}
+  // Mark that JS is live before paint so pages can gate scroll-reveal hiding on
+  // html.js — without JS the content stays visible instead of stuck hidden.
+  try { document.documentElement.classList.add('js'); } catch (e) {}
   var KEY = 'memoryvault.viewer.settings.v1';
   function readSettings() {
     try { var raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
