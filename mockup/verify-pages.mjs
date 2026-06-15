@@ -1,7 +1,9 @@
-// Visual verification for the server-rendered pages now on the vanilla design
-// system: the landing page, the /mcp guide, an endpoint guide, and the OAuth
-// authorize screen. Boots the worker locally on the isolation wrangler config
-// and screenshots each at device_scale_factor=2, waiting for webfonts.
+// Visual verification for the server-rendered public pages, now on the dark
+// "constellation" identity: the landing's living-graph hero (animated canvas
+// starfield), a calm content section below it, and the calm utility pages
+// (/mcp, an endpoint guide, the OAuth authorize screen). Boots the worker
+// locally on the isolation wrangler config and screenshots each at
+// device_scale_factor=2, waiting for webfonts and the starfield to settle.
 //
 // Run from the repo root:  node mockup/verify-pages.mjs
 import { spawn, execSync } from 'node:child_process';
@@ -77,43 +79,31 @@ async function buildAuthorizeUrl() {
   return `${BASE}/authorize?${params.toString()}`;
 }
 
+// A single viewport-sized capture (utility pages, mobile hero).
 async function shoot(browser, name, url, width, height) {
   log(`shooting ${name} (${width}×${height})`);
-  const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await page.goto(url, { waitUntil: 'networkidle' });
   await page.waitForTimeout(FONT_SETTLE_MS);
   await page.screenshot({ path: `${SHOTS}/${name}.png` });
   await ctx.close();
 }
 
-// Full-page / server-page captures. colorScheme dark on purpose: public pages
-// are light-locked, so they must still render in the paper design.
-async function shootLanding(browser, name, opts) {
-  log(`shooting ${name} (${opts.width}×${opts.height})`);
-  const ctx = await browser.newContext({ viewport: { width: opts.width, height: opts.height }, deviceScaleFactor: 2, colorScheme: 'dark' });
-  const page = await ctx.newPage();
-  await page.goto(opts.url || `${BASE}/`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(FONT_SETTLE_MS);
-  await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: !!opts.fullPage });
-  await ctx.close();
-}
-
-// The animated states: hero settled, product-shot overlap, a revealed section,
-// and the FAQ with one item open. The public site is light-locked, so there is
-// no dark variant to capture.
+// The landing in motion: the living-graph hero settled, the product shot, a
+// revealed content section, and the FAQ with one item open.
 async function shootLandingMotion(browser) {
   log('shooting landing hero + product shot + section + faq');
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2, colorScheme: 'light' });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(FONT_SETTLE_MS);
   await page.screenshot({ path: `${SHOTS}/landing-hero.png` });
-  // Product-shot transition: scroll so the shot overlaps the hero fade.
-  await page.evaluate(() => window.scrollTo(0, window.innerHeight * 0.66));
-  await page.waitForTimeout(900);
+  // Product shot just below the hero.
+  await page.locator('.shot').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(700);
   await page.screenshot({ path: `${SHOTS}/landing-product-shot.png` });
-  // A revealed mid section.
+  // A revealed mid section (calm, legible below the field).
   await page.locator('#how').scrollIntoViewIfNeeded();
   await page.waitForTimeout(900);
   await page.screenshot({ path: `${SHOTS}/landing-section.png` });
@@ -130,15 +120,13 @@ async function screenshotAll() {
   mkdirSync(SHOTS, { recursive: true });
   const authorizeUrl = await buildAuthorizeUrl();
   const browser = await chromium.launch();
-  // Public pages render light even with the OS in dark (the light lock); the
-  // shoot() contexts use colorScheme dark on purpose to prove it.
+  // Utility pages: same dark constellation theme, calm static starfield.
   await shoot(browser, 'page-mcp', `${BASE}/mcp`, 1280, 900);
   await shoot(browser, 'page-endpoint-guide', `${BASE}/api/memories`, 1280, 900);
-  await shoot(browser, 'page-oauth-authorize', authorizeUrl, 1280, 860);
-  // Marketing landing: full page and mobile reflow.
-  await shootLanding(browser, 'landing-light', { width: 1280, height: 900, fullPage: true });
-  await shootLanding(browser, 'landing-mobile', { width: 390, height: 844, fullPage: true });
+  await shoot(browser, 'page-oauth-authorize', authorizeUrl, 1280, 840);
+  // Marketing landing: animated hero, sections, and the mobile reflow.
   await shootLandingMotion(browser);
+  await shoot(browser, 'landing-mobile', `${BASE}/`, 390, 844);
   await browser.close();
 }
 

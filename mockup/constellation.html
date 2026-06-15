@@ -1,0 +1,99 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MemoryVault</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400__FONTS__family=Inter:wght@400;500;600__FONTS__family=JetBrains+Mono:wght@400;500__FONTS__display=swap" rel="stylesheet">
+<style>
+ :root{--bg:#070810;--ink:#f5f4ef;--dim:#9aa0b4;--faint:#565d72;--accent:#8ab0ff;--good:#86e0b8;--warm:#ffcaa0;--violet:#b9a3ff;--doc:'Spectral',serif;--ui:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+ *{margin:0;padding:0;box-sizing:border-box}
+ body{background:var(--bg);color:var(--ink);font-family:var(--ui);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+ /* deep space gradient under the canvas */
+ .space{position:fixed;inset:0;z-index:-1;background:
+   radial-gradient(80% 60% at 50% 8%, rgba(40,52,110,0.40), transparent 60%),
+   radial-gradient(60% 50% at 82% 80%, rgba(30,80,70,0.22), transparent 60%),
+   radial-gradient(55% 45% at 12% 75%, rgba(70,40,110,0.20), transparent 60%),
+   #070810;}
+ canvas{position:fixed;inset:0;z-index:0;display:block}
+ .wrap{position:relative;z-index:1;pointer-events:none}
+ .wrap a,.wrap button{pointer-events:auto}
+ nav{display:flex;align-items:center;gap:24px;max-width:1120px;margin:0 auto;padding:24px 32px}
+ .brand{font-family:var(--doc);font-size:18px;font-weight:600} .brand .d{color:var(--accent)}
+ nav .links{display:flex;gap:22px;margin-left:12px} nav .links a{font-size:13px;color:var(--dim);text-decoration:none}
+ nav .links a:hover{color:var(--ink)}
+ nav .r{margin-left:auto;display:flex;gap:12px}
+ .btn{font-family:var(--ui);font-weight:600;font-size:13.5px;border-radius:9px;padding:10px 18px;border:1px solid var(--accent);background:var(--accent);color:#070810;text-decoration:none;transition:transform .15s,box-shadow .15s}
+ .btn:hover{transform:translateY(-1px);box-shadow:0 10px 30px rgba(138,176,255,0.35)}
+ .btn.g{background:rgba(255,255,255,0.04);color:var(--ink);border-color:rgba(255,255,255,0.18)}
+ .hero{max-width:1120px;margin:0 auto;padding:16vh 32px 0;text-align:center}
+ .tag{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin-bottom:26px;opacity:.9}
+ h1{font-family:var(--doc);font-weight:500;font-size:70px;line-height:1.04;letter-spacing:-.02em;max-width:15ch;margin:0 auto;text-shadow:0 2px 40px rgba(80,110,220,0.25)}
+ h1 em{font-style:italic;color:var(--accent)}
+ .sub{font-size:19px;color:var(--dim);max-width:48ch;margin:26px auto 0;line-height:1.55}
+ .cta{margin-top:34px;display:flex;gap:14px;justify-content:center}
+ .legend{margin-top:12vh;padding-bottom:16vh;display:flex;gap:30px;justify-content:center;font-family:var(--mono);font-size:11px;color:var(--faint);flex-wrap:wrap}
+ .legend span{display:flex;align-items:center;gap:8px} .ld{width:8px;height:8px;border-radius:50%;box-shadow:0 0 8px currentColor}
+</style></head><body>
+<div class="space"></div>
+<canvas id="sky"></canvas>
+<div class="wrap">
+ <nav><span class="brand">memoryvault<span class="d">.</span></span>
+   <div class="links"><a>How it works</a><a>Pricing</a><a>Docs</a></div>
+   <div class="r"><a class="btn g">GitHub</a><a class="btn">Deploy free</a></div></nav>
+ <section class="hero">
+  <div class="tag">a living memory for your agents</div>
+  <h1>Memory that <em>strengthens</em>, fades, and connects itself.</h1>
+  <p class="sub">Not a static file — a graph that reinforces what matters, lets the rest decay, and gives every agent the same evolving picture of you.</p>
+  <div class="cta"><a class="btn">Deploy your own — free</a><a class="btn g">View on GitHub</a></div>
+  <div class="legend">
+    <span style="color:#86e0b8"><i class="ld"></i>active</span>
+    <span style="color:#ffcaa0"><i class="ld"></i>settling</span>
+    <span style="color:#565d72"><i class="ld"></i>fading</span>
+    <span style="color:#8ab0ff"><i class="ld"></i>reinforced</span>
+  </div>
+ </section>
+</div>
+<script>
+const cv=document.getElementById('sky'),x=cv.getContext('2d');
+let W,H,DPR=Math.min(devicePixelRatio||1,2),mx=0,my=0,tx=0,ty=0;
+function size(){W=cv.width=innerWidth*DPR;H=cv.height=innerHeight*DPR;cv.style.width=innerWidth+'px';cv.style.height=innerHeight+'px';}
+size();addEventListener('resize',size);
+addEventListener('mousemove',e=>{tx=(e.clientX/innerWidth-0.5);ty=(e.clientY/innerHeight-0.5);});
+const PAL={active:[134,224,184],settling:[255,202,160],fading:[86,93,114],reinforced:[138,176,255]};
+const keys=Object.keys(PAL);
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const N=Math.round(innerWidth/26);
+const stars=[];
+for(let i=0;i<N;i++){const big=Math.random()<0.16;stars.push({
+  x:Math.random()*W,y:Math.random()*H,
+  vx:(Math.random()-.5)*0.12*DPR,vy:(Math.random()-.5)*0.12*DPR,
+  r:(big?Math.random()*2.4+2.2:Math.random()*1.3+0.7)*DPR,
+  big, depth:Math.random()*0.6+0.4,
+  c:PAL[keys[Math.floor(Math.random()*keys.length)]],
+  ph:Math.random()*6.28, tw:Math.random()*0.6+0.5 });}
+function star(s,glow){const [r,g,b]=s.c;
+  const grd=x.createRadialGradient(s.x,s.y,0,s.x,s.y,s.r*(s.big?6:4.5));
+  grd.addColorStop(0,'rgba('+r+','+g+','+b+','+glow+')');
+  grd.addColorStop(0.4,'rgba('+r+','+g+','+b+','+(glow*0.35)+')');
+  grd.addColorStop(1,'rgba('+r+','+g+','+b+',0)');
+  x.fillStyle=grd;x.beginPath();x.arc(s.x,s.y,s.r*(s.big?6:4.5),0,6.28);x.fill();
+  // bright core
+  x.fillStyle='rgba(255,255,255,'+Math.min(1,glow*1.1)+')';x.beginPath();x.arc(s.x,s.y,s.r*0.6,0,6.28);x.fill();
+  // sparkle spikes on big stars
+  if(s.big){x.strokeStyle='rgba('+r+','+g+','+b+','+(glow*0.5)+')';x.lineWidth=DPR*0.8;const L=s.r*5;
+    x.beginPath();x.moveTo(s.x-L,s.y);x.lineTo(s.x+L,s.y);x.moveTo(s.x,s.y-L);x.lineTo(s.x,s.y+L);x.stroke();}
+}
+function loop(t){x.clearRect(0,0,W,H);x.globalCompositeOperation='lighter';
+  tx+=(0,0);mx+=(tx-mx)*0.05;my+=(ty-my)*0.05;
+  // links
+  for(let i=0;i<stars.length;i++){for(let j=i+1;j<stars.length;j++){const a=stars[i],b=stars[j];
+    const dx=a.x-b.x,dy=a.y-b.y,d=Math.hypot(dx,dy);
+    if(d<170*DPR){const al=0.16*(1-d/(170*DPR));x.strokeStyle='rgba(138,176,255,'+al+')';x.lineWidth=DPR*0.7;
+      x.beginPath();x.moveTo(a.x,a.y);x.lineTo(b.x,b.y);x.stroke();}}}
+  // stars
+  stars.forEach(s=>{ if(!reduce){s.x+=s.vx;s.y+=s.vy;} 
+    const px=s.x - mx*40*DPR*s.depth, py=s.y - my*40*DPR*s.depth;
+    if(s.x<-20)s.x=W+20;if(s.x>W+20)s.x=-20;if(s.y<-20)s.y=H+20;if(s.y>H+20)s.y=-20;
+    const tw=reduce?0.85:(0.55+0.45*Math.sin(t/700*s.tw+s.ph));
+    const o={x:s.x,y:s.y,r:s.r,big:s.big,c:s.c};o.x=px;o.y=py;star(o, (s.c===PAL.fading?0.4:0.9)*tw);});
+  x.globalCompositeOperation='source-over';
+  requestAnimationFrame(loop);}
+requestAnimationFrame(loop);
+</script>
+</body></html>

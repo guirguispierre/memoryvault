@@ -26,10 +26,9 @@ import { TOOLS } from './tools-schema.js';
 import { viewerHtml, viewerScript } from './viewer/index.js';
 import {
   base64ImageResponse,
-  HERO_BG_WEBP_BASE64,
-  HERO_BG_MOBILE_WEBP_BASE64,
   PRODUCT_SHOT_WEBP_BASE64,
 } from './assets.js';
+import { starfieldJs } from './viewer/constellation.js';
 import {
   handleMcp,
   handleApiMemories,
@@ -114,12 +113,12 @@ export default {
         });
       }
 
-      if (url.pathname === '/assets/hero-bg.webp') {
-        return base64ImageResponse(HERO_BG_WEBP_BASE64, 'image/webp');
+      if (url.pathname === '/starfield.js') {
+        return new Response(starfieldJs, {
+          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
+        });
       }
-      if (url.pathname === '/assets/hero-bg-mobile.webp') {
-        return base64ImageResponse(HERO_BG_MOBILE_WEBP_BASE64, 'image/webp');
-      }
+
       if (url.pathname === '/assets/product-shot.webp') {
         return base64ImageResponse(PRODUCT_SHOT_WEBP_BASE64, 'image/webp');
       }

@@ -31,8 +31,8 @@ import {
 
 import { CORS_HEADERS, corsJsonResponse } from './cors.js';
 
-import { FONT_LINK_TAGS, vanillaTokensCss } from './viewer/tokens.js';
-import { themeStyles } from './viewer/themes.js';
+import { FONT_LINK_TAGS } from './viewer/tokens.js';
+import { constellationTokensCss, constellationCalmField } from './viewer/constellation.js';
 
 import {
   listBrainsForUser,
@@ -471,15 +471,15 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
     : '';
 
   return `<!doctype html>
-<html lang="en" data-theme="paper-light">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="dark">
   <title>Connect your second brain · MemoryVault</title>
   ${FONT_LINK_TAGS}
   <style>
-${vanillaTokensCss}${themeStyles}    * { box-sizing: border-box; }
+${constellationTokensCss}    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -548,6 +548,7 @@ ${vanillaTokensCss}${themeStyles}    * { box-sizing: border-box; }
   </style>
 </head>
 <body>
+  ${constellationCalmField}
   <form class="card" method="post" action="/authorize">
     <div class="pour" aria-hidden="true"><i style="height:4px;opacity:.14"></i><i style="height:6px;opacity:.18"></i><i style="height:5px;opacity:.22"></i><i style="height:9px;opacity:.3"></i><i style="height:7px;opacity:.38"></i><i style="height:12px;opacity:.5"></i><i style="height:10px;opacity:.6"></i><i style="height:15px;opacity:.74"></i><i style="height:18px;opacity:.88"></i><i style="height:20px;opacity:1"></i></div>
     <div class="wordmark">Memory<em>Vault</em></div>

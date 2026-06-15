@@ -64,11 +64,14 @@ import {
 
 import {
   FONT_LINK_TAGS,
-  vanillaTokensCss,
   pageChromeCss,
 } from './viewer/tokens.js';
 
-import { themeStyles } from './viewer/themes.js';
+import {
+  constellationTokensCss,
+  constellationHeadTags,
+  constellationCalmField,
+} from './viewer/constellation.js';
 
 export async function processMcpBody(
   body: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> },
@@ -969,38 +972,6 @@ export async function handleApiViewerSettings(request: Request, env: Env, brainI
 export const landingScript = `(function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // Per-letter headline. The fallback h1 carries the text for no-JS; here we
-  // rebuild #headline into staggered spans (the reduced-motion media query
-  // forces them visible, so no JS branch is needed for that).
-  (function(){
-    var h = document.getElementById('headline');
-    if (!h) return;
-    h.textContent = '';
-    var delay = 0.15;
-    // Letters animate individually but are grouped into per-word wrappers, and
-    // spaces are real collapsible whitespace, so the headline only ever breaks
-    // between words — never mid-word — at any viewport width.
-    function emit(text, target) {
-      var word = null;
-      for (var i = 0; i < text.length; i++) {
-        var c = text[i];
-        if (c === '\\n') { target.appendChild(document.createElement('br')); word = null; continue; }
-        if (c === ' ') { target.appendChild(document.createTextNode(' ')); delay += 0.03; word = null; continue; }
-        if (!word) { word = document.createElement('span'); word.className = 'hw'; target.appendChild(word); }
-        var s = document.createElement('span');
-        s.className = 'ch';
-        s.textContent = c;
-        s.style.animationDelay = delay.toFixed(2) + 's';
-        delay += 0.03;
-        word.appendChild(s);
-      }
-    }
-    emit('The memory layer your\\nagents ', h);
-    var em = document.createElement('em');
-    h.appendChild(em);
-    emit('actually own', em);
-  })();
-
   // Scroll reveals: add .in once, then stop watching.
   (function(){
     var els = document.querySelectorAll('.reveal');
@@ -1038,88 +1009,59 @@ export function rootLandingHtml(url: URL): string {
   const endpointsRef = `${origin}/endpoints`;
   const repo = 'https://github.com/guirguispierre/memoryvault';
   return `<!DOCTYPE html>
-<html lang="en" data-theme="paper-light">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MemoryVault — the memory layer your agents own</title>
+<title>MemoryVault — a living memory for your agents</title>
 <meta name="description" content="Persistent, graph-aware memory for AI agents. Open source, self-hosted on your own Cloudflare account, nothing paywalled.">
 ${FONT_LINK_TAGS}
-<meta name="color-scheme" content="light">
+${constellationHeadTags}
 <style>
-${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; padding: 0; }
+${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
   body { font-family: var(--body); background: var(--ground); color: var(--cream); -webkit-font-smoothing: antialiased; line-height: 1.5; overflow-x: hidden; }
   a { color: inherit; text-decoration: none; }
-  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
 
-  /* ── HERO (photographic) ── */
-  .hero { position: relative; min-height: 92vh; overflow: hidden; display: flex; flex-direction: column; }
-  .hero-bg { position: absolute; inset: 0; z-index: 0; }
-  .hero-bg img { width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; }
-  /* Top-down wash for nav/headline contrast, fading out before the page. */
-  .hero-bg::after {
-    content: ""; position: absolute; inset: 0;
-    background: linear-gradient(180deg, rgba(10,22,48,0.42) 0%, rgba(10,22,48,0.22) 32%, rgba(10,22,48,0.10) 58%, transparent 82%);
-  }
-  /* Near-white blobs kept low and out of the text zone so they melt the photo
-     into the page without washing out live text. */
-  .fade-blobs { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
-  .fade-blobs .b { position: absolute; border-radius: 100%; filter: blur(60px); background: rgba(251,250,247,0.9); }
-  .fade-blobs .bl { bottom: -24%; left: -14%; height: 40%; width: 40%; }
-  .fade-blobs .br { bottom: -24%; right: -14%; height: 40%; width: 40%; }
-  .fade-blobs .bc { bottom: -16%; left: 50%; transform: translateX(-50%); height: 16%; width: 56%; background: rgba(251,250,247,0.35); filter: blur(72px); }
-  .hero-fade { position: absolute; inset-inline: 0; bottom: 0; height: 18%; z-index: 1; pointer-events: none; background: linear-gradient(180deg, transparent 0%, var(--ground) 92%); }
-  /* Focused dark vignette that travels WITH the text (above photo + blobs at z1,
-     below text at z3) so the hero copy keeps its own contrast over any part of
-     the image, independent of what is behind it. */
-  .text-scrim {
-    position: absolute; z-index: 2; left: 50%; top: 46%; transform: translate(-50%, -50%);
-    width: min(880px, 92%); height: min(560px, 70%); pointer-events: none;
-    background: radial-gradient(60% 60% at 50% 50%, rgba(10,22,48,0.46) 0%, rgba(10,22,48,0.30) 45%, rgba(10,22,48,0) 78%);
-  }
+  /* ── HERO (living constellation) ── */
+  .hero { position: relative; min-height: 100vh; overflow: hidden; }
+  .hero .sky { position: absolute; inset: 0; z-index: 0; }
 
-  .hero-nav { position: relative; z-index: 3; display: flex; align-items: center; gap: 28px; padding: 20px 32px; max-width: 1080px; margin: 0 auto; width: 100%; }
-  .brand { font-family: var(--disp); font-weight: 600; font-size: 18px; color: rgb(255,255,255); text-shadow: 0 1px 12px rgba(0,0,0,0.25); }
-  .hero-nav .links { display: flex; gap: 6px; margin-left: 6px; }
-  .hero-nav .links a { font-size: 13.5px; color: rgba(255,255,255,0.85); padding: 7px 12px; border-radius: 8px; transition: background 0.15s; }
-  .hero-nav .links a:hover { background: rgba(255,255,255,0.14); }
+  .hero-nav { position: relative; z-index: 2; display: flex; align-items: center; gap: 22px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; }
+  .brand { font-family: var(--disp); font-weight: 600; font-size: 18px; color: var(--cream); }
+  .brand .dot { color: var(--butter); }
+  .brand .md { font-family: var(--mono); font-size: 12px; color: var(--cream-faint); margin-left: 2px; }
+  .hero-nav .links { display: flex; gap: 6px; margin-left: 10px; }
+  .hero-nav .links a { font-size: 13px; color: var(--cream-dim); padding: 6px 10px; border-radius: 8px; transition: color 0.15s, background 0.15s; }
+  .hero-nav .links a:hover { color: var(--cream); background: var(--surface); }
   .hero-nav .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-  .hero-nav .ghost { font-size: 13px; color: rgba(255,255,255,0.9); border: 1px solid rgba(255,255,255,0.35); border-radius: 8px; padding: 7px 13px; background: rgba(255,255,255,0.08); }
-  .hero-nav .solid { font-size: 13.5px; font-weight: 600; color: rgb(22,50,92); background: rgb(255,255,255); border-radius: 8px; padding: 8px 15px; }
 
-  .hero-body { position: relative; z-index: 3; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 24px 20vh; }
-  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(255,255,255,0.92); margin-bottom: 22px; text-shadow: 0 1px 10px rgba(0,0,0,0.3); }
-  .hero h1 { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 22ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); margin-bottom: 6px; }
-  .hero h1 em { font-style: italic; color: rgb(223,233,255); }
-  /* Each word is its own inline-block so the headline only breaks at spaces;
-     the letters animate inside without becoming per-letter break points. */
-  .hero h1 .hw { display: inline-block; white-space: nowrap; }
-  .hero h1 .ch { display: inline-block; opacity: 0; filter: blur(10px); transform: translateY(10px); animation: chin 0.8s cubic-bezier(0.2,0.7,0.2,1) forwards; }
-  @keyframes chin { to { opacity: 1; filter: blur(0); transform: none; } }
-  .hl-fallback { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 22ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); }
-  .hl-fallback em { font-style: italic; color: rgb(223,233,255); }
-  .hairline { height: 1px; width: 320px; margin: 26px auto 0; background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5) 18%, rgba(255,255,255,0.5) 82%, rgba(255,255,255,0)); opacity: 0; animation: fadein 0.8s ease 0.5s forwards; }
-  .hero p { font-size: 18px; color: rgba(255,255,255,0.97); max-width: 52ch; margin: 24px auto 0; line-height: 1.55; text-shadow: 0 1px 14px rgba(8,20,45,0.4); opacity: 0; animation: riseup 0.9s cubic-bezier(0.2,0.7,0.2,1) 0.62s forwards; }
-  /* Mono sub-line as glass pills in the protected (scrim) zone, above the CTAs,
-     so each carries its own contrast over any part of the photo. */
-  .hero-sub { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; opacity: 0; animation: fadein 0.9s ease 0.7s forwards; }
-  .hero-sub .pill { font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em; color: rgb(255,255,255); background: rgba(10,22,48,0.34); border: 1px solid rgba(255,255,255,0.22); border-radius: 999px; padding: 5px 11px; backdrop-filter: blur(4px); }
-  .hero-cta { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; opacity: 0; animation: riseup 0.9s cubic-bezier(0.2,0.7,0.2,1) 0.86s forwards; }
-  @keyframes riseup { to { opacity: 1; transform: none; } }
-  @keyframes fadein { to { opacity: 1; } }
-  .btn { font-family: var(--body); font-weight: 600; font-size: 15px; border-radius: 10px; padding: 12px 22px; cursor: pointer; border: 1px solid transparent; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.15s, box-shadow 0.15s; }
-  .btn.solid { background: rgb(255,255,255); color: rgb(22,50,92); }
-  .btn.solid:hover { transform: translateY(-1px); box-shadow: 0 12px 30px rgba(0,0,0,0.22); }
-  .btn.glass { background: rgba(255,255,255,0.12); color: rgb(255,255,255); border-color: rgba(255,255,255,0.4); }
-  .btn.glass:hover { background: rgba(255,255,255,0.2); transform: translateY(-1px); }
-  :focus-visible { outline: 2px solid rgb(255,255,255); outline-offset: 2px; }
+  .btn { font-family: var(--body); font-weight: 600; font-size: 14px; border-radius: 10px; padding: 11px 20px; cursor: pointer; border: 1px solid var(--butter); background: var(--butter); color: var(--on-butter); display: inline-flex; align-items: center; gap: 8px; transition: transform 0.15s, box-shadow 0.15s, background 0.15s; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 12px 34px var(--butter-glow); }
+  .btn.glass { background: var(--surface); color: var(--cream); border-color: var(--rule-bright); }
+  .btn.glass:hover { background: var(--surface-raised); box-shadow: none; }
+  .hero-nav .btn { font-size: 13px; padding: 9px 16px; }
+  :focus-visible { outline: 2px solid var(--butter); outline-offset: 2px; }
 
-  /* ── product shot ── (sits fully below the hero on paper, no overlap with the
-     photo, so the card's shadow reads against the page as a clean hand-off) */
-  .showcase { padding: 80px 0 0; text-align: center; }
-  .shot-cap { font-family: var(--disp); font-style: italic; font-size: 16px; color: var(--cream-faint); margin-bottom: 18px; }
-  .shot { max-width: 1000px; margin: 0 auto; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; box-shadow: 0 40px 90px var(--card-glow); background: var(--surface-raised); }
+  .hero-body { position: relative; z-index: 2; max-width: 1120px; margin: 0 auto; padding: 13vh 32px 0; text-align: center; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--butter); margin-bottom: 26px; opacity: 0.92; }
+  .hero h1 { font-family: var(--disp); font-weight: 500; font-size: 70px; line-height: 1.04; letter-spacing: -0.02em; max-width: 15ch; margin: 0 auto; color: var(--cream); text-shadow: 0 2px 40px rgba(80, 110, 220, 0.30); }
+  .hero h1 em { font-style: italic; color: var(--butter); }
+  .hero .sub { font-size: 19px; color: var(--cream-dim); max-width: 48ch; margin: 26px auto 0; line-height: 1.55; }
+  .hero-cta { margin-top: 34px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .hero-cta .btn { font-size: 15px; padding: 12px 22px; }
+  /* Tier legend ties the star colors to real memory states. */
+  .legend { margin-top: 10vh; padding-bottom: 12vh; display: flex; gap: 30px; justify-content: center; font-family: var(--mono); font-size: 11px; color: var(--cream-faint); flex-wrap: wrap; }
+  .legend span { display: flex; align-items: center; gap: 8px; }
+  .legend .ld { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+  .legend .active { color: var(--sage); }
+  .legend .settling { color: var(--clay); }
+  .legend .fading { color: var(--cream-faint); }
+  .legend .reinforced { color: var(--butter); }
+
+  /* ── product shot — dark frame with a soft glow ── */
+  .shot { max-width: 1000px; margin: 0 auto; position: relative; z-index: 1; border: 1px solid var(--rule-bright); border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px var(--card-glow), 0 0 70px var(--butter-glow); background: var(--surface-raised); }
   .shot img { display: block; width: 100%; }
 
   /* ── scroll reveals ── (the observer adds .in; a noscript rule below reveals
@@ -1210,42 +1152,20 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
 
   @media (max-width: 760px) {
     .container { padding: 0 20px; }
-    .hero { min-height: 80vh; }
-    .hero-bg img { object-position: center; }
-    .hero-nav { padding: 16px 20px; gap: 14px; }
+    .hero-nav { padding: 16px 20px; gap: 12px; }
     .hero-nav .links { display: none; }
-    .hero-nav .right { gap: 8px; }
-    .hero h1, .hl-fallback { font-size: 40px; }
-    .hero p { font-size: 16px; }
-    .hero-body { padding: 0 20px 12vh; }
-    .hairline { width: min(280px, 80%); }
-    .showcase { padding: 48px 0 0; }
-    .shot { margin: 0 auto; }
+    .hero h1 { font-size: 42px; }
+    .hero .sub { font-size: 16px; }
+    .hero-body { padding: 9vh 20px 0; }
+    .legend { gap: 18px; margin-top: 8vh; padding-bottom: 10vh; }
     .feature-grid { grid-template-columns: 1fr; gap: 28px; }
     .feature, .how, .pricing, .faq, .final { padding: 56px 0; }
-    .panel { padding: 20px; }
     .steps { grid-template-columns: 1fr; }
     .plans { grid-template-columns: 1fr; }
     .final h2 { font-size: 32px; }
-    .foot-in { justify-content: center; text-align: center; }
-  }
-  @media (max-width: 480px) {
-    .hero-nav { gap: 10px; }
-    .brand { font-size: 16px; }
-    .hero-nav .ghost, .hero-nav .solid { padding: 7px 11px; font-size: 12.5px; }
-    .eyebrow { font-size: 10px; margin-bottom: 16px; }
-    .hero h1, .hl-fallback { font-size: 31px; }
-    .hero p { font-size: 15px; margin-top: 18px; }
-    .hero-sub { margin-top: 18px; }
-    .hero-cta { width: 100%; gap: 10px; }
-    .hero-cta .btn { flex: 1 1 auto; justify-content: center; }
-    .feature h2, .how > h2, .pricing > h2, .faq > h2 { font-size: 26px; }
-    .final h2 { font-size: 26px; }
-    .faq-q { font-size: 16px; }
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .ch, .hero p, .hero-cta, .hero-sub, .hairline { animation: none !important; opacity: 1 !important; filter: none !important; transform: none !important; }
     .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
     .faq-a-wrap, .faq-q .chev, .step, .btn { transition: none !important; }
     .ping::after { animation: none !important; }
@@ -1254,41 +1174,34 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
 <noscript><style>.reveal { opacity: 1; transform: none; }</style></noscript>
 </head>
 <body>
+  <div class="space"></div>
   <section class="hero">
-    <div class="hero-bg">
-      <picture>
-        <source media="(max-width: 760px)" type="image/webp" srcset="/assets/hero-bg-mobile.webp?v=3">
-        <img src="/assets/hero-bg.webp?v=3" alt="" fetchpriority="high" decoding="async">
-      </picture>
-    </div>
-    <div class="fade-blobs"><div class="b bl"></div><div class="b br"></div><div class="b bc"></div></div>
-    <div class="text-scrim"></div>
-    <div class="hero-fade"></div>
+    <canvas id="sky" class="sky" aria-hidden="true"></canvas>
 
     <nav class="hero-nav">
-      <a class="brand" href="${origin}/">memoryvault</a>
-      <div class="links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div>
-      <div class="right"><a class="ghost" href="${endpointsRef}">Docs</a><a class="solid" href="${app}">Get started</a></div>
+      <a class="brand" href="${origin}/">memoryvault<span class="dot">.</span><span class="md">md</span></a>
+      <div class="links"><a href="#features">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a></div>
+      <div class="right"><a class="btn glass" href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="btn" href="${app}">Deploy free</a></div>
     </nav>
 
     <div class="hero-body">
-      <div class="eyebrow">open source · self-hosted · graph-aware</div>
-      <h1 id="headline"></h1>
-      <noscript><h1 class="hl-fallback">The memory layer your<br>agents <em>actually own</em></h1></noscript>
-      <div class="hairline"></div>
-      <p>Persistent, graph-aware memory for any AI agent — fully open, nothing paywalled, running on infrastructure you control. Your memories never touch our servers.</p>
-      <div class="hero-sub"><span class="pill">MIT licensed</span><span class="pill">graph included</span><span class="pill">deploy to Cloudflare in ~5 min</span></div>
+      <div class="eyebrow">a living memory for your agents</div>
+      <h1>Memory that <em>strengthens</em>, fades, and connects itself.</h1>
+      <p class="sub">Not a static file — a graph that reinforces what matters, lets the rest decay, and gives every agent the same evolving picture of you.</p>
       <div class="hero-cta">
-        <a class="btn solid" href="${app}">Deploy your own — free <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+        <a class="btn" href="${app}">Deploy your own — free <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
         <a class="btn glass" href="${repo}" target="_blank" rel="noopener">View on GitHub</a>
+      </div>
+      <div class="legend">
+        <span class="active"><i class="ld"></i>active</span>
+        <span class="settling"><i class="ld"></i>settling</span>
+        <span class="fading"><i class="ld"></i>fading</span>
+        <span class="reinforced"><i class="ld"></i>reinforced</span>
       </div>
     </div>
   </section>
 
-  <section class="showcase container">
-    <p class="shot-cap reveal">Your memory, legible</p>
-    <div class="shot reveal"><img src="/assets/product-shot.webp" alt="The MemoryVault viewer showing recall and the memory graph" decoding="async"></div>
-  </section>
+  <div class="shot reveal"><img src="/assets/product-shot.webp" alt="The MemoryVault viewer showing recall and the memory graph" decoding="async"></div>
 
   <section class="feature container" id="features">
     <div class="feature-grid">
@@ -1390,6 +1303,7 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
 
   <footer><div class="container foot-in"><span>&copy; 2026 MemoryVault · MIT licensed · <a href="${endpointsRef}">endpoints</a></span><span class="ok"><span class="ping"></span>all systems operational</span></div></footer>
 
+  <script src="/starfield.js" defer></script>
   <script src="/landing.js"></script>
 </body>
 </html>`;
@@ -1452,15 +1366,15 @@ export function endpointsIndexHtml(url: URL): string {
   }).join('');
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="paper-light">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault — Endpoints</title>
 ${FONT_LINK_TAGS}
-<meta name="color-scheme" content="light">
+${constellationHeadTags}
 <style>
-${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 1180px; }
+${constellationTokensCss}${pageChromeCss}  .wrap { max-width: 1180px; }
   .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 1rem; }
   .metrics { margin-top: 1rem; display: flex; gap: 0.55rem; flex-wrap: wrap; }
   .metric {
@@ -1531,6 +1445,7 @@ ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 1180px; }
 </style>
 </head>
 <body>
+  ${constellationCalmField}
   <main class="wrap">
     <div class="pill">${escapeHtml(envLabel)}</div>
     <h1 class="title">MEMORY<span>VAULT</span> Endpoints</h1>
@@ -1595,15 +1510,15 @@ export function mcpLandingHtml(url: URL): string {
   const authzMetadata = `${origin}/.well-known/oauth-authorization-server`;
   const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
   return `<!DOCTYPE html>
-<html lang="en" data-theme="paper-light">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault MCP</title>
 ${FONT_LINK_TAGS}
-<meta name="color-scheme" content="light">
+${constellationHeadTags}
 <style>
-${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 980px; }
+${constellationTokensCss}${pageChromeCss}  .wrap { max-width: 980px; }
   .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1rem; }
   .endpoint {
     display: block;
@@ -1619,6 +1534,7 @@ ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 980px; }
 </style>
 </head>
 <body>
+  ${constellationCalmField}
   <main class="wrap">
     <h1 class="title">MEMORY<span>VAULT</span> MCP</h1>
     <p class="sub">Human Guide For The MCP Endpoint</p>
@@ -1943,15 +1859,15 @@ export function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
     ? `${origin}${guide.endpointPath}`
     : `${origin}${guide.endpointPath}`;
   return `<!DOCTYPE html>
-<html lang="en" data-theme="paper-light">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${guide.title} · MemoryVault</title>
 ${FONT_LINK_TAGS}
-<meta name="color-scheme" content="light">
+${constellationHeadTags}
 <style>
-${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 920px; }
+${constellationTokensCss}${pageChromeCss}  .wrap { max-width: 920px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.95rem; }
   .span-2 { grid-column: 1 / -1; }
   .label {
@@ -1978,6 +1894,7 @@ ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 920px; }
 </style>
 </head>
 <body>
+  ${constellationCalmField}
   <main class="wrap">
     <h1 class="title">MEMORY<span>VAULT</span> Endpoint Guide</h1>
     <p class="sub">${guide.title}</p>
