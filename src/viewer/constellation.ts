@@ -1,45 +1,54 @@
 // The dark "constellation" identity shared by every public (non-/view) page:
 // deep-space tokens, the background gradient, and the canvas starfield. The
-// component variable names match the rest of the design system so the existing
-// page chrome (pageChromeCss) re-themes onto these values without change.
+// semantic names (--bg, --ink, --accent, ...) match the design mockup; the
+// component aliases below let the shared page chrome (pageChromeCss, the OAuth
+// screen) re-theme onto the same values without change.
 
 export const constellationTokensCss = `  :root {
-    --ground: #070810;
-    --ground-2: #0C0E1C;
-    --ground-3: #12152A;
-    --rule: rgba(255, 255, 255, 0.10);
-    --rule-soft: rgba(255, 255, 255, 0.055);
-    --rule-bright: rgba(255, 255, 255, 0.18);
-    --cream: #F5F4EF;
-    --cream-dim: #9AA0B4;
-    --cream-faint: #565D72;
-    --butter: #8AB0FF;
-    --butter-deep: #5E7FD0;
-    --latte: #9AA0B4;
-    --sage: #86E0B8;
-    --clay: #FFCAA0;
-    --on-butter: #070810;
-    --butter-glow: rgba(138, 176, 255, 0.14);
-    --violet: #B9A3FF;
-    --disp: 'Spectral', Georgia, serif;
-    --body: 'Inter', system-ui, sans-serif;
+    --bg: #070810;
+    --bg2: #0b0d18;
+    --surface: #11131f;
+    --ink: #f5f4ef;
+    --dim: #9aa0b4;
+    --faint: #565d72;
+    --rule: rgba(255, 255, 255, 0.08);
+    --accent: #8ab0ff;
+    --good: #86e0b8;
+    --warm: #ffcaa0;
+    --violet: #b9a3ff;
+    --doc: 'Spectral', Georgia, serif;
+    --ui: 'Inter', system-ui, sans-serif;
     --mono: 'JetBrains Mono', ui-monospace, monospace;
-    --panel-bg: #0C0E1C;
-    --surface: rgba(255, 255, 255, 0.035);
-    --surface-raised: #0F1224;
-    --toast-bg: #0F1224;
-    --overlay-bg: rgba(4, 5, 12, 0.82);
+    /* Component aliases consumed by pageChromeCss and the OAuth screen. */
+    --ground: var(--bg);
+    --ground-2: var(--bg2);
+    --ground-3: var(--surface);
+    --cream: var(--ink);
+    --cream-dim: var(--dim);
+    --cream-faint: var(--faint);
+    --rule-soft: rgba(255, 255, 255, 0.05);
+    --rule-bright: rgba(255, 255, 255, 0.14);
+    --butter: var(--accent);
+    --butter-deep: #5e7fd0;
+    --butter-glow: rgba(138, 176, 255, 0.14);
+    --on-butter: #070810;
+    --sage: var(--good);
+    --clay: var(--warm);
+    --latte: var(--dim);
+    --surface-raised: var(--surface);
     --panel-shadow: rgba(0, 0, 0, 0.6);
     --card-glow: rgba(0, 0, 0, 0.5);
+    --disp: var(--doc);
+    --body: var(--ui);
   }
   /* Deep-space gradient, fixed behind everything. */
   .space {
     position: fixed; inset: 0; z-index: -1;
     background:
-      radial-gradient(80% 60% at 50% 8%, rgba(40, 52, 110, 0.40), transparent 60%),
-      radial-gradient(60% 50% at 82% 80%, rgba(30, 80, 70, 0.22), transparent 60%),
-      radial-gradient(55% 45% at 12% 75%, rgba(70, 40, 110, 0.20), transparent 60%),
-      var(--ground);
+      radial-gradient(80% 60% at 50% 8%, rgba(40, 52, 110, 0.38), transparent 60%),
+      radial-gradient(60% 50% at 82% 80%, rgba(30, 80, 70, 0.18), transparent 60%),
+      radial-gradient(55% 45% at 12% 75%, rgba(70, 40, 110, 0.16), transparent 60%),
+      var(--bg);
   }
   .sky { display: block; pointer-events: none; }
   /* Utility pages cover the viewport behind the content (with the gradient); the
@@ -49,9 +58,9 @@ export const constellationTokensCss = `  :root {
 `;
 
 // The canvas starfield, served from /starfield.js (the page CSP forbids inline
-// scripts). The landing's #sky animates; a [data-calm] canvas (utility pages)
-// renders a single sparse static frame. prefers-reduced-motion is static too.
-// The loop pauses when the hero scrolls away or the tab is hidden.
+// scripts). The landing's #sky animates with a text dead-zone; a [data-calm]
+// canvas (utility pages) renders one sparse static frame. prefers-reduced-motion
+// is static too. The loop pauses when the canvas scrolls away or the tab hides.
 export const starfieldJs = `(function(){
   var cv = document.getElementById('sky');
   if (!cv || !cv.getContext) return;
@@ -61,10 +70,8 @@ export const starfieldJs = `(function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var animated = !calm && !reduce;
   var W = 0, H = 0, mx = 0, my = 0, tx = 0, ty = 0;
-  var PAL = { active: [134,224,184], settling: [255,202,160], fading: [86,93,114], reinforced: [138,176,255] };
-  var keys = ['active', 'settling', 'fading', 'reinforced'];
-  // Size the backing store to the canvas's own CSS box (set by the page: the
-  // hero on the landing, a fixed cover on utility pages); CSS owns display size.
+  var PAL = { a: [134,224,184], s: [255,202,160], f: [86,93,114], r: [138,176,255] };
+  var keys = ['a', 's', 'f', 'r'];
   function size() {
     var w = cv.clientWidth || window.innerWidth;
     var h = cv.clientHeight || window.innerHeight;
@@ -73,60 +80,62 @@ export const starfieldJs = `(function(){
   }
   // Density scales with width and is far lower on calm pages; never thousands.
   function starCount() {
-    var n = Math.round((cv.clientWidth || window.innerWidth) / (calm ? 90 : 26));
-    return Math.max(8, Math.min(n, calm ? 26 : 130));
+    var n = Math.round((cv.clientWidth || window.innerWidth) / (calm ? 90 : 24));
+    return Math.max(8, Math.min(n, calm ? 24 : 130));
   }
   var stars = [];
   function build() {
     stars = [];
     var n = starCount();
     for (var i = 0; i < n; i++) {
-      var big = Math.random() < (calm ? 0.10 : 0.16);
+      var big = Math.random() < 0.12;
       stars.push({
         x: Math.random() * W, y: Math.random() * H,
-        vx: (Math.random() - 0.5) * 0.12 * DPR, vy: (Math.random() - 0.5) * 0.12 * DPR,
-        r: (big ? Math.random() * 2.4 + 2.2 : Math.random() * 1.3 + 0.7) * DPR,
+        vx: (Math.random() - 0.5) * 0.10 * DPR, vy: (Math.random() - 0.5) * 0.10 * DPR,
+        r: (big ? Math.random() * 1.8 + 1.6 : Math.random() * 1.1 + 0.6) * DPR,
         big: big, depth: Math.random() * 0.6 + 0.4,
         c: PAL[keys[Math.floor(Math.random() * keys.length)]],
-        ph: Math.random() * 6.28, tw: Math.random() * 0.6 + 0.5
+        ph: Math.random() * 6.28, tw: Math.random() * 0.5 + 0.5
       });
     }
   }
+  // Fade stars and links to nothing inside an ellipse over the hero text so
+  // nothing renders close behind the copy. Calm pages have no centered text.
+  function deadZone(px, py) {
+    if (calm) return 1;
+    var d = Math.hypot((px - W * 0.5) / (W * 0.34), (py - H * 0.46) / (H * 0.34));
+    if (d >= 1) return 1;
+    return Math.max(0, (d - 0.45) / 0.55);
+  }
   function drawStar(sx, sy, s, glow) {
     var r = s.c[0], g = s.c[1], b = s.c[2];
-    var rad = s.r * (s.big ? 6 : 4.5);
-    var grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad);
+    var R = s.r * (s.big ? 3.2 : 2.6);
+    var grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, R);
     grd.addColorStop(0, 'rgba(' + r + ',' + g + ',' + b + ',' + glow + ')');
-    grd.addColorStop(0.4, 'rgba(' + r + ',' + g + ',' + b + ',' + (glow * 0.35) + ')');
+    grd.addColorStop(0.5, 'rgba(' + r + ',' + g + ',' + b + ',' + (glow * 0.2) + ')');
     grd.addColorStop(1, 'rgba(' + r + ',' + g + ',' + b + ',0)');
-    ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(sx, sy, rad, 0, 6.2832); ctx.fill();
-    // lit-from-within white core
-    ctx.fillStyle = 'rgba(255,255,255,' + Math.min(1, glow * 1.1) + ')';
-    ctx.beginPath(); ctx.arc(sx, sy, s.r * 0.6, 0, 6.2832); ctx.fill();
-    if (s.big) {
-      ctx.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (glow * 0.5) + ')';
-      ctx.lineWidth = DPR * 0.8;
-      var L = s.r * 5;
-      ctx.beginPath();
-      ctx.moveTo(sx - L, sy); ctx.lineTo(sx + L, sy);
-      ctx.moveTo(sx, sy - L); ctx.lineTo(sx, sy + L);
-      ctx.stroke();
-    }
+    ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(sx, sy, R, 0, 6.2832); ctx.fill();
+    // crisp white core
+    ctx.fillStyle = 'rgba(255,255,255,' + Math.min(1, glow * 0.9) + ')';
+    ctx.beginPath(); ctx.arc(sx, sy, s.r * 0.55, 0, 6.2832); ctx.fill();
   }
   function frame(t) {
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'lighter';
     mx += (tx - mx) * 0.05; my += (ty - my) * 0.05;
-    var thr = 170 * DPR;
+    var thr = 150 * DPR;
     for (var i = 0; i < stars.length; i++) {
       for (var j = i + 1; j < stars.length; j++) {
         var a = stars[i], b = stars[j];
         var dx = a.x - b.x, dy = a.y - b.y, d = Math.sqrt(dx * dx + dy * dy);
         if (d < thr) {
-          var al = (calm ? 0.10 : 0.16) * (1 - d / thr);
-          ctx.strokeStyle = 'rgba(138,176,255,' + al + ')';
-          ctx.lineWidth = DPR * 0.7;
-          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          var dz = deadZone((a.x + b.x) / 2, (a.y + b.y) / 2);
+          var al = 0.13 * (1 - d / thr) * dz;
+          if (al > 0.002) {
+            ctx.strokeStyle = 'rgba(138,176,255,' + al + ')';
+            ctx.lineWidth = DPR * 0.6;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          }
         }
       }
     }
@@ -137,10 +146,10 @@ export const starfieldJs = `(function(){
         if (s.x < -20) s.x = W + 20; if (s.x > W + 20) s.x = -20;
         if (s.y < -20) s.y = H + 20; if (s.y > H + 20) s.y = -20;
       }
-      var px = s.x - mx * 40 * DPR * s.depth, py = s.y - my * 40 * DPR * s.depth;
-      var tw = animated ? (0.55 + 0.45 * Math.sin(t / 700 * s.tw + s.ph)) : 0.85;
-      var base = (s.c === PAL.fading ? 0.4 : 0.9);
-      drawStar(px, py, s, base * tw);
+      var px = s.x - mx * 36 * DPR * s.depth, py = s.y - my * 36 * DPR * s.depth;
+      var tw = animated ? (0.5 + 0.5 * Math.sin(t / 800 * s.tw + s.ph)) : 0.8;
+      var base = (s.c === PAL.f ? 0.36 : 0.8) * tw * deadZone(px, py);
+      if (base > 0.01) drawStar(px, py, s, base);
     }
     ctx.globalCompositeOperation = 'source-over';
   }
@@ -151,8 +160,8 @@ export const starfieldJs = `(function(){
     window.addEventListener('resize', function () { size(); build(); frame(0); });
     return;
   }
-  // Pause when the canvas scrolls out of view (it lives in the hero, so the
-  // field stops once content takes over) or the tab is hidden; throttle ~45fps.
+  // Pause when the canvas scrolls out of view (it lives in the hero) or the tab
+  // is hidden; throttle to ~45fps.
   var visible = true;
   if ('IntersectionObserver' in window) {
     new IntersectionObserver(function (en) { visible = en[0].isIntersecting; }, { threshold: 0 }).observe(cv);
