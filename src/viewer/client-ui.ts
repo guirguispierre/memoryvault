@@ -225,6 +225,8 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       }
       updateStats(data.stats || []);
       renderGrid(displayedMemories);
+      // First-run onboarding keys off the whole-brain count, not the filtered view.
+      renderOnboarding(corpusMemories.length);
       if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><div class="empty-icon">hm.</div>Connection error — check your network and try refresh.</div>';

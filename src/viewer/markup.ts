@@ -132,6 +132,7 @@ export const bodyMarkup = `</style>
     <svg id="graph-svg" style="width:100%;height:100%;min-height:600px"></svg>
     <div id="graph-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;color:var(--cream-dim);font-size:14px;padding:1rem">Nothing here yet — save your first memory.</div>
   </div>
+  <section id="onboarding" class="onboarding" hidden></section>
   <div class="grid-wrap" id="grid">
     <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>
   </div>
