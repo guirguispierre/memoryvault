@@ -41,6 +41,7 @@ import {
   deployHtml,
   deployScript,
   handleApiWaitlist,
+  docsHtml,
   endpointsIndexHtml,
   mcpLandingHtml,
   endpointGuideForPath,
@@ -90,6 +91,12 @@ export default {
 
       if (url.pathname === '/view') {
         return new Response(viewerHtml(), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
+      if (url.pathname === '/docs') {
+        return new Response(docsHtml(url), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }

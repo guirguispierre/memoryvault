@@ -65,6 +65,14 @@ import {
 } from './tools/index.js';
 
 import {
+  mcpUrlFor,
+  claudeCodeCommand,
+  mcpJsonConfig,
+  MCP_TRANSPORT_LABEL,
+  MCP_AUTH_LABEL,
+} from './connect-snippets.js';
+
+import {
   FONT_LINK_TAGS,
   pageChromeCss,
 } from './viewer/tokens.js';
@@ -1027,8 +1035,8 @@ export const landingScript = `(function(){
 
 export function rootLandingHtml(url: URL): string {
   const origin = url.origin;
-  const endpointsRef = `${origin}/endpoints`;
   const deploy = `${origin}/deploy`;
+  const docs = `${origin}/docs`;
   const repo = 'https://github.com/guirguispierre/memoryvault';
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1199,12 +1207,12 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
     <div class="wrap">
       <nav>
         <span class="brand">MemoryVault</span>
-        <div class="links"><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a></div>
+        <div class="links"><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${docs}">Docs</a></div>
         <div class="r"><a class="btn g" href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="btn" href="${deploy}">Deploy free</a></div>
         <button class="menu" id="menu" type="button" aria-label="Menu" aria-expanded="false"><span></span><span></span><span></span></button>
       </nav>
       <div class="sheet" id="sheet">
-        <a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="primary" href="${deploy}">Deploy free</a>
+        <a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${docs}">Docs</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="primary" href="${deploy}">Deploy free</a>
       </div>
       <section class="hero">
         <div class="eyebrow">Open-source memory for AI agents</div>
@@ -1312,7 +1320,7 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
       <h2>Give your agents a memory <em>you control</em></h2>
       <div class="cta">
         <a class="btn" href="${deploy}">Deploy your own, free</a>
-        <a class="btn g" href="${endpointsRef}">Read the docs</a>
+        <a class="btn g" href="${docs}">Read the docs</a>
       </div>
     </section>
 
@@ -1579,6 +1587,276 @@ npm run deploy</div>
   <footer><div class="fi"><span>&copy; 2026 MemoryVault &middot; MIT licensed</span><span>built on Cloudflare</span></div></footer>
 
   <script src="/deploy.js" defer></script>
+</body>
+</html>`;
+}
+
+// The docs area: quickstart, the connect guide (shared snippets), an organized
+// API reference (the full per-endpoint reference stays at /endpoints), and a
+// plain-language concepts page. Calm constellation theme, no animation behind text.
+export function docsHtml(url: URL): string {
+  const origin = url.origin;
+  const app = `${origin}/view`;
+  const deploy = `${origin}/deploy`;
+  const endpointsRef = `${origin}/endpoints`;
+  const repo = 'https://github.com/guirguispierre/memoryvault';
+  const mcpUrl = mcpUrlFor(origin);
+  const claudeCmd = escapeHtml(claudeCodeCommand(mcpUrl));
+  const jsonCfg = escapeHtml(mcpJsonConfig(mcpUrl));
+  const restExample = escapeHtml(
+    'curl ' + origin + '/api/memories \\\n  -H "Authorization: Bearer YOUR_TOKEN"'
+  );
+  const mcpCurl = escapeHtml(
+    'curl ' + mcpUrl + ' -X POST \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n' +
+    '  -H "Content-Type: application/json" \\\n  -d \'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\''
+  );
+  const selfHost = escapeHtml(
+    'git clone ' + repo + '.git\n' +
+    'cd memoryvault\n' +
+    'npm install\n' +
+    'npx wrangler d1 create ai-memory\n' +
+    'npx wrangler kv namespace create RATE_LIMIT_KV\n' +
+    'npx wrangler vectorize create ai-memory-semantic-v1 --dimensions=768 --metric=cosine\n' +
+    '# put the printed ids into wrangler.toml, then:\n' +
+    'npx wrangler secret put AUTH_SECRET\n' +
+    'npx wrangler d1 execute ai-memory --remote --file=schema.sql\n' +
+    'npm run deploy'
+  );
+
+  const apiGroups: Array<{ title: string; rows: Array<[string, string, string]> }> = [
+    { title: 'Auth', rows: [
+      ['POST', '/auth/signup', 'Create an account and its brain'],
+      ['POST', '/auth/login', 'Sign in, returns a session'],
+      ['POST', '/auth/refresh', 'Exchange a refresh token'],
+      ['POST', '/auth/logout', 'End the current session'],
+      ['GET', '/auth/me', 'The signed-in account and brain'],
+      ['GET', '/auth/sessions', 'List active sessions'],
+      ['POST', '/auth/sessions/revoke', 'Revoke a session'],
+    ] },
+    { title: 'OAuth (for MCP clients)', rows: [
+      ['POST', '/register', 'Dynamic client registration'],
+      ['GET/POST', '/authorize', 'Authorization and sign-in screen'],
+      ['POST', '/token', 'Token exchange with PKCE'],
+      ['GET', '/.well-known/oauth-authorization-server', 'Discovery metadata'],
+      ['GET', '/.well-known/oauth-protected-resource', 'Protected-resource metadata'],
+    ] },
+    { title: 'MCP', rows: [
+      ['POST', '/mcp', 'JSON-RPC: initialize, tools/list, tools/call'],
+      ['GET', '/mcp', 'SSE stream (streamable HTTP)'],
+    ] },
+    { title: 'Memory and data', rows: [
+      ['GET', '/api/memories', 'List and search memories (type, search, limit)'],
+      ['GET', '/api/memories/signature', 'Change fingerprint for live updates'],
+      ['GET', '/api/links/:id', 'Links for one memory'],
+      ['GET', '/api/graph', 'The memory graph'],
+      ['GET', '/api/tools', 'Available MCP tools'],
+      ['GET', '/api/export', 'Export the brain as JSON'],
+      ['POST', '/api/import', 'Import memories'],
+      ['POST', '/api/purge', 'Delete all data in the brain'],
+    ] },
+    { title: 'Viewer and waitlist', rows: [
+      ['GET/PUT', '/api/viewer-settings', 'Per-brain viewer settings'],
+      ['POST', '/api/waitlist', 'Hosted-tier email waitlist (public)'],
+    ] },
+  ];
+  const apiHtml = apiGroups.map((g) =>
+    `<div class="api-group"><h3>${escapeHtml(g.title)}</h3><div class="api-rows">` +
+    g.rows.map(([m, p, d]) =>
+      `<div class="api-row"><span class="api-m">${escapeHtml(m)}</span><code class="api-p">${escapeHtml(p)}</code><span class="api-d">${escapeHtml(d)}</span></div>`
+    ).join('') + `</div></div>`
+  ).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docs · MemoryVault</title>
+<meta name="description" content="MemoryVault docs: quickstart, connect your agent over MCP, the API reference, and how the living-memory model works.">
+${FONT_LINK_TAGS}
+${constellationHeadTags}
+<style>
+${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--ui); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; line-height: 1.6; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
+
+  nav { display: flex; align-items: center; gap: 18px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; position: relative; z-index: 1; }
+  .brand { font-family: var(--doc); font-size: 18px; font-weight: 600; color: var(--ink); }
+  nav .r { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+  nav .r a { font-size: 14px; color: var(--dim); }
+  nav .r a:hover { color: var(--ink); text-decoration: none; }
+
+  .dlayout { display: grid; grid-template-columns: 210px 1fr; gap: 40px; padding-top: 12px; padding-bottom: 80px; align-items: start; }
+  .dside { position: sticky; top: 24px; display: flex; flex-direction: column; gap: 2px; }
+  .dside-title { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin-bottom: 0.6rem; }
+  .dside a { color: var(--dim); font-size: 0.92rem; padding: 0.4rem 0; }
+  .dside a:hover { color: var(--ink); text-decoration: none; }
+  .dside-sep { height: 1px; background: var(--rule); margin: 0.7rem 0; }
+
+  .dmain { min-width: 0; }
+  .dmain section { padding-bottom: 3.2rem; }
+  .dmain section + section { border-top: 1px solid var(--rule); padding-top: 2.4rem; }
+  .dmain h1 { font-family: var(--doc); font-weight: 500; font-size: 2rem; letter-spacing: -0.02em; color: var(--ink); margin-bottom: 0.5rem; }
+  .dmain h2 { font-family: var(--doc); font-weight: 500; font-size: 1.5rem; letter-spacing: -0.01em; color: var(--ink); margin-bottom: 0.7rem; }
+  .dmain h3 { font-family: var(--doc); font-weight: 500; font-size: 1.05rem; color: var(--ink); margin: 1.4rem 0 0.5rem; }
+  .dmain p { color: var(--dim); font-size: 0.96rem; margin-bottom: 0.9rem; max-width: 68ch; }
+  .dmain ol, .dmain ul { color: var(--dim); font-size: 0.96rem; margin: 0 0 0.9rem 1.2rem; }
+  .dmain li { margin-bottom: 0.35rem; }
+  .lead { color: var(--dim); font-size: 1.05rem; max-width: 64ch; margin-bottom: 1.4rem; }
+  code { font-family: var(--mono); font-size: 0.85em; color: var(--ink); }
+  .code { font-family: var(--mono); font-size: 0.8rem; line-height: 1.8; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 1rem 1.1rem; overflow-x: auto; white-space: pre; margin-bottom: 1rem; }
+
+  .tracks { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 18px; margin-bottom: 1.2rem; align-items: start; }
+  .track { background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; padding: 1.1rem 1.2rem; }
+  .track h3 { margin-top: 0; }
+  .track .tag { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+  .track.alt .tag { color: var(--good); }
+  .btn { display: inline-block; font-family: var(--ui); font-weight: 600; font-size: 0.85rem; color: #070810; background: var(--accent); border-radius: 9px; padding: 0.55rem 1rem; margin-top: 0.4rem; }
+  .btn:hover { text-decoration: none; filter: brightness(1.05); }
+
+  .kv { display: flex; gap: 0.7rem; align-items: baseline; padding: 0.3rem 0; }
+  .kv span { color: var(--faint); min-width: 96px; font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  .note { background: var(--surface); border: 1px solid var(--rule); border-left: 2px solid var(--accent); border-radius: 8px; padding: 0.7rem 0.9rem; font-size: 0.88rem; color: var(--dim); margin-bottom: 1rem; }
+
+  .api-group { margin-bottom: 1.3rem; }
+  .api-rows { border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; }
+  .api-row { display: grid; grid-template-columns: 70px minmax(0, 1.1fr) 1.4fr; gap: 0.8rem; align-items: baseline; padding: 0.6rem 0.9rem; border-top: 1px solid var(--rule); }
+  .api-row:first-child { border-top: none; }
+  .api-m { font-family: var(--mono); font-size: 0.68rem; color: var(--accent); letter-spacing: 0.04em; }
+  .api-p { font-family: var(--mono); font-size: 0.8rem; color: var(--ink); overflow-x: auto; }
+  .api-d { color: var(--dim); font-size: 0.84rem; }
+
+  .tiers { display: grid; gap: 0.5rem; margin: 0.6rem 0 1.1rem; }
+  .tier { display: flex; gap: 0.7rem; align-items: baseline; }
+  .tier i { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transform: translateY(1px); }
+  .tier b { color: var(--ink); font-weight: 600; min-width: 78px; display: inline-block; }
+  .tier-active i { background: var(--good); }
+  .tier-settling i { background: var(--warm); }
+  .tier-resting i { background: var(--faint); }
+  .rels { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.3rem 0 1rem; }
+  .rels code { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 0.2rem 0.5rem; font-size: 0.78rem; }
+
+  footer { border-top: 1px solid var(--rule); padding: 30px 0; color: var(--faint); font-size: 13px; }
+  .fi { max-width: 1120px; margin: 0 auto; padding: 0 32px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 820px) {
+    .dlayout { grid-template-columns: 1fr; gap: 18px; }
+    .dside { position: static; flex-flow: row wrap; gap: 0.4rem 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule); }
+    .dside-title { width: 100%; margin-bottom: 0.2rem; }
+    .dside-sep { display: none; }
+    .tracks { grid-template-columns: 1fr; }
+    .api-row { grid-template-columns: 56px 1fr; }
+    .api-row .api-d { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+  ${constellationCalmField}
+  <nav>
+    <a class="brand" href="${origin}/">MemoryVault</a>
+    <div class="r"><a href="${app}">Viewer</a><a href="${deploy}">Deploy</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a></div>
+  </nav>
+
+  <div class="dlayout container">
+    <aside class="dside">
+      <div class="dside-title">Docs</div>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#connect">Connect your agent</a>
+      <a href="#api">API reference</a>
+      <a href="#concepts">How it works</a>
+      <div class="dside-sep"></div>
+      <a href="${endpointsRef}">Full endpoint reference</a>
+      <a href="${app}">Open the viewer</a>
+    </aside>
+
+    <main class="dmain">
+      <section id="quickstart">
+        <h1>Quickstart</h1>
+        <p class="lead">Deploy MemoryVault, connect an agent, and watch your first memory land. Pick a track, then connect.</p>
+        <div class="tracks">
+          <div class="track">
+            <div class="tag">Self-host, about 5 minutes</div>
+            <h3>Run it on your own Cloudflare account</h3>
+            <p>Free and open source, your data under your keys. You need Node and a Cloudflare account.</p>
+            <div class="code">${selfHost}</div>
+            <p>That stands up Workers, D1, and Vectorize under your account. The schema also applies itself on first request, so the explicit <code>d1 execute</code> is optional.</p>
+          </div>
+          <div class="track alt">
+            <div class="tag">Hosted</div>
+            <h3>Let us run it for you</h3>
+            <p>Managed hosting is in waitlist. Billing is not open yet, so there is nothing to buy today. Join the list and we will email you when it opens.</p>
+            <a class="btn" href="${deploy}">Join the waitlist</a>
+          </div>
+        </div>
+        <h3>Then connect and write your first memory</h3>
+        <ol>
+          <li>Point your agent at your endpoint. See <a href="#connect">Connect your agent</a>.</li>
+          <li>Ask the agent to remember something, or open the <a href="${app}">viewer</a> and use the first-run panel to write a test memory.</li>
+          <li>Watch recall and the graph populate. See <a href="#concepts">How it works</a> for what the strengths and tiers mean.</li>
+        </ol>
+      </section>
+
+      <section id="connect">
+        <h1>Connect your agent</h1>
+        <p class="lead">Your MCP endpoint is the same URL for every client. Auth is OAuth, so there is no token to paste: the client opens a sign-in once. These snippets are the single source of truth, identical to the in-app onboarding panel.</p>
+        <div class="kv"><span>Endpoint</span><code>${escapeHtml(mcpUrl)}</code></div>
+        <div class="kv"><span>Transport</span><code>${escapeHtml(MCP_TRANSPORT_LABEL)}</code></div>
+        <div class="kv"><span>Auth</span><code>${escapeHtml(MCP_AUTH_LABEL)}</code></div>
+
+        <h3>Claude Code</h3>
+        <p>Add the server, then sign in when your browser opens.</p>
+        <div class="code">${claudeCmd}</div>
+
+        <h3>Codex, Cursor, and other MCP clients</h3>
+        <p>Add a remote MCP server with the endpoint above. Many clients accept a config like this:</p>
+        <div class="code">${jsonCfg}</div>
+
+        <h3>REST API</h3>
+        <p>Every <code>/api</code> and <code>/mcp</code> route is scoped to your brain by your bearer token. <code>YOUR_TOKEN</code> is an OAuth access token from the connect flow, or your <code>AUTH_SECRET</code> in legacy bearer mode.</p>
+        <div class="code">${restExample}</div>
+        <p>The MCP endpoint itself is plain JSON-RPC over POST:</p>
+        <div class="code">${mcpCurl}</div>
+      </section>
+
+      <section id="api">
+        <h1>API reference</h1>
+        <p class="lead">The routes that actually exist in this server, grouped. For the full per-endpoint guides (methods, auth, payloads), see the <a href="${endpointsRef}">endpoint reference</a>.</p>
+        <div class="note">Everything under <code>/api</code> and <code>/mcp</code> requires your bearer token or OAuth and only ever touches your own brain. <code>POST /api/waitlist</code> is the one public, write-only endpoint.</div>
+        ${apiHtml}
+      </section>
+
+      <section id="concepts">
+        <h1>How it works</h1>
+        <p class="lead">MemoryVault is a living memory, not a static file. Memories carry weight, strengthen with use, fade when ignored, and link into a graph. Here is the model behind what you see in the viewer.</p>
+
+        <h3>Every memory has weight</h3>
+        <p>Each memory carries an <b>importance</b> and a <b>confidence</b> score, and the viewer factors in <b>recency</b> to show a single strength. Concretely the viewer reads strength as <code>0.45 importance + 0.20 confidence + 0.35 recency</code>, where recency decays over about two weeks. Use a memory and it is reinforced; leave it and recency pulls its strength down.</p>
+
+        <h3>Strength tiers</h3>
+        <p>The viewer groups recall into three tiers by that strength, the same ones you see in the index:</p>
+        <div class="tiers">
+          <div class="tier tier-active"><i></i><b>Active</b><span>Reinforced this week. Top of recall.</span></div>
+          <div class="tier tier-settling"><i></i><b>Settling</b><span>Quiet for a few days, still solid.</span></div>
+          <div class="tier tier-resting"><i></i><b>Resting</b><span>Fading from lack of use. Review soon.</span></div>
+        </div>
+
+        <h3>A graph, not a list</h3>
+        <p>Memories link to each other, and the viewer's graph view shows it. Links carry a relation type:</p>
+        <div class="rels"><code>related</code><code>supports</code><code>contradicts</code><code>supersedes</code><code>causes</code><code>example_of</code></div>
+        <p>That is what makes recall connected: pulling one memory can surface the ones it supports, contradicts, or supersedes.</p>
+
+        <h3>Your data stays yours</h3>
+        <p>Each account gets its own isolated brain. Nothing crosses between tenants: reads, writes, search, graph, import, and export are all scoped by brain. That isolation is not just asserted, it is covered by an adversarial test suite that tries to reach across brains and must fail every time.</p>
+      </section>
+    </main>
+  </div>
+
+  <footer><div class="fi"><span>&copy; 2026 MemoryVault &middot; MIT licensed</span><span>built on Cloudflare</span></div></footer>
+
+  <script src="/starfield.js" defer></script>
 </body>
 </html>`;
 }
