@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemoryVault — Paper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FBFAF7;        /* near-white, faintly warm */
+    --paper-2:#FFFFFF;
+    --paper-3:#F2F0EB;
+    --rule:#E6E3DC;
+    --rule-soft:#EEEBE4;
+    --ink:#1C1B19;          /* near-black text */
+    --ink-dim:#6B6A66;
+    --ink-faint:#9A988F;
+    --accent:#3B5BDB;       /* one restrained indigo — ours, not warm */
+    --accent-soft:#E8ECFB;
+    --good:#2F8F6B;         /* verified */
+    --ui:'Inter',system-ui,sans-serif;
+    --doc:'Spectral',Georgia,serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--paper);color:var(--ink)}
+  body{font-family:var(--ui);-webkit-font-smoothing:antialiased;min-height:100vh}
+
+  /* header */
+  .top{display:flex;align-items:center;gap:24px;padding:18px 0;border-bottom:1px solid var(--rule);max-width:860px;margin:0 auto;padding-left:28px;padding-right:28px}
+  .wm{font-family:var(--doc);font-weight:500;font-size:19px;letter-spacing:-0.01em;color:var(--ink)}
+  .wm .dot{color:var(--accent)}
+  .wm .path{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-left:10px}
+  .top .right{margin-left:auto;display:flex;align-items:center;gap:14px}
+  .seg{display:flex;border:1px solid var(--rule);border-radius:8px;overflow:hidden;background:var(--paper-2)}
+  .seg button{font-family:var(--ui);font-weight:500;font-size:12.5px;color:var(--ink-dim);background:transparent;border:none;padding:7px 13px;cursor:pointer}
+  .seg button.on{background:var(--accent);color:#fff}
+  .seg button + button{border-left:1px solid var(--rule)}
+  .ghost{font-family:var(--ui);font-size:12.5px;color:var(--ink-dim);background:none;border:none;cursor:pointer}
+  .ghost:hover{color:var(--accent)}
+
+  .wrap{max-width:860px;margin:0 auto;padding:0 28px 80px}
+
+  /* document front-matter / recall */
+  .frontmatter{padding:22px 0 18px;border-bottom:1px solid var(--rule-soft)}
+  .fm-row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:13px}
+  .fm-title{font-family:var(--doc);font-style:italic;font-size:15px;color:var(--ink-dim)}
+  .fm-title b{font-style:normal;font-weight:500;color:var(--ink)}
+  .fm-meta{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+  .ticks{display:flex;align-items:flex-end;gap:3px;height:34px}
+  .ticks i{flex:1;min-width:2px;border-radius:1.5px;background:var(--accent)}
+
+  /* search */
+  .search{margin:20px 0 4px;position:relative}
+  .search input{width:100%;background:var(--paper-2);border:1px solid var(--rule);border-radius:9px;color:var(--ink);font-family:var(--ui);font-size:14px;padding:11px 13px 11px 36px;outline:none}
+  .search input::placeholder{color:var(--ink-faint)}
+  .search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .search .mag{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--ink-faint)}
+
+  /* section headers like a doc */
+  .section{display:flex;align-items:baseline;gap:12px;margin:30px 0 6px}
+  .section h2{font-family:var(--doc);font-weight:500;font-size:19px;color:var(--ink);letter-spacing:-0.01em}
+  .section .note{font-family:var(--ui);font-size:12px;color:var(--ink-faint)}
+  .section .ln{flex:1;height:1px;background:var(--rule-soft)}
+
+  /* entries — read like document blocks */
+  .entry{padding:16px 0;border-bottom:1px solid var(--rule-soft);display:grid;grid-template-columns:1fr auto;gap:14px}
+  .entry:last-child{border-bottom:none}
+  .e-head{display:flex;align-items:center;gap:10px;margin-bottom:5px}
+  .bead{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .bead.mid{background:var(--accent);opacity:0.5}
+  .bead.low{background:transparent;border:1.5px solid var(--ink-faint)}
+  .e-title{font-family:var(--doc);font-weight:500;font-size:16.5px;color:var(--ink);letter-spacing:-0.005em}
+  .kind{font-family:var(--mono);font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-faint)}
+  .ver{font-family:var(--mono);font-size:9px;letter-spacing:0.04em;text-transform:uppercase;color:var(--good);border:1px solid #BFE0D2;border-radius:4px;padding:1px 5px}
+  .e-body{font-family:var(--doc);font-size:15px;line-height:1.55;color:#3A3934;max-width:62ch}
+  .e-body .k{font-family:var(--mono);font-size:12.5px;color:var(--accent)}
+  .e-body .arr{color:var(--ink-faint);margin:0 6px}
+  .aside{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:6px;white-space:nowrap}
+  .acc{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
+  .meter{display:flex;align-items:center;gap:6px}
+  .meter .lab{font-family:var(--mono);font-size:9px;letter-spacing:0.05em;text-transform:uppercase;color:var(--ink-faint)}
+  .meter .bar{width:52px;height:4px;border-radius:2px;background:var(--paper-3);overflow:hidden}
+  .meter .bar i{display:block;height:100%;background:var(--accent)}
+  .links{font-family:var(--mono);font-size:10.5px;color:var(--good)}
+  .entry.low .meter .bar i{background:var(--ink-faint)}
+  .entry.low .e-title{color:var(--ink-dim)}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="wm">memoryvault<span class="dot">.</span>md<span class="path">~/your-index</span></div>
+    <div class="right">
+      <div class="seg"><button class="on">All</button><button>Notes</button><button>Facts</button><button>Journal</button><button>Graph</button></div>
+      <button class="ghost">Settings</button>
+      <button class="ghost">Lock</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="frontmatter">
+      <div class="fm-row"><span class="fm-title">Recall, <b>last 24 hours</b></span><span class="fm-meta">247 entries · 1,084 links · synced 14:02</span></div>
+      <div class="ticks" id="ticks"></div>
+    </div>
+
+    <div class="search">
+      <svg class="mag" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <input placeholder="Search the index — text, key, or meaning…">
+    </div>
+
+    <div class="section"><h2>Active</h2><span class="note">reinforced this week</span><span class="ln"></span></div>
+
+    <div class="entry">
+      <div>
+        <div class="e-head"><span class="bead"></span><span class="e-title">Shipped the isolation suite</span><span class="kind">journal</span></div>
+        <div class="e-body">19 of 19 green against a live worker. Crypto comparisons are constant-time and the JWT algorithm is pinned — the vibe-coded worry is behind us.</div>
+      </div>
+      <div class="aside"><span class="acc">MV·0247 · 14:02</span><span class="meter"><span class="lab">strength</span><span class="bar"><i style="width:88%"></i></span></span><span class="links">↳ 4 linked</span></div>
+    </div>
+
+    <div class="entry">
+      <div>
+        <div class="e-head"><span class="bead"></span><span class="e-title">project.license</span><span class="kind">fact</span><span class="ver">verified</span></div>
+        <div class="e-body"><span class="k">project.license</span><span class="arr">→</span>MIT — fully open, graph features not paywalled.</div>
+      </div>
+      <div class="aside"><span class="acc">MV·0231 · 09:41</span><span class="meter"><span class="lab">strength</span><span class="bar"><i style="width:95%"></i></span></span><span class="links">↳ 2 linked</span></div>
+    </div>
+
+    <div class="section"><h2>Settling</h2><span class="note">quiet for a few days</span><span class="ln"></span></div>
+
+    <div class="entry">
+      <div>
+        <div class="e-head"><span class="bead mid"></span><span class="e-title">Prefers terse, direct answers</span><span class="kind">note</span></div>
+        <div class="e-body">Dislikes filler openers; wants pushback when an idea is weak rather than agreement.</div>
+      </div>
+      <div class="aside"><span class="acc">MV·0198 · Mon</span><span class="meter"><span class="lab">strength</span><span class="bar"><i style="width:62%"></i></span></span><span class="links">↳ 6 linked</span></div>
+    </div>
+
+    <div class="entry">
+      <div>
+        <div class="e-head"><span class="bead mid"></span><span class="e-title">user.timezone</span><span class="kind">fact</span><span class="ver">verified</span></div>
+        <div class="e-body"><span class="k">user.timezone</span><span class="arr">→</span>Europe/Lisbon (WET / WEST)</div>
+      </div>
+      <div class="aside"><span class="acc">MV·0177 · Sun</span><span class="meter"><span class="lab">strength</span><span class="bar"><i style="width:55%"></i></span></span><span class="links">↳ 1 linked</span></div>
+    </div>
+
+    <div class="section"><h2>Resting</h2><span class="note">fading — review soon</span><span class="ln"></span></div>
+
+    <div class="entry low">
+      <div>
+        <div class="e-head"><span class="bead low"></span><span class="e-title">Launch around the security story</span><span class="kind">note</span></div>
+        <div class="e-body">“A memory layer you actually own,” aimed at developers self-hosting on Cloudflare.</div>
+      </div>
+      <div class="aside"><span class="acc">MV·0150 · Jun 4</span><span class="meter"><span class="lab">strength</span><span class="bar"><i style="width:30%"></i></span></span><span class="links">↳ 5 linked</span></div>
+    </div>
+
+    <div class="entry low">
+      <div>
+        <div class="e-head"><span class="bead low"></span><span class="e-title">Early benchmark idea: LoCoMo</span><span class="kind">note</span></div>
+        <div class="e-body">Run LongMemEval + LoCoMo and publish the numbers — required to be visible in comparisons.</div>
+      </div>
+      <div class="aside"><span class="acc">MV·0092 · May 21</span><span class="meter"><span class="lab">strength</span><span class="bar"><i style="width:16%"></i></span></span><span class="links">↳ 2 linked</span></div>
+    </div>
+  </div>
+
+<script>
+  const t=document.getElementById('ticks');const N=56;
+  for(let i=0;i<N;i++){const r=i/(N-1);const a=Math.random()<(0.12+r*0.5);const el=document.createElement('i');
+    el.style.height=(a?(10+Math.random()*20*(0.4+r)):2+Math.random()*3).toFixed(0)+'px';
+    el.style.opacity=a?(0.25+r*0.7).toFixed(2):'0.12';t.appendChild(el);}
+</script>
+</body>
+</html>

@@ -102,27 +102,42 @@ async function shootThemed(browser, name, url, settings, width, height) {
   await ctx.close();
 }
 
+// The marketing landing. Light uses the paper default (colorScheme light so
+// auto resolves to paper-light); dark forces theme_mode so the nav toggle's
+// result is captured. fullPage so the whole page is in frame.
+async function shootLanding(browser, name, opts) {
+  log(`shooting ${name} (${opts.width}×${opts.height})`);
+  const ctx = await browser.newContext({ viewport: { width: opts.width, height: opts.height }, deviceScaleFactor: 2, colorScheme: opts.dark ? 'dark' : 'light' });
+  if (opts.dark) {
+    await ctx.addInitScript(() => {
+      try { localStorage.setItem('memoryvault.viewer.settings.v1', JSON.stringify({ theme_mode: 'dark' })); } catch (e) {}
+    });
+  }
+  const page = await ctx.newPage();
+  await page.goto(opts.url || `${BASE}/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(FONT_SETTLE_MS);
+  await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: !!opts.fullPage });
+  await ctx.close();
+}
+
 const MIDNIGHT = { theme: 'midnight', theme_mode: 'dark' };
-const CUSTOM = {
-  theme: 'custom', theme_mode: 'dark',
-  custom_theme: { ground: '#0f1a2b', ground_2: '#16243a', cream: '#eaf2ff', cream_dim: '#9fb3d0', butter: '#6fb7ff', rule: '#2a3b55', font: 'fraunces' },
-};
 
 async function screenshotAll() {
   mkdirSync(SHOTS, { recursive: true });
   const authorizeUrl = await buildAuthorizeUrl();
   const browser = await chromium.launch();
-  await shoot(browser, 'page-landing', `${BASE}/`, 1280, 900);
   await shoot(browser, 'page-mcp', `${BASE}/mcp`, 1280, 900);
   await shoot(browser, 'page-endpoint-guide', `${BASE}/api/memories`, 1280, 900);
   await shoot(browser, 'page-oauth-authorize', authorizeUrl, 1280, 860);
   // Same pages with the saved theme set to midnight: all should follow.
-  await shootThemed(browser, 'page-landing-midnight', `${BASE}/`, MIDNIGHT, 1280, 900);
   await shootThemed(browser, 'page-mcp-midnight', `${BASE}/mcp`, MIDNIGHT, 1280, 900);
   await shootThemed(browser, 'page-endpoint-guide-midnight', `${BASE}/api/memories`, MIDNIGHT, 1280, 900);
   await shootThemed(browser, 'page-oauth-midnight', authorizeUrl, MIDNIGHT, 1280, 860);
-  // And one page on a custom palette, to prove custom tokens propagate too.
-  await shootThemed(browser, 'page-landing-custom', `${BASE}/`, CUSTOM, 1280, 900);
+  // Marketing landing: light (paper), dark, mobile; plus a server page in paper.
+  await shootLanding(browser, 'landing-light', { width: 1280, height: 900, fullPage: true });
+  await shootLanding(browser, 'landing-dark', { width: 1280, height: 900, fullPage: true, dark: true });
+  await shootLanding(browser, 'landing-mobile', { width: 390, height: 844, fullPage: true });
+  await shootLanding(browser, 'page-oauth-paper', { width: 1280, height: 860, url: authorizeUrl });
   await browser.close();
 }
 

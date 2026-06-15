@@ -37,6 +37,7 @@ import {
   handleApiPurge,
   handleApiViewerSettings,
   rootLandingHtml,
+  endpointsIndexHtml,
   mcpLandingHtml,
   endpointGuideForPath,
   endpointGuideHtml,
@@ -85,6 +86,12 @@ export default {
 
       if (url.pathname === '/view') {
         return new Response(viewerHtml(), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
+      if (url.pathname === '/endpoints') {
+        return new Response(endpointsIndexHtml(url), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }

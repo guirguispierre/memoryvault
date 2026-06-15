@@ -965,6 +965,328 @@ export async function handleApiViewerSettings(request: Request, env: Env, brainI
 
 export function rootLandingHtml(url: URL): string {
   const origin = url.origin;
+  const app = `${origin}/view`;
+  const endpointsRef = `${origin}/endpoints`;
+  const repo = 'https://github.com/guirguispierre/memoryvault';
+  // Deterministic recall ribbon for the product-shot facsimile.
+  const ticks = Array.from({ length: 46 }, (_, i) => {
+    const t = i / 45;
+    const active = (i * 7 + 3) % 10 < 2 + t * 5;
+    const h = active ? Math.round(8 + ((i * 13) % 17) * (0.4 + t)) : 2 + ((i * 5) % 3);
+    const o = active ? (0.3 + t * 0.6).toFixed(2) : '0.16';
+    return `<i style="height:${h}px;opacity:${o}"></i>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en" data-theme="paper-light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemoryVault — the memory layer your agents own</title>
+<meta name="description" content="Persistent, graph-aware memory for AI agents. Open source, self-hosted on your own Cloudflare account, nothing paywalled.">
+${FONT_LINK_TAGS}
+${themeBootstrapTag}
+<style>
+${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--body);
+    background: var(--ground);
+    color: var(--cream);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  a { color: inherit; text-decoration: none; }
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+
+  nav { position: sticky; top: 0; z-index: 50; background: var(--ground); border-bottom: 1px solid var(--rule); }
+  .nav-in { display: flex; align-items: center; gap: 28px; padding: 16px 32px; max-width: 1080px; margin: 0 auto; }
+  .brand { font-family: var(--disp); font-weight: 600; font-size: 18px; color: var(--cream); }
+  .brand .dot { color: var(--butter); }
+  .brand .md { font-family: var(--mono); font-size: 13px; color: var(--cream-faint); }
+  .nav-links { display: flex; gap: 22px; margin-left: 8px; }
+  .nav-links a { font-size: 13.5px; color: var(--cream-dim); }
+  .nav-links a:hover { color: var(--butter); }
+  .nav-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .theme-toggle {
+    font-family: var(--mono); font-size: 11px; color: var(--cream-faint);
+    border: 1px solid var(--rule); border-radius: 7px; padding: 6px 10px;
+    background: var(--surface-raised); cursor: pointer;
+  }
+  .theme-toggle:hover { color: var(--butter); border-color: var(--butter-deep); }
+  .btn {
+    font-family: var(--body); font-weight: 600; font-size: 13.5px;
+    border-radius: 9px; padding: 9px 16px; cursor: pointer;
+    border: 1px solid var(--butter); background: var(--butter); color: var(--on-butter);
+    display: inline-block; transition: filter 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .btn:hover { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; border-color: var(--rule); color: var(--cream-dim); }
+  .btn.ghost:hover { filter: none; border-color: var(--butter-deep); color: var(--cream); }
+  :focus-visible { outline: 2px solid var(--butter); outline-offset: 2px; }
+
+  .hero { text-align: center; padding: 86px 0 30px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--butter); margin-bottom: 20px; }
+  .hero h1 { font-family: var(--disp); font-weight: 500; font-size: 62px; line-height: 1.04; letter-spacing: -0.02em; max-width: 14ch; margin: 0 auto 22px; color: var(--cream); }
+  .hero h1 em { font-style: italic; color: var(--butter); }
+  .hero p { font-size: 18px; color: var(--cream-dim); max-width: 54ch; margin: 0 auto 30px; line-height: 1.55; }
+  .hero-cta { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
+  .hero-sub { margin-top: 16px; font-family: var(--mono); font-size: 12px; color: var(--cream-faint); }
+
+  .shot { max-width: 1000px; margin: 46px auto 0; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px var(--card-glow); background: var(--surface-raised); }
+  .shot-top { display: flex; align-items: center; gap: 16px; padding: 13px 18px; border-bottom: 1px solid var(--rule); }
+  .shot-wm { font-family: var(--disp); font-weight: 500; font-size: 15px; color: var(--cream); }
+  .shot-wm .dot { color: var(--butter); }
+  .shot-wm .path { font-family: var(--mono); font-size: 10px; color: var(--cream-faint); margin-left: 8px; }
+  .shot-tabs { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--cream-faint); letter-spacing: 0.04em; }
+  .shot-body { padding: 18px 22px 24px; }
+  .shot-fm { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 11px; }
+  .shot-fm .t { font-family: var(--disp); font-style: italic; font-size: 14px; color: var(--cream-dim); }
+  .shot-fm .t b { font-style: normal; font-weight: 500; color: var(--cream); }
+  .shot-fm .m { font-family: var(--mono); font-size: 10.5px; color: var(--cream-faint); }
+  .shot-ticks { display: flex; align-items: flex-end; gap: 3px; height: 30px; margin-bottom: 4px; }
+  .shot-ticks i { flex: 1; min-width: 2px; border-radius: 1.5px; background: var(--butter); }
+  .shot-sec { font-family: var(--disp); font-weight: 500; font-size: 15px; color: var(--cream); margin: 20px 0 4px; }
+  .shot-entry { display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--rule-soft); }
+  .shot-entry:last-child { border-bottom: none; }
+  .shot-eh { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
+  .shot-bead { width: 7px; height: 7px; border-radius: 50%; background: var(--butter); }
+  .shot-et { font-family: var(--disp); font-weight: 500; font-size: 15.5px; color: var(--cream); }
+  .shot-kind { font-family: var(--mono); font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cream-faint); }
+  .shot-ver { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sage); border: 1px solid var(--rule); border-radius: 4px; padding: 1px 5px; }
+  .shot-eb { font-family: var(--disp); font-size: 14px; line-height: 1.5; color: var(--cream-dim); }
+  .shot-eb .k { font-family: var(--mono); font-size: 12px; color: var(--butter); }
+  .shot-eb .arr { color: var(--cream-faint); margin: 0 6px; }
+  .shot-aside { text-align: right; font-family: var(--mono); font-size: 10px; color: var(--cream-faint); white-space: nowrap; }
+  .shot-meter { display: inline-flex; align-items: center; gap: 6px; margin-top: 5px; }
+  .shot-meter .bar { width: 48px; height: 4px; border-radius: 2px; background: var(--ground-3); overflow: hidden; }
+  .shot-meter .bar i { display: block; height: 100%; background: var(--butter); }
+
+  .feature { padding: 84px 0; border-top: 1px solid var(--rule-soft); }
+  .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .feature h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; letter-spacing: -0.015em; margin-bottom: 16px; line-height: 1.15; color: var(--cream); }
+  .feature h2 em { font-style: italic; color: var(--butter); }
+  .feature p { font-size: 16px; color: var(--cream-dim); margin-bottom: 14px; line-height: 1.6; }
+  .feature .mini { font-family: var(--mono); font-size: 12px; color: var(--cream-faint); }
+  .panel { background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 12px; padding: 26px; box-shadow: 0 16px 40px var(--card-glow); }
+  .ledger-line { display: flex; align-items: baseline; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--rule-soft); font-size: 14px; }
+  .ledger-line:last-child { border: none; }
+  .ledger-line .k { font-family: var(--mono); font-size: 12px; color: var(--butter); }
+  .ledger-line .arr { color: var(--cream-faint); }
+  .ledger-line .v { font-family: var(--disp); color: var(--cream); }
+  .ledger-line .tag { margin-left: auto; font-family: var(--mono); font-size: 9px; text-transform: uppercase; color: var(--sage); border: 1px solid var(--rule); border-radius: 4px; padding: 1px 5px; }
+  .config { font-family: var(--mono); font-size: 12.5px; color: var(--cream-dim); line-height: 1.9; }
+  .config .c { color: var(--cream-faint); }
+  .config .b { color: var(--butter); }
+  .config .g { color: var(--sage); }
+
+  .how { padding: 84px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
+  .how > h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; margin-bottom: 12px; color: var(--cream); }
+  .how > p { color: var(--cream-dim); max-width: 50ch; margin: 0 auto 48px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; text-align: left; }
+  .step { background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 12px; padding: 26px; }
+  .step .n { font-family: var(--mono); font-size: 12px; color: var(--butter); margin-bottom: 12px; }
+  .step h3 { font-family: var(--disp); font-weight: 500; font-size: 19px; margin-bottom: 8px; color: var(--cream); }
+  .step p { font-size: 14px; color: var(--cream-dim); line-height: 1.55; }
+
+  .agents { padding: 60px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
+  .agents .lbl { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cream-faint); margin-bottom: 22px; }
+  .agent-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .chip { font-family: var(--mono); font-size: 13px; color: var(--cream-dim); border: 1px solid var(--rule); border-radius: 999px; padding: 8px 16px; background: var(--surface-raised); }
+
+  .pricing { padding: 84px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
+  .pricing > h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; margin-bottom: 12px; color: var(--cream); }
+  .pricing > p { color: var(--cream-dim); margin-bottom: 44px; }
+  .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 760px; margin: 0 auto; text-align: left; }
+  .plan { background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 14px; padding: 30px; display: flex; flex-direction: column; }
+  .plan.feat { border-color: var(--butter); box-shadow: 0 0 0 3px var(--butter-glow); }
+  .plan .name { font-family: var(--disp); font-size: 22px; font-weight: 500; margin-bottom: 4px; color: var(--cream); }
+  .plan .price { font-family: var(--disp); font-size: 34px; margin-bottom: 4px; color: var(--cream); }
+  .plan .price small { font-family: var(--body); font-size: 14px; color: var(--cream-faint); }
+  .plan .desc { font-size: 14px; color: var(--cream-dim); margin-bottom: 18px; }
+  .plan ul { list-style: none; margin-bottom: 22px; }
+  .plan li { font-size: 13.5px; color: var(--cream-dim); padding: 6px 0 6px 22px; position: relative; }
+  .plan li::before { content: "\\2713"; position: absolute; left: 0; color: var(--sage); font-weight: 600; }
+  .plan .cta { margin-top: auto; display: block; text-align: center; }
+  .plan .note { font-family: var(--mono); font-size: 10px; color: var(--cream-faint); text-align: center; margin-top: 8px; }
+
+  .faq { padding: 84px 0; border-top: 1px solid var(--rule-soft); }
+  .faq h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; margin-bottom: 32px; text-align: center; color: var(--cream); }
+  .qa { max-width: 760px; margin: 0 auto; }
+  .qa .item { border-bottom: 1px solid var(--rule-soft); padding: 20px 0; }
+  .qa .q { font-family: var(--disp); font-size: 18px; font-weight: 500; margin-bottom: 8px; color: var(--cream); }
+  .qa .a { font-size: 15px; color: var(--cream-dim); line-height: 1.6; }
+
+  .final { padding: 96px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
+  .final h2 { font-family: var(--disp); font-weight: 500; font-size: 46px; letter-spacing: -0.02em; max-width: 16ch; margin: 0 auto 24px; line-height: 1.1; color: var(--cream); }
+  .final h2 em { font-style: italic; color: var(--butter); }
+
+  footer { border-top: 1px solid var(--rule); padding: 40px 0; color: var(--cream-faint); font-size: 13px; }
+  .foot-in { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .foot-in a:hover { color: var(--butter); }
+  .ok { font-family: var(--mono); font-size: 11px; color: var(--sage); }
+
+  @media (max-width: 760px) {
+    .container { padding: 0 20px; }
+    .nav-in { padding: 14px 20px; gap: 14px; }
+    .nav-links { display: none; }
+    .hero { padding: 56px 0 24px; }
+    .hero h1 { font-size: 40px; }
+    .hero p { font-size: 16px; }
+    .feature-grid { grid-template-columns: 1fr; gap: 28px; }
+    .feature, .how, .pricing, .faq, .final { padding: 56px 0; }
+    .steps { grid-template-columns: 1fr; }
+    .plans { grid-template-columns: 1fr; }
+    .final h2 { font-size: 34px; }
+    .shot-tabs { display: none; }
+  }
+</style>
+</head>
+<body>
+  <nav>
+    <div class="nav-in">
+      <a class="brand" href="${origin}/">memoryvault<span class="dot">.</span><span class="md">md</span></a>
+      <div class="nav-links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div>
+      <div class="nav-right">
+        <button class="theme-toggle" data-theme-toggle type="button">&#9680; theme</button>
+        <a class="btn ghost" style="padding:8px 14px" href="${endpointsRef}">Docs</a>
+        <a class="btn" href="${app}">Get started</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero container">
+    <div class="eyebrow">open source · self-hosted · graph-aware</div>
+    <h1>The memory layer your agents <em>actually own</em></h1>
+    <p>Persistent, graph-aware memory for any AI agent — fully open, nothing paywalled, running on infrastructure you control. Your memories never touch our servers.</p>
+    <div class="hero-cta">
+      <a class="btn" style="padding:12px 22px;font-size:15px" href="${app}">Deploy your own — free</a>
+      <a class="btn ghost" style="padding:12px 22px;font-size:15px" href="${repo}" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+    <div class="hero-sub">MIT licensed · graph included · deploy to Cloudflare in ~5 min</div>
+  </header>
+
+  <div class="shot container">
+    <div class="shot-top">
+      <span class="shot-wm">memoryvault<span class="dot">.</span>md<span class="path">~/your-index</span></span>
+      <span class="shot-tabs">All · Notes · Facts · Journal · Graph</span>
+    </div>
+    <div class="shot-body">
+      <div class="shot-fm"><span class="t">Recall, <b>last 24 hours</b></span><span class="m">247 entries · 1,084 links · synced 14:02</span></div>
+      <div class="shot-ticks">${ticks}</div>
+      <div class="shot-sec">Active</div>
+      <div class="shot-entry">
+        <div>
+          <div class="shot-eh"><span class="shot-bead"></span><span class="shot-et">project.license</span><span class="shot-kind">fact</span><span class="shot-ver">verified</span></div>
+          <div class="shot-eb"><span class="k">project.license</span><span class="arr">&rarr;</span>MIT — fully open, graph features not paywalled.</div>
+        </div>
+        <div class="shot-aside">MV·0231 · 09:41<span class="shot-meter"><span class="bar"><i style="width:95%"></i></span></span></div>
+      </div>
+      <div class="shot-entry">
+        <div>
+          <div class="shot-eh"><span class="shot-bead"></span><span class="shot-et">Shipped the isolation suite</span><span class="shot-kind">journal</span></div>
+          <div class="shot-eb">20 of 20 green against a live worker — tenant isolation proven, not asserted.</div>
+        </div>
+        <div class="shot-aside">MV·0247 · 14:02<span class="shot-meter"><span class="bar"><i style="width:88%"></i></span></span></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="feature container" id="features">
+    <div class="feature-grid">
+      <div>
+        <h2>A graph of memory, <em>nothing paywalled</em></h2>
+        <p>Most memory tools lock the graph behind a Pro tier or keep it closed-source entirely. MemoryVault ships connected, graph-aware memory in the open — links, traversal, and provenance included from the first commit.</p>
+        <p class="mini">notes · facts · journal — linked, scored, and queryable</p>
+      </div>
+      <div class="panel">
+        <div class="ledger-line"><span class="k">project.license</span><span class="arr">&rarr;</span><span class="v">MIT, fully open</span><span class="tag">verified</span></div>
+        <div class="ledger-line"><span class="k">user.timezone</span><span class="arr">&rarr;</span><span class="v">Europe/Lisbon</span><span class="tag">verified</span></div>
+        <div class="ledger-line"><span class="k">graph.enabled</span><span class="arr">&rarr;</span><span class="v">true — no upsell</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature container">
+    <div class="feature-grid">
+      <div class="panel config">
+        <div class="c"># your account, your data</div>
+        <div><span class="b">[[vectorize]]</span> binding = "MEMORY_INDEX"</div>
+        <div><span class="b">[[d1_databases]]</span> name = "your-brain"</div>
+        <div class="g">&#10003; memories never leave your Cloudflare account</div>
+      </div>
+      <div>
+        <h2>Self-hosted. <em>You own the data.</em></h2>
+        <p>Deploy to your own Cloudflare account in minutes. There's no MemoryVault server in the middle — your agent's memory lives in your D1 and Vectorize, under your keys. Nothing to trust us with.</p>
+        <p class="mini">one-command deploy · D1 + Vectorize + Workers</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="how container" id="how">
+    <h2>How it works</h2>
+    <p>Connect once. Your agents read and write memory before and after every answer.</p>
+    <div class="steps">
+      <div class="step"><div class="n">01</div><h3>Deploy your vault</h3><p>One command stands up your own memory server on Cloudflare — D1, Vectorize, and Workers, under your account.</p></div>
+      <div class="step"><div class="n">02</div><h3>Connect your agents</h3><p>Point Claude, Codex, or any MCP client at your endpoint. They read your context before answering and write back what they learn.</p></div>
+      <div class="step"><div class="n">03</div><h3>Watch it strengthen</h3><p>Memories reinforce, decay, and link over time. The index sharpens itself — you review what sticks.</p></div>
+    </div>
+  </section>
+
+  <section class="agents container">
+    <div class="lbl">Works with your stack</div>
+    <div class="agent-row"><span class="chip">Claude</span><span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Any MCP client</span><span class="chip">REST API</span></div>
+  </section>
+
+  <section class="pricing container" id="pricing">
+    <h2>Start free. Host it yourself, or let us.</h2>
+    <p>The whole thing is open source. Pay only if you want managed hosting.</p>
+    <div class="plans">
+      <div class="plan">
+        <div class="name">Self-host</div>
+        <div class="price">$0</div>
+        <div class="desc">Run it on your own Cloudflare account, forever.</div>
+        <ul><li>Full source, MIT licensed</li><li>Graph + all features</li><li>Your data, your keys</li><li>Community support</li></ul>
+        <a class="btn ghost cta" href="${repo}" target="_blank" rel="noopener">Deploy from GitHub</a>
+      </div>
+      <div class="plan feat">
+        <div class="name">Hosted</div>
+        <div class="price">$12<small>/mo</small></div>
+        <div class="desc">We run it for you — backups, sync, and support.</div>
+        <ul><li>Everything in Self-host</li><li>Managed multi-device sync</li><li>Automatic backups</li><li>Priority support</li></ul>
+        <a class="btn cta" href="${repo}" target="_blank" rel="noopener">Coming soon</a>
+        <div class="note">not yet billable — follow along on GitHub</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="faq container" id="faq">
+    <h2>Questions</h2>
+    <div class="qa">
+      <div class="item"><div class="q">Is it really fully open source?</div><div class="a">Yes — MIT licensed, graph and all. There's no paywalled tier of the software itself; the only thing you'd ever pay for is optional managed hosting.</div></div>
+      <div class="item"><div class="q">Where does my data live?</div><div class="a">In your own Cloudflare account — your D1 database and Vectorize index, under your keys. If you self-host, your memories never touch our infrastructure.</div></div>
+      <div class="item"><div class="q">Which agents does it work with?</div><div class="a">Anything that speaks MCP — Claude, Claude Code, Codex, and custom agents — plus a plain REST API for everything else.</div></div>
+      <div class="item"><div class="q">How is it different from other memory tools?</div><div class="a">Graph-aware and open with nothing paywalled, self-hosted so you own the data, and tenant isolation that's covered by an adversarial test suite rather than asserted in a blog post.</div></div>
+    </div>
+  </section>
+
+  <section class="final container">
+    <h2>Give your agents a memory <em>you control</em></h2>
+    <div class="hero-cta">
+      <a class="btn" style="padding:13px 26px;font-size:15px" href="${app}">Deploy your own — free</a>
+      <a class="btn ghost" style="padding:13px 26px;font-size:15px" href="${endpointsRef}">Read the docs</a>
+    </div>
+  </section>
+
+  <footer><div class="container foot-in"><span>&copy; 2026 MemoryVault · MIT licensed · <a href="${endpointsRef}">endpoints</a></span><span class="ok">&#9679; all systems operational</span></div></footer>
+</body>
+</html>`;
+}
+
+// Developer reference (formerly the bare root page), now served at /endpoints
+// and linked from the marketing landing's Docs/footer.
+export function endpointsIndexHtml(url: URL): string {
+  const origin = url.origin;
   const mcpEndpoint = `${origin}/mcp`;
   const viewerEndpoint = `${origin}/view`;
   const authzMetadata = `${origin}/.well-known/oauth-authorization-server`;
@@ -1022,7 +1344,7 @@ export function rootLandingHtml(url: URL): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MemoryVault Dev Portal</title>
+<title>MemoryVault — Endpoints</title>
 ${FONT_LINK_TAGS}
 ${themeBootstrapTag}
 <style>
@@ -1099,8 +1421,8 @@ ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 1180px; }
 <body>
   <main class="wrap">
     <div class="pill">${escapeHtml(envLabel)}</div>
-    <h1 class="title">MEMORY<span>VAULT</span> Dev Portal</h1>
-    <p class="sub">Human-Friendly Landing Page For This MCP Host</p>
+    <h1 class="title">MEMORY<span>VAULT</span> Endpoints</h1>
+    <p class="sub"><a href="${origin}/" style="color:var(--cream-faint)">&larr; Home</a> &nbsp;·&nbsp; Developer reference for this MCP host</p>
 
     <div class="grid">
       <section class="card">
@@ -1150,7 +1472,6 @@ ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 1180px; }
       </div>
     </section>
   </main>
-  <script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async></script>
 </body>
 </html>`;
 }
