@@ -214,6 +214,22 @@ async function applyCustomPalette(page) {
   await page.waitForTimeout(200);
 }
 
+async function screenshotFilters(browser) {
+  log('shooting filter tabs (ribbon constant, grid filtered)');
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 980 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  const page = await ctx.newPage();
+  await loginThroughUi(page);
+  await page.waitForTimeout(FONT_SETTLE_MS);
+  await page.screenshot({ path: `${SHOTS}/filter-all.png` });
+  for (const [type, name] of [['note', 'notes'], ['fact', 'facts'], ['journal', 'journal']]) {
+    await page.click(`#stat-${type}`);
+    // setFilter -> loadMemories does the grid fetch plus the corpus fetch.
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: `${SHOTS}/filter-${name}.png` });
+  }
+  await ctx.close();
+}
+
 async function screenshotReactivity(browser) {
   log('shooting reactivity before/after');
   // A dedicated brain so the earlier theme/compact contexts (which save
@@ -319,6 +335,7 @@ async function screenshotAll() {
   await compactPage.screenshot({ path: `${SHOTS}/main-compact.png` });
   await compactCtx.close();
 
+  await screenshotFilters(browser);
   await screenshotReactivity(browser);
 
   await browser.close();

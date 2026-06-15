@@ -21,7 +21,11 @@ export const clientCore = `
   let SESSION_MODE = 'none';
   let activeFilter = '';
   let searchTimeout = null;
-  let allMemories = [];
+  // corpusMemories is the whole brain (no type/search filter) and drives the
+  // recall ribbon and header summary; displayedMemories is the filtered set
+  // shown in the grid.
+  let corpusMemories = [];
+  let displayedMemories = [];
   let expandGen = 0;
   let graphVisible = false;
   let lastGraphData = { nodes: [], edges: [], inferred_edges: [] };
@@ -245,7 +249,7 @@ export const clientCore = `
     syncThemePicker();
     syncGraphToolbarState();
     if (restartPolling) startLivePolling(true);
-    if (rerenderGrid) renderGrid(allMemories);
+    if (rerenderGrid) renderGrid(displayedMemories);
     if (rerenderGraph && graphVisible) rerenderGraphFromCache();
   }
 

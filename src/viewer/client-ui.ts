@@ -163,7 +163,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
   function startPourTick() {
     if (pourTickId) clearInterval(pourTickId);
     pourTickId = setInterval(() => {
-      if (hasAuthenticatedSession() && allMemories.length) renderPour(allMemories);
+      if (hasAuthenticatedSession() && corpusMemories.length) renderPour(corpusMemories);
     }, 60000);
   }
 
@@ -174,6 +174,20 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     el.classList.remove('pulse');
     void el.offsetWidth;
     el.classList.add('pulse');
+  }
+
+  // Unfiltered fetch used to keep the ribbon/header whole-brain while a filter
+  // or search narrows the grid. Returns null on failure so the caller keeps the
+  // last known corpus.
+  async function fetchCorpusMemories() {
+    try {
+      const r = await apiFetch(BASE + '/api/memories?limit=500');
+      if (!r.ok) return null;
+      const data = await r.json();
+      return data.memories || [];
+    } catch {
+      return null;
+    }
   }
 
   async function loadMemories(silent = false) {
@@ -199,9 +213,18 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
         return;
       }
       const data = await r.json();
-      allMemories = data.memories || [];
-      updateStats(data.stats || [], allMemories);
-      renderGrid(allMemories);
+      displayedMemories = data.memories || [];
+      // The grid honours the type filter and search; the ribbon and header are
+      // whole-brain readouts, so when either is active refresh the corpus from
+      // an unfiltered request rather than reusing the filtered rows.
+      if (activeFilter || search) {
+        const corpus = await fetchCorpusMemories();
+        if (corpus) corpusMemories = corpus;
+      } else {
+        corpusMemories = displayedMemories;
+      }
+      updateStats(data.stats || []);
+      renderGrid(displayedMemories);
       if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><div class="empty-icon">hm.</div>Connection error — check your network and try refresh.</div>';
@@ -211,7 +234,10 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     }
   }
 
-  function updateStats(stats, memories = []) {
+  // Counts come from the server stats (full-corpus, GROUP BY type), and the
+  // ribbon/links read corpusMemories, so all of these stay whole-brain even
+  // when the grid is filtered.
+  function updateStats(stats) {
     const counts = { note: 0, fact: 0, journal: 0 };
     let total = 0;
     stats.forEach(s => { counts[s.type] = s.count; total += s.count; });
@@ -224,11 +250,11 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     pulseStatPill('stat-fact', lastStatsSnapshot.fact !== null && counts.fact !== lastStatsSnapshot.fact);
     pulseStatPill('stat-journal', lastStatsSnapshot.journal !== null && counts.journal !== lastStatsSnapshot.journal);
     lastStatsSnapshot = { all: total, note: counts.note, fact: counts.fact, journal: counts.journal };
-    const linkEnds = memories.reduce((sum, m) => sum + (Number.isFinite(Number(m.link_count)) ? Number(m.link_count) : 0), 0);
+    const linkEnds = corpusMemories.reduce((sum, m) => sum + (Number.isFinite(Number(m.link_count)) ? Number(m.link_count) : 0), 0);
     const linkTotal = Math.round(linkEnds / 2);
     document.getElementById('hdr-count').textContent =
       total + (total === 1 ? ' entry' : ' entries') + ' · ' + linkTotal + (linkTotal === 1 ? ' link' : ' links');
-    renderPour(memories);
+    renderPour(corpusMemories);
   }
 
   function clampUnit(value, fallback) {
@@ -374,7 +400,7 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
   }
 
   function expandCard(idx) {
-    const m = allMemories[idx];
+    const m = displayedMemories[idx];
     if (!m) return;
     const date = new Date(m.created_at * 1000).toLocaleString();
     const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';

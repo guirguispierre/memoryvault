@@ -338,7 +338,7 @@ export const clientSettings = `  function fillSettingsForm() {
   }
 
   function expandById(id) {
-    const idx = allMemories.findIndex(m => m.id === id);
+    const idx = displayedMemories.findIndex(m => m.id === id);
     if (idx !== -1) {
       expandCard(idx);
     } else {
