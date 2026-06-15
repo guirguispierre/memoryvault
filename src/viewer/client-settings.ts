@@ -385,7 +385,8 @@ export const clientSettings = `  function fillSettingsForm() {
         const data = await r.json();
         const sig = (data.count ?? 0) + ':' + (data.last_updated ?? 0) + ':' + (data.link_total ?? 0);
         if (lastPollSig && sig !== lastPollSig) {
-          loadMemories(true); // silent refresh
+          loadMemories(true); // silent refresh of the ribbon + grid
+          if (graphVisible) refreshGraphData(); // keep the open graph live too
         }
         lastPollSig = sig;
       } catch {}
@@ -555,6 +556,42 @@ export const clientSettings = `  function fillSettingsForm() {
     } catch(e) {
       document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--clay);font-family:var(--mono);font-size:12px;letter-spacing:0.06em">The graph could not load — try again.</text>';
       showToast('Graph load failed.', 'error');
+    }
+  }
+
+  let graphRefreshing = false;
+
+  // Quiet refresh used by the live poll while the graph is open: re-fetch and
+  // re-render without the loading placeholder or toast, carrying over current
+  // node positions and the zoom/pan transform so new data settles in place
+  // instead of relaying out from scratch.
+  async function refreshGraphData() {
+    if (!graphVisible || graphRefreshing || !hasAuthenticatedSession()) return;
+    graphRefreshing = true;
+    try {
+      const r = await apiFetch(BASE + '/api/graph');
+      if (!r.ok) return;
+      const data = await r.json();
+      const prevPos = new Map();
+      if (graphSimulation && graphSimulation.nodes) {
+        graphSimulation.nodes().forEach(n => { if (Number.isFinite(n.x)) prevPos.set(n.id, { x: n.x, y: n.y }); });
+      }
+      const svgEl = document.getElementById('graph-svg');
+      const prevTransform = (svgEl && graphSvgSelection && graphZoomBehavior) ? d3.zoomTransform(svgEl) : null;
+      lastGraphData = {
+        nodes: (data.nodes || []).map(n => {
+          const p = prevPos.get(n.id);
+          return p ? { ...n, x: p.x, y: p.y } : { ...n };
+        }),
+        edges: (data.edges || []).map(e => ({ ...e })),
+        inferred_edges: (data.inferred_edges || []).map(e => ({ ...e })),
+      };
+      rerenderGraphFromCache();
+      if (prevTransform && graphSvgSelection && graphZoomBehavior) {
+        graphSvgSelection.call(graphZoomBehavior.transform, prevTransform);
+      }
+    } catch {} finally {
+      graphRefreshing = false;
     }
   }
 
