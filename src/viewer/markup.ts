@@ -303,6 +303,7 @@ export const bodyMarkup = `</style>
                 <label>Light theme</label>
                 <div class="setting-help">Palette used in light mode.</div>
                 <div class="theme-picker" id="light-theme-picker">
+                  <button type="button" class="theme-swatch" data-theme-value="paper" title="Paper"><span style="background:#FBFAF7;border:2px solid #3B5BDB"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="slate" title="Slate"><span style="background:#F4F5F6;border:2px solid #3E6E99"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="vanilla" title="Vanilla"><span style="background:#F4EDDE;border:2px solid #8F713B"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="midnight" title="Midnight"><span style="background:#F0EEF8;border:2px solid #7C6AD0"></span></button>
@@ -317,6 +318,7 @@ export const bodyMarkup = `</style>
                 <div class="setting-help">Palette used in dark mode.</div>
                 <div class="theme-picker" id="theme-picker">
                   <button type="button" class="theme-swatch" data-theme-value="slate" title="Slate"><span style="background:#0F1011;border:2px solid #7FA6C9"></span></button>
+                  <button type="button" class="theme-swatch" data-theme-value="paper" title="Paper"><span style="background:#16161A;border:2px solid #8AA0F0"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="vanilla" title="Vanilla"><span style="background:#181511;border:2px solid #E3C98F"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="midnight" title="Midnight"><span style="background:#14141F;border:2px solid #A99BE8"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="solarized" title="Solarized"><span style="background:#002B36;border:2px solid #B58900"></span></button>

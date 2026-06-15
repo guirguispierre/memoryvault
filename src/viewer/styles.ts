@@ -387,8 +387,11 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
   .grid-wrap {
     flex: 1;
     padding: 6px 40px 60px;
-    max-width: 980px;
+    /* Centered reading column for the document feel; the graph view sits
+       outside this wrap and stays full-width. */
+    max-width: 920px;
     width: 100%;
+    margin: 0 auto;
   }
   .empty-state {
     padding: 5rem 2rem;

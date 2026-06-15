@@ -234,6 +234,24 @@ async function screenshotFilters(browser) {
   await ctx.close();
 }
 
+async function screenshotViewerPaper(browser) {
+  log('shooting app viewer in paper (light)');
+  // Dedicated brain so server settings are pristine; force light mode so the
+  // auto pairing resolves to the paper default.
+  const email = `verify-ui-paper-${Date.now()}@example.com`;
+  const cookie = await signup(email, 'Verify UI paper');
+  await seed(cookie);
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 980 }, deviceScaleFactor: 2, colorScheme: 'light' });
+  await ctx.addInitScript(() => {
+    try { localStorage.setItem('memoryvault.viewer.settings.v1', JSON.stringify({ theme_mode: 'light' })); } catch (e) {}
+  });
+  const page = await ctx.newPage();
+  await loginThroughUi(page, email);
+  await page.waitForTimeout(FONT_SETTLE_MS);
+  await page.screenshot({ path: `${SHOTS}/viewer-paper.png` });
+  await ctx.close();
+}
+
 async function screenshotNewFeatures(browser) {
   log('shooting clean-dark default, banner, changelog, live graph');
   // Dedicated brain with no saved settings, so it resolves to the new slate
@@ -408,6 +426,7 @@ async function screenshotAll() {
   await compactCtx.close();
 
   await screenshotFilters(browser);
+  await screenshotViewerPaper(browser);
   await screenshotNewFeatures(browser);
   await screenshotReactivity(browser);
 

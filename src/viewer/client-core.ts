@@ -60,7 +60,7 @@ export const clientCore = `
   function buildDefaultViewerSettings() {
     return {
       theme: 'slate',
-      light_theme: 'slate',
+      light_theme: 'paper',
       theme_mode: 'auto',
       live_poll_enabled: true,
       live_poll_interval_sec: 10,
@@ -105,7 +105,7 @@ export const clientCore = `
     const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
       ? source.default_memory_filter
       : '';
-    const validThemes = ['slate', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom'];
+    const validThemes = ['slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom'];
     // 'cyberpunk' was the pre-vanilla default; migrate stored settings to the new default.
     const migrateTheme = (value) => (value === 'cyberpunk' ? 'vanilla' : value);
     const theme = validThemes.includes(migrateTheme(source.theme)) ? migrateTheme(source.theme) : defaults.theme;

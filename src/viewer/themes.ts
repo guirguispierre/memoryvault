@@ -270,6 +270,65 @@ export const themeStyles = `  [data-theme="vanilla-light"] {
     background: radial-gradient(1000px 460px at 50% -12%, rgba(62, 110, 153, 0.07), transparent 62%), var(--ground);
   }
 
+  /* Paper: warm near-white reading surface with Spectral for content, Inter for
+     UI chrome, JetBrains Mono for data, and one restrained indigo accent. This
+     is the default light theme; the generic -light block below fills the panel
+     and surface tokens. */
+  [data-theme="paper-light"] {
+    --ground: #FBFAF7;
+    --ground-2: #FFFFFF;
+    --ground-3: #F2F0EB;
+    --rule: #E6E3DC;
+    --rule-soft: #EEEBE4;
+    --rule-bright: #D8D4CB;
+    --cream: #1C1B19;
+    --cream-dim: #6B6A66;
+    --cream-faint: #9A988F;
+    --butter: #3B5BDB;
+    --butter-deep: #2C46AE;
+    --latte: #8A8780;
+    --sage: #2F8F6B;
+    --clay: #C0533B;
+    --on-butter: #FFFFFF;
+    --butter-glow: rgba(59, 91, 219, 0.08);
+    --disp: 'Spectral', Georgia, serif;
+    --body: 'Inter', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  [data-theme="paper-light"] body {
+    background: radial-gradient(1000px 460px at 50% -12%, rgba(59, 91, 219, 0.05), transparent 62%), var(--ground);
+  }
+  /* Dark counterpart, only used if paper is picked as the dark theme. */
+  [data-theme="paper"] {
+    --ground: #16161A;
+    --ground-2: #1D1D22;
+    --ground-3: #25252B;
+    --rule: #30303A;
+    --rule-soft: #28282F;
+    --rule-bright: #3E3E4A;
+    --cream: #ECEBE6;
+    --cream-dim: #A6A59E;
+    --cream-faint: #74736C;
+    --butter: #8AA0F0;
+    --butter-deep: #5E76C8;
+    --latte: #8A8A82;
+    --sage: #5FB894;
+    --clay: #D08A78;
+    --on-butter: #14141A;
+    --butter-glow: rgba(138, 160, 240, 0.09);
+    --disp: 'Spectral', Georgia, serif;
+    --body: 'Inter', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --panel-bg: #1D1D22;
+    --surface: rgba(37, 37, 43, 0.6);
+    --surface-raised: #212128;
+    --toast-bg: #212128;
+    --overlay-bg: rgba(10, 10, 13, 0.78);
+  }
+  [data-theme="paper"] body {
+    background: radial-gradient(1000px 460px at 50% -12%, rgba(138, 160, 240, 0.06), transparent 62%), var(--ground);
+  }
+
   [data-theme$="-light"] {
     --overlay-bg: rgba(30, 26, 18, 0.30);
     --panel-bg: var(--ground-2);

@@ -3,9 +3,13 @@
 // guide, and OAuth screens. Pages import these strings rather than pasting
 // hex values, so a palette change here flows everywhere at once.
 
+// One Google Fonts request covering every theme's type roles. The @font-face
+// blocks are declared for all families but the browser only fetches the files
+// the active theme actually renders, so the paper (Spectral/Inter/JetBrains)
+// and warm (Fraunces/Schibsted/IBM Plex) sets don't both download.
 export const FONT_LINK_TAGS = `<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,640;1,9..144,420;1,9..144,560&family=Schibsted+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">`;
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,640;1,9..144,420;1,9..144,560&family=Schibsted+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">`;
 
 // The default (dark) vanilla tokens. The viewer's theme variants in themes.ts
 // build on top of this block; the server-rendered pages emit it verbatim.
@@ -162,7 +166,7 @@ export const themeRuntimeJs = `  var CUSTOM_FONT_PRESETS = {
   };
   var CUSTOM_FONT_KEYS = Object.keys(CUSTOM_FONT_PRESETS);
   var CUSTOM_COLOR_TOKENS = ['ground', 'ground_2', 'cream', 'cream_dim', 'butter', 'rule'];
-  var VALID_THEMES = { slate: 1, vanilla: 1, midnight: 1, solarized: 1, ember: 1, arctic: 1, custom: 1 };
+  var VALID_THEMES = { slate: 1, paper: 1, vanilla: 1, midnight: 1, solarized: 1, ember: 1, arctic: 1, custom: 1 };
 
   function buildVanillaCustomTheme() {
     // Mirrors the default :root tokens so 'reset' returns to vanilla dark.
@@ -261,7 +265,7 @@ export const themeRuntimeJs = `  var CUSTOM_FONT_PRESETS = {
     var src = s && typeof s === 'object' ? s : {};
     var migrate = function (v) { return v === 'cyberpunk' ? 'vanilla' : v; };
     var theme = VALID_THEMES[migrate(src.theme)] ? migrate(src.theme) : 'slate';
-    var lightBase = VALID_THEMES[migrate(src.light_theme)] ? migrate(src.light_theme) : 'slate';
+    var lightBase = VALID_THEMES[migrate(src.light_theme)] ? migrate(src.light_theme) : 'paper';
     var mode = (src.theme_mode === 'light' || src.theme_mode === 'dark') ? src.theme_mode : 'auto';
     var light = lightBase === 'custom' ? 'custom' : lightBase + '-light';
     if (mode === 'light') return light;
@@ -273,14 +277,20 @@ export const themeRuntimeJs = `  var CUSTOM_FONT_PRESETS = {
 
 // The bootstrap body: reads the saved settings the viewer writes, resolves the
 // active theme, and sets it on <html> before paint so every page matches the
-// user's choice with no flash. Dependency-free and failure-tolerant.
+// user's choice with no flash. It also wires any [data-theme-toggle] control
+// (the landing nav) to flip light/dark and persist. Dependency-free and
+// failure-tolerant.
 export const themeBootstrapJs = `(function(){
 ${themeRuntimeJs}
-  try {
-    var raw = localStorage.getItem('memoryvault.viewer.settings.v1');
-    var s = raw ? JSON.parse(raw) : null;
+  var KEY = 'memoryvault.viewer.settings.v1';
+  function readSettings() {
+    try { var raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  }
+  function applyTheme() {
+    var s = readSettings();
     var active = resolveThemeFromSettings(s);
     document.documentElement.setAttribute('data-theme', active);
+    var el = document.getElementById('mv-custom-theme');
     if (active === 'custom') {
       var tokens = deriveCustomTokens(s && s.custom_theme);
       // html[...] outranks :root so the custom block wins regardless of where
@@ -288,12 +298,27 @@ ${themeRuntimeJs}
       var css = 'html[data-theme="custom"]{';
       for (var k in tokens) { css += k + ':' + tokens[k] + ';'; }
       css += '}';
-      var el = document.createElement('style');
-      el.id = 'mv-custom-theme';
+      if (!el) { el = document.createElement('style'); el.id = 'mv-custom-theme'; document.head.appendChild(el); }
       el.textContent = css;
-      document.head.appendChild(el);
+    } else if (el) {
+      el.textContent = '';
     }
-  } catch (e) {}
+  }
+  try { applyTheme(); } catch (e) {}
+  document.addEventListener('DOMContentLoaded', function () {
+    var toggles = document.querySelectorAll('[data-theme-toggle]');
+    for (var i = 0; i < toggles.length; i++) {
+      toggles[i].addEventListener('click', function () {
+        try {
+          var s = readSettings() || {};
+          // Flip to the opposite of whatever is showing now.
+          s.theme_mode = /-light$/.test(resolveThemeFromSettings(s)) ? 'dark' : 'light';
+          localStorage.setItem(KEY, JSON.stringify(s));
+          applyTheme();
+        } catch (e) {}
+      });
+    }
+  });
 })();`;
 
 // Served from /theme-bootstrap.js because the page CSP forbids inline scripts.
