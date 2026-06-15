@@ -220,6 +220,56 @@ export const themeStyles = `  [data-theme="vanilla-light"] {
     background: radial-gradient(1000px 460px at 50% -12%, rgba(31, 126, 154, 0.08), transparent 62%), var(--ground);
   }
 
+  /* Slate: neutral clean-dark default. True grays with one muted slate-blue
+     accent; minimal hue so it reads calm rather than warm. */
+  [data-theme="slate"] {
+    --ground: #0F1011;
+    --ground-2: #161719;
+    --ground-3: #1C1E20;
+    --rule: #2A2C2F;
+    --rule-soft: #202224;
+    --rule-bright: #3A3D41;
+    --cream: #E6E7E8;
+    --cream-dim: #A0A2A6;
+    --cream-faint: #6A6D72;
+    --butter: #7FA6C9;
+    --butter-deep: #5A7E9E;
+    --latte: #8A8D92;
+    --sage: #8FB3A8;
+    --clay: #C98E8E;
+    --on-butter: #0E1518;
+    --butter-glow: rgba(127, 166, 201, 0.06);
+    --panel-bg: #161719;
+    --surface: rgba(28, 30, 32, 0.6);
+    --surface-raised: #1A1C1E;
+    --toast-bg: #1A1C1E;
+    --overlay-bg: rgba(8, 9, 10, 0.78);
+  }
+  [data-theme="slate"] body {
+    background: radial-gradient(1000px 460px at 50% -12%, rgba(127, 166, 201, 0.05), transparent 62%), var(--ground);
+  }
+  [data-theme="slate-light"] {
+    --ground: #F4F5F6;
+    --ground-2: #FBFBFC;
+    --ground-3: #EBECEE;
+    --rule: #D8DADD;
+    --rule-soft: #E3E4E7;
+    --rule-bright: #C2C5C9;
+    --cream: #1A1C1E;
+    --cream-dim: #4A4D52;
+    --cream-faint: #7C8086;
+    --butter: #3E6E99;
+    --butter-deep: #2E5374;
+    --latte: #8A8D92;
+    --sage: #4E7A6A;
+    --clay: #A85B5B;
+    --on-butter: #F4F8FB;
+    --butter-glow: rgba(62, 110, 153, 0.09);
+  }
+  [data-theme="slate-light"] body {
+    background: radial-gradient(1000px 460px at 50% -12%, rgba(62, 110, 153, 0.07), transparent 62%), var(--ground);
+  }
+
   [data-theme$="-light"] {
     --overlay-bg: rgba(30, 26, 18, 0.30);
     --panel-bg: var(--ground-2);

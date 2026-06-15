@@ -471,7 +471,7 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
     : '';
 
   return `<!doctype html>
-<html lang="en" data-theme="vanilla">
+<html lang="en" data-theme="slate">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">

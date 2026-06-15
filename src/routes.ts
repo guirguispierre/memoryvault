@@ -876,7 +876,7 @@ export async function handleApiPurge(request: Request, env: Env, brainId: string
 // but this is the trust boundary: only known keys survive, numbers are
 // clamped to the same ranges the UI enforces, and the custom palette is
 // reduced to six hex colours plus a vetted font key.
-const VIEWER_THEME_NAMES = new Set(['vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
+const VIEWER_THEME_NAMES = new Set(['slate', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
 const VIEWER_THEME_MODES = new Set(['auto', 'light', 'dark']);
 const VIEWER_FONT_KEYS = new Set(['fraunces', 'grotesk', 'system', 'typewriter']);
 const VIEWER_FILTERS = new Set(['', 'note', 'fact', 'journal']);
@@ -909,8 +909,8 @@ function sanitizeCustomTheme(raw: unknown): Record<string, string> {
 
 function sanitizeViewerSettings(raw: unknown): Record<string, unknown> {
   const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
-  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'vanilla';
-  const lightTheme = typeof src.light_theme === 'string' && VIEWER_THEME_NAMES.has(src.light_theme) ? src.light_theme : 'vanilla';
+  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'slate';
+  const lightTheme = typeof src.light_theme === 'string' && VIEWER_THEME_NAMES.has(src.light_theme) ? src.light_theme : 'slate';
   const mode = typeof src.theme_mode === 'string' && VIEWER_THEME_MODES.has(src.theme_mode) ? src.theme_mode : 'auto';
   const filter = typeof src.default_memory_filter === 'string' && VIEWER_FILTERS.has(src.default_memory_filter) ? src.default_memory_filter : '';
   return {
@@ -1018,7 +1018,7 @@ export function rootLandingHtml(url: URL): string {
   }).join('');
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="vanilla">
+<html lang="en" data-theme="slate">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1162,7 +1162,7 @@ export function mcpLandingHtml(url: URL): string {
   const authzMetadata = `${origin}/.well-known/oauth-authorization-server`;
   const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
   return `<!DOCTYPE html>
-<html lang="en" data-theme="vanilla">
+<html lang="en" data-theme="slate">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1510,7 +1510,7 @@ export function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
     ? `${origin}${guide.endpointPath}`
     : `${origin}${guide.endpointPath}`;
   return `<!DOCTYPE html>
-<html lang="en" data-theme="vanilla">
+<html lang="en" data-theme="slate">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">

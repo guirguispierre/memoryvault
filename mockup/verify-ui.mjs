@@ -171,12 +171,16 @@ async function listMemoryIds(cookie) {
   return (data.memories || []).map((m) => m.id);
 }
 
-async function loginThroughUi(page, email = EMAIL) {
+async function loginThroughUi(page, email = EMAIL, keepBanner = false) {
   await page.goto(`${BASE}/view`);
   await page.fill('#email-input', email);
   await page.fill('#password-input', PASSWORD);
   await page.click('button[data-action="login"]');
   await page.waitForSelector('.row', { timeout: 15000 });
+  if (keepBanner) {
+    await page.waitForSelector('#update-banner.visible', { timeout: 5000 }).catch(() => {});
+    return;
+  }
   const dismiss = page.locator('[data-action="dismiss-update-banner"]');
   if (await page.locator('#update-banner.visible').count()) {
     await dismiss.click();
@@ -228,6 +232,74 @@ async function screenshotFilters(browser) {
     await page.screenshot({ path: `${SHOTS}/filter-${name}.png` });
   }
   await ctx.close();
+}
+
+async function screenshotNewFeatures(browser) {
+  log('shooting clean-dark default, banner, changelog, live graph');
+  // Dedicated brain with no saved settings, so it resolves to the new slate
+  // default and the update banner shows for the current version.
+  const email = `verify-ui-new-${Date.now()}@example.com`;
+  const cookie = await signup(email, 'Verify UI new');
+  await seed(cookie);
+
+  // Default clean-dark + banner overlap (desktop): top of scroll, then scrolled.
+  const ctxA = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  const pageA = await ctxA.newPage();
+  await loginThroughUi(pageA, email, true);
+  await pageA.waitForTimeout(FONT_SETTLE_MS);
+  await pageA.screenshot({ path: `${SHOTS}/banner-top-1280.png` });
+  await pageA.evaluate(() => window.scrollTo(0, 240));
+  await pageA.waitForTimeout(400);
+  await pageA.screenshot({ path: `${SHOTS}/banner-scroll-1280.png` });
+  await pageA.evaluate(() => window.scrollTo(0, 0));
+  await pageA.click('#update-banner [data-action="open-changelog-overlay"]');
+  await pageA.waitForSelector('#changelog-overlay.open', { timeout: 5000 });
+  await pageA.waitForTimeout(900);
+  await pageA.screenshot({ path: `${SHOTS}/changelog-overlay.png` });
+  await pageA.click('[data-action="close-changelog"]');
+  await pageA.waitForTimeout(300);
+  if (await pageA.locator('#update-banner.visible').count()) {
+    await pageA.click('[data-action="dismiss-update-banner"]');
+    await pageA.waitForTimeout(300);
+  }
+  await pageA.screenshot({ path: `${SHOTS}/default-slate.png` });
+  await ctxA.close();
+
+  // Banner overlap (mobile).
+  const ctxM = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, colorScheme: 'dark' });
+  const pageM = await ctxM.newPage();
+  await loginThroughUi(pageM, email, true);
+  await pageM.waitForTimeout(FONT_SETTLE_MS);
+  await pageM.screenshot({ path: `${SHOTS}/banner-top-390.png` });
+  await pageM.evaluate(() => window.scrollTo(0, 220));
+  await pageM.waitForTimeout(400);
+  await pageM.screenshot({ path: `${SHOTS}/banner-scroll-390.png` });
+  await ctxM.close();
+
+  // Live graph: open graph, snapshot, then add a connected node via the API and
+  // wait a poll cycle to show the open graph refreshing without a manual action.
+  const ctxG = await browser.newContext({ viewport: { width: 1280, height: 980 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  await ctxG.addInitScript(() => {
+    try { localStorage.setItem('memoryvault.viewer.settings.v1', JSON.stringify({ live_poll_interval_sec: 5 })); } catch (e) {}
+  });
+  const pageG = await ctxG.newPage();
+  await loginThroughUi(pageG, email);
+  await pageG.click('#stat-graph');
+  await pageG.waitForTimeout(3800);
+  await pageG.screenshot({ path: `${SHOTS}/graph-live-before.png` });
+  await pageG.waitForTimeout(7000); // let one poll set the baseline fingerprint
+  const ids = await listMemoryIds(cookie);
+  const saved = await mcpCall(cookie, 'memory_save', {
+    type: 'note', title: 'Live graph node',
+    content: 'Added via the API to prove the open graph refreshes without a manual action.',
+    importance: 0.75, confidence: 0.85,
+  });
+  const savedText = saved?.result?.content?.[0]?.text;
+  const newId = savedText ? JSON.parse(savedText).id : null;
+  if (newId && ids[0]) await mcpCall(cookie, 'memory_link', { from_id: newId, to_id: ids[0], relation_type: 'related' });
+  await pageG.waitForTimeout(12000); // cross two 5s poll cycles so the refresh is captured
+  await pageG.screenshot({ path: `${SHOTS}/graph-live-after.png` });
+  await ctxG.close();
 }
 
 async function screenshotReactivity(browser) {
@@ -336,6 +408,7 @@ async function screenshotAll() {
   await compactCtx.close();
 
   await screenshotFilters(browser);
+  await screenshotNewFeatures(browser);
   await screenshotReactivity(browser);
 
   await browser.close();
