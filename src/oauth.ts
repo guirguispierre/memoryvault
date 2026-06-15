@@ -31,7 +31,7 @@ import {
 
 import { CORS_HEADERS, corsJsonResponse } from './cors.js';
 
-import { FONT_LINK_TAGS, vanillaTokensCss, themeBootstrapTag } from './viewer/tokens.js';
+import { FONT_LINK_TAGS, vanillaTokensCss } from './viewer/tokens.js';
 import { themeStyles } from './viewer/themes.js';
 
 import {
@@ -471,13 +471,13 @@ function renderAuthorizePage(requestData: Record<string, string>, errorMessage: 
     : '';
 
   return `<!doctype html>
-<html lang="en" data-theme="slate">
+<html lang="en" data-theme="paper-light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Connect your second brain · MemoryVault</title>
   ${FONT_LINK_TAGS}
-  ${themeBootstrapTag}
   <style>
 ${vanillaTokensCss}${themeStyles}    * { box-sizing: border-box; }
     body {

@@ -24,7 +24,6 @@ import {
 } from './oauth.js';
 import { TOOLS } from './tools-schema.js';
 import { viewerHtml, viewerScript } from './viewer/index.js';
-import { themeBootstrapJs } from './viewer/tokens.js';
 import {
   base64ImageResponse,
   HERO_BG_WEBP_BASE64,
@@ -105,12 +104,6 @@ export default {
 
       if (url.pathname === '/view.js') {
         return new Response(viewerScript(), {
-          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
-        });
-      }
-
-      if (url.pathname === '/theme-bootstrap.js') {
-        return new Response(themeBootstrapJs, {
           headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
         });
       }

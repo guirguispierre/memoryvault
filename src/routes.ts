@@ -66,7 +66,6 @@ import {
   FONT_LINK_TAGS,
   vanillaTokensCss,
   pageChromeCss,
-  themeBootstrapTag,
 } from './viewer/tokens.js';
 
 import { themeStyles } from './viewer/themes.js';
@@ -1039,7 +1038,7 @@ export function rootLandingHtml(url: URL): string {
 <title>MemoryVault — the memory layer your agents own</title>
 <meta name="description" content="Persistent, graph-aware memory for AI agents. Open source, self-hosted on your own Cloudflare account, nothing paywalled.">
 ${FONT_LINK_TAGS}
-${themeBootstrapTag}
+<meta name="color-scheme" content="light">
 <style>
 ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
@@ -1051,19 +1050,27 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
   .hero { position: relative; min-height: 92vh; overflow: hidden; display: flex; flex-direction: column; }
   .hero-bg { position: absolute; inset: 0; z-index: 0; }
   .hero-bg img { width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; }
-  /* Top-down wash for text legibility; carries through the lower text band too. */
+  /* Top-down wash for nav/headline contrast, fading out before the page. */
   .hero-bg::after {
     content: ""; position: absolute; inset: 0;
-    background: linear-gradient(180deg, rgba(12,30,60,0.42) 0%, rgba(12,30,60,0.28) 34%, rgba(12,30,60,0.22) 52%, rgba(12,30,60,0.14) 70%, rgba(12,30,60,0.04) 84%, transparent 92%);
+    background: linear-gradient(180deg, rgba(10,22,48,0.42) 0%, rgba(10,22,48,0.22) 32%, rgba(10,22,48,0.10) 58%, transparent 82%);
   }
+  /* Near-white blobs kept low and out of the text zone so they melt the photo
+     into the page without washing out live text. */
   .fade-blobs { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
   .fade-blobs .b { position: absolute; border-radius: 100%; filter: blur(60px); background: rgba(251,250,247,0.9); }
-  .fade-blobs .bl { bottom: -17%; left: -12%; height: 42%; width: 42%; }
-  .fade-blobs .br { bottom: -17%; right: -12%; height: 42%; width: 42%; }
-  .fade-blobs .bc { bottom: -12%; left: 50%; transform: translateX(-50%); height: 20%; width: 56%; background: rgba(251,250,247,0.45); filter: blur(72px); }
-  /* The near-white blobs only make sense melting into a light page. */
-  html:not([data-theme$="-light"]) .fade-blobs { display: none; }
-  .hero-fade { position: absolute; inset-inline: 0; bottom: 0; height: 24%; z-index: 1; pointer-events: none; background: linear-gradient(180deg, transparent 0%, var(--ground) 92%); }
+  .fade-blobs .bl { bottom: -24%; left: -14%; height: 40%; width: 40%; }
+  .fade-blobs .br { bottom: -24%; right: -14%; height: 40%; width: 40%; }
+  .fade-blobs .bc { bottom: -16%; left: 50%; transform: translateX(-50%); height: 16%; width: 56%; background: rgba(251,250,247,0.35); filter: blur(72px); }
+  .hero-fade { position: absolute; inset-inline: 0; bottom: 0; height: 18%; z-index: 1; pointer-events: none; background: linear-gradient(180deg, transparent 0%, var(--ground) 92%); }
+  /* Focused dark vignette that travels WITH the text (above photo + blobs at z1,
+     below text at z3) so the hero copy keeps its own contrast over any part of
+     the image, independent of what is behind it. */
+  .text-scrim {
+    position: absolute; z-index: 2; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    width: min(880px, 92%); height: min(560px, 70%); pointer-events: none;
+    background: radial-gradient(60% 60% at 50% 50%, rgba(10,22,48,0.46) 0%, rgba(10,22,48,0.30) 45%, rgba(10,22,48,0) 78%);
+  }
 
   .hero-nav { position: relative; z-index: 3; display: flex; align-items: center; gap: 28px; padding: 20px 32px; max-width: 1080px; margin: 0 auto; width: 100%; }
   .brand { font-family: var(--disp); font-weight: 600; font-size: 18px; color: rgb(255,255,255); text-shadow: 0 1px 12px rgba(0,0,0,0.25); }
@@ -1076,19 +1083,21 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
   .hero-nav .ghost { font-size: 13px; color: rgba(255,255,255,0.9); border: 1px solid rgba(255,255,255,0.35); border-radius: 8px; padding: 7px 13px; background: rgba(255,255,255,0.08); }
   .hero-nav .solid { font-size: 13.5px; font-weight: 600; color: rgb(22,50,92); background: rgb(255,255,255); border-radius: 8px; padding: 8px 15px; }
 
-  .hero-body { position: relative; z-index: 3; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 24px 22vh; }
+  .hero-body { position: relative; z-index: 3; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 24px 20vh; }
   .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(255,255,255,0.92); margin-bottom: 22px; text-shadow: 0 1px 10px rgba(0,0,0,0.3); }
   .hero h1 { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 16ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); margin-bottom: 6px; }
   .hero h1 em { font-style: italic; color: rgb(223,233,255); }
   .hero h1 .ch { display: inline-block; white-space: pre; opacity: 0; filter: blur(10px); transform: translateY(10px); animation: chin 0.8s cubic-bezier(0.2,0.7,0.2,1) forwards; }
   @keyframes chin { to { opacity: 1; filter: blur(0); transform: none; } }
-  .hl-fallback { display: none; }
-  html:not(.js) .hl-fallback { display: block; }
-  html:not(.js) #headline { display: none; }
+  .hl-fallback { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 16ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); }
+  .hl-fallback em { font-style: italic; color: rgb(223,233,255); }
   .hairline { height: 1px; width: 320px; margin: 26px auto 0; background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5) 18%, rgba(255,255,255,0.5) 82%, rgba(255,255,255,0)); opacity: 0; animation: fadein 0.8s ease 0.5s forwards; }
-  .hero p { font-size: 18px; color: rgba(255,255,255,0.97); max-width: 52ch; margin: 24px auto 0; line-height: 1.55; text-shadow: 0 1px 3px rgba(8,20,45,0.55), 0 2px 18px rgba(8,20,45,0.5); opacity: 0; animation: riseup 0.9s cubic-bezier(0.2,0.7,0.2,1) 0.62s forwards; }
-  .hero-cta { margin-top: 30px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; opacity: 0; animation: riseup 0.9s cubic-bezier(0.2,0.7,0.2,1) 0.74s forwards; }
-  .hero-sub { margin-top: 18px; font-family: var(--mono); font-size: 12px; color: rgba(255,255,255,0.95); text-shadow: 0 1px 2px rgba(8,20,45,0.8), 0 1px 12px rgba(8,20,45,0.7); opacity: 0; animation: fadein 0.9s ease 0.9s forwards; }
+  .hero p { font-size: 18px; color: rgba(255,255,255,0.97); max-width: 52ch; margin: 24px auto 0; line-height: 1.55; text-shadow: 0 1px 14px rgba(8,20,45,0.4); opacity: 0; animation: riseup 0.9s cubic-bezier(0.2,0.7,0.2,1) 0.62s forwards; }
+  /* Mono sub-line as glass pills in the protected (scrim) zone, above the CTAs,
+     so each carries its own contrast over any part of the photo. */
+  .hero-sub { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; opacity: 0; animation: fadein 0.9s ease 0.7s forwards; }
+  .hero-sub .pill { font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em; color: rgb(255,255,255); background: rgba(10,22,48,0.34); border: 1px solid rgba(255,255,255,0.22); border-radius: 999px; padding: 5px 11px; backdrop-filter: blur(4px); }
+  .hero-cta { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; opacity: 0; animation: riseup 0.9s cubic-bezier(0.2,0.7,0.2,1) 0.86s forwards; }
   @keyframes riseup { to { opacity: 1; transform: none; } }
   @keyframes fadein { to { opacity: 1; } }
   .btn { font-family: var(--body); font-weight: 600; font-size: 15px; border-radius: 10px; padding: 12px 22px; cursor: pointer; border: 1px solid transparent; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.15s, box-shadow 0.15s; }
@@ -1102,11 +1111,10 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
   .shot { max-width: 1000px; margin: -9vh auto 0; position: relative; z-index: 4; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; box-shadow: 0 40px 90px var(--card-glow); background: var(--surface-raised); }
   .shot img { display: block; width: 100%; }
 
-  /* ── scroll reveals ── */
-  html.js .reveal { opacity: 0; transform: translateY(16px); }
-  .reveal { transition: opacity 0.7s cubic-bezier(0.2,0.7,0.2,1), transform 0.7s cubic-bezier(0.2,0.7,0.2,1); }
-  /* Outranks html.js .reveal so the observed .in state actually shows. */
-  html.js .reveal.in { opacity: 1; transform: none; }
+  /* ── scroll reveals ── (the observer adds .in; a noscript rule below reveals
+     everything when JS is off so nothing stays hidden) */
+  .reveal { opacity: 0; transform: translateY(16px); transition: opacity 0.7s cubic-bezier(0.2,0.7,0.2,1), transform 0.7s cubic-bezier(0.2,0.7,0.2,1); }
+  .reveal.in { opacity: 1; transform: none; }
 
   /* ── content sections ── */
   .feature { padding: 88px 0; border-top: 1px solid var(--rule-soft); }
@@ -1206,11 +1214,12 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     .ch, .hero p, .hero-cta, .hero-sub, .hairline { animation: none !important; opacity: 1 !important; filter: none !important; transform: none !important; }
-    html.js .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+    .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
     .faq-a-wrap, .faq-q .chev, .step, .btn { transition: none !important; }
     .ping::after { animation: none !important; }
   }
 </style>
+<noscript><style>.reveal { opacity: 1; transform: none; }</style></noscript>
 </head>
 <body>
   <section class="hero">
@@ -1221,6 +1230,7 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
       </picture>
     </div>
     <div class="fade-blobs"><div class="b bl"></div><div class="b br"></div><div class="b bc"></div></div>
+    <div class="text-scrim"></div>
     <div class="hero-fade"></div>
 
     <nav class="hero-nav">
@@ -1232,14 +1242,14 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
     <div class="hero-body">
       <div class="eyebrow">open source · self-hosted · graph-aware</div>
       <h1 id="headline"></h1>
-      <h1 class="hl-fallback" style="font-family:var(--disp);font-weight:500;font-size:64px;line-height:1.04;letter-spacing:-0.02em;max-width:16ch;color:rgb(255,255,255);text-shadow:0 2px 26px rgba(8,20,45,0.4)">The memory layer your<br>agents <em style="font-style:italic;color:rgb(223,233,255)">actually own</em></h1>
+      <noscript><h1 class="hl-fallback">The memory layer your<br>agents <em>actually own</em></h1></noscript>
       <div class="hairline"></div>
       <p>Persistent, graph-aware memory for any AI agent — fully open, nothing paywalled, running on infrastructure you control. Your memories never touch our servers.</p>
+      <div class="hero-sub"><span class="pill">MIT licensed</span><span class="pill">graph included</span><span class="pill">deploy to Cloudflare in ~5 min</span></div>
       <div class="hero-cta">
         <a class="btn solid" href="${app}">Deploy your own — free <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
         <a class="btn glass" href="${repo}" target="_blank" rel="noopener">View on GitHub</a>
       </div>
-      <div class="hero-sub">MIT licensed · graph included · deploy to Cloudflare in ~5 min</div>
     </div>
   </section>
 
@@ -1407,13 +1417,13 @@ export function endpointsIndexHtml(url: URL): string {
   }).join('');
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="slate">
+<html lang="en" data-theme="paper-light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault — Endpoints</title>
 ${FONT_LINK_TAGS}
-${themeBootstrapTag}
+<meta name="color-scheme" content="light">
 <style>
 ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 1180px; }
   .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 1rem; }
@@ -1550,13 +1560,13 @@ export function mcpLandingHtml(url: URL): string {
   const authzMetadata = `${origin}/.well-known/oauth-authorization-server`;
   const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
   return `<!DOCTYPE html>
-<html lang="en" data-theme="slate">
+<html lang="en" data-theme="paper-light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MemoryVault MCP</title>
 ${FONT_LINK_TAGS}
-${themeBootstrapTag}
+<meta name="color-scheme" content="light">
 <style>
 ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 980px; }
   .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1rem; }
@@ -1898,13 +1908,13 @@ export function endpointGuideHtml(url: URL, guide: EndpointGuide): string {
     ? `${origin}${guide.endpointPath}`
     : `${origin}${guide.endpointPath}`;
   return `<!DOCTYPE html>
-<html lang="en" data-theme="slate">
+<html lang="en" data-theme="paper-light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${guide.title} · MemoryVault</title>
 ${FONT_LINK_TAGS}
-${themeBootstrapTag}
+<meta name="color-scheme" content="light">
 <style>
 ${vanillaTokensCss}${themeStyles}${pageChromeCss}  .wrap { max-width: 920px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.95rem; }
