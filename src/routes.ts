@@ -888,7 +888,7 @@ export async function handleApiPurge(request: Request, env: Env, brainId: string
 // but this is the trust boundary: only known keys survive, numbers are
 // clamped to the same ranges the UI enforces, and the custom palette is
 // reduced to six hex colours plus a vetted font key.
-const VIEWER_THEME_NAMES = new Set(['slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
+const VIEWER_THEME_NAMES = new Set(['constellation', 'slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
 const VIEWER_THEME_MODES = new Set(['auto', 'light', 'dark']);
 const VIEWER_FONT_KEYS = new Set(['fraunces', 'grotesk', 'system', 'typewriter']);
 const VIEWER_FILTERS = new Set(['', 'note', 'fact', 'journal']);
@@ -921,7 +921,7 @@ function sanitizeCustomTheme(raw: unknown): Record<string, string> {
 
 function sanitizeViewerSettings(raw: unknown): Record<string, unknown> {
   const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
-  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'slate';
+  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'constellation';
   const lightTheme = typeof src.light_theme === 'string' && VIEWER_THEME_NAMES.has(src.light_theme) ? src.light_theme : 'paper';
   const mode = typeof src.theme_mode === 'string' && VIEWER_THEME_MODES.has(src.theme_mode) ? src.theme_mode : 'auto';
   const filter = typeof src.default_memory_filter === 'string' && VIEWER_FILTERS.has(src.default_memory_filter) ? src.default_memory_filter : '';

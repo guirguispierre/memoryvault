@@ -318,6 +318,7 @@ export const bodyMarkup = `</style>
                 <label>Dark theme</label>
                 <div class="setting-help">Palette used in dark mode.</div>
                 <div class="theme-picker" id="theme-picker">
+                  <button type="button" class="theme-swatch" data-theme-value="constellation" title="Constellation"><span style="background:#070810;border:2px solid #8AB0FF"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="slate" title="Slate"><span style="background:#0F1011;border:2px solid #7FA6C9"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="paper" title="Paper"><span style="background:#16161A;border:2px solid #8AA0F0"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="vanilla" title="Vanilla"><span style="background:#181511;border:2px solid #E3C98F"></span></button>
