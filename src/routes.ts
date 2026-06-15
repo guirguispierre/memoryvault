@@ -1115,8 +1115,11 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
   .btn.glass:hover { background: rgba(255,255,255,0.2); transform: translateY(-1px); }
   :focus-visible { outline: 2px solid rgb(255,255,255); outline-offset: 2px; }
 
-  /* ── product shot ── */
-  .shot { max-width: 1000px; margin: -9vh auto 0; position: relative; z-index: 4; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; box-shadow: 0 40px 90px var(--card-glow); background: var(--surface-raised); }
+  /* ── product shot ── (sits fully below the hero on paper, no overlap with the
+     photo, so the card's shadow reads against the page as a clean hand-off) */
+  .showcase { padding: 80px 0 0; text-align: center; }
+  .shot-cap { font-family: var(--disp); font-style: italic; font-size: 16px; color: var(--cream-faint); margin-bottom: 18px; }
+  .shot { max-width: 1000px; margin: 0 auto; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; box-shadow: 0 40px 90px var(--card-glow); background: var(--surface-raised); }
   .shot img { display: block; width: 100%; }
 
   /* ── scroll reveals ── (the observer adds .in; a noscript rule below reveals
@@ -1216,7 +1219,8 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
     .hero p { font-size: 16px; }
     .hero-body { padding: 0 20px 12vh; }
     .hairline { width: min(280px, 80%); }
-    .shot { margin: -6vh 16px 0; }
+    .showcase { padding: 48px 0 0; }
+    .shot { margin: 0 auto; }
     .feature-grid { grid-template-columns: 1fr; gap: 28px; }
     .feature, .how, .pricing, .faq, .final { padding: 56px 0; }
     .panel { padding: 20px; }
@@ -1281,7 +1285,10 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
     </div>
   </section>
 
-  <div class="shot reveal"><img src="/assets/product-shot.webp" alt="The MemoryVault viewer showing recall and the memory graph" decoding="async"></div>
+  <section class="showcase container">
+    <p class="shot-cap reveal">Your memory, legible</p>
+    <div class="shot reveal"><img src="/assets/product-shot.webp" alt="The MemoryVault viewer showing recall and the memory graph" decoding="async"></div>
+  </section>
 
   <section class="feature container" id="features">
     <div class="feature-grid">
