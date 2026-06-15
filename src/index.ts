@@ -38,6 +38,9 @@ import {
   handleApiViewerSettings,
   rootLandingHtml,
   landingScript,
+  deployHtml,
+  deployScript,
+  handleApiWaitlist,
   endpointsIndexHtml,
   mcpLandingHtml,
   endpointGuideForPath,
@@ -113,6 +116,23 @@ export default {
         return new Response(starfieldJs, {
           headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
         });
+      }
+
+      if (url.pathname === '/deploy') {
+        return new Response(deployHtml(url), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
+      if (url.pathname === '/deploy.js') {
+        return new Response(deployScript, {
+          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
+        });
+      }
+
+      // Unauthenticated, write-only hosted-tier waitlist capture.
+      if (url.pathname === '/api/waitlist') {
+        return handleApiWaitlist(request, env, url.origin);
       }
 
       if (isBrowserDocumentRequest(request)) {
