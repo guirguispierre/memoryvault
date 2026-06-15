@@ -977,18 +977,22 @@ export const landingScript = `(function(){
     if (!h) return;
     h.textContent = '';
     var delay = 0.15;
+    // Letters animate individually but are grouped into per-word wrappers, and
+    // spaces are real collapsible whitespace, so the headline only ever breaks
+    // between words — never mid-word — at any viewport width.
     function emit(text, target) {
+      var word = null;
       for (var i = 0; i < text.length; i++) {
-        if (text[i] === '\\n') { target.appendChild(document.createElement('br')); continue; }
-        // Spaces are real, collapsible whitespace (not inline-block spans) so the
-        // headline can wrap between words on narrow screens instead of overflowing.
-        if (text[i] === ' ') { target.appendChild(document.createTextNode(' ')); delay += 0.03; continue; }
+        var c = text[i];
+        if (c === '\\n') { target.appendChild(document.createElement('br')); word = null; continue; }
+        if (c === ' ') { target.appendChild(document.createTextNode(' ')); delay += 0.03; word = null; continue; }
+        if (!word) { word = document.createElement('span'); word.className = 'hw'; target.appendChild(word); }
         var s = document.createElement('span');
         s.className = 'ch';
-        s.textContent = text[i];
+        s.textContent = c;
         s.style.animationDelay = delay.toFixed(2) + 's';
         delay += 0.03;
-        target.appendChild(s);
+        word.appendChild(s);
       }
     }
     emit('The memory layer your\\nagents ', h);
@@ -1086,11 +1090,14 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
 
   .hero-body { position: relative; z-index: 3; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 24px 20vh; }
   .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(255,255,255,0.92); margin-bottom: 22px; text-shadow: 0 1px 10px rgba(0,0,0,0.3); }
-  .hero h1 { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 16ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); margin-bottom: 6px; }
+  .hero h1 { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 22ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); margin-bottom: 6px; }
   .hero h1 em { font-style: italic; color: rgb(223,233,255); }
-  .hero h1 .ch { display: inline-block; white-space: pre; opacity: 0; filter: blur(10px); transform: translateY(10px); animation: chin 0.8s cubic-bezier(0.2,0.7,0.2,1) forwards; }
+  /* Each word is its own inline-block so the headline only breaks at spaces;
+     the letters animate inside without becoming per-letter break points. */
+  .hero h1 .hw { display: inline-block; white-space: nowrap; }
+  .hero h1 .ch { display: inline-block; opacity: 0; filter: blur(10px); transform: translateY(10px); animation: chin 0.8s cubic-bezier(0.2,0.7,0.2,1) forwards; }
   @keyframes chin { to { opacity: 1; filter: blur(0); transform: none; } }
-  .hl-fallback { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 16ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); }
+  .hl-fallback { font-family: var(--disp); font-weight: 500; font-size: 64px; line-height: 1.04; letter-spacing: -0.02em; max-width: 22ch; color: rgb(255,255,255); text-shadow: 0 2px 26px rgba(8,20,45,0.4); }
   .hl-fallback em { font-style: italic; color: rgb(223,233,255); }
   .hairline { height: 1px; width: 320px; margin: 26px auto 0; background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5) 18%, rgba(255,255,255,0.5) 82%, rgba(255,255,255,0)); opacity: 0; animation: fadein 0.8s ease 0.5s forwards; }
   .hero p { font-size: 18px; color: rgba(255,255,255,0.97); max-width: 52ch; margin: 24px auto 0; line-height: 1.55; text-shadow: 0 1px 14px rgba(8,20,45,0.4); opacity: 0; animation: riseup 0.9s cubic-bezier(0.2,0.7,0.2,1) 0.62s forwards; }
@@ -1200,7 +1207,8 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
 
   @media (max-width: 760px) {
     .container { padding: 0 20px; }
-    .hero { min-height: 86vh; }
+    .hero { min-height: 80vh; }
+    .hero-bg img { object-position: center; }
     .hero-nav { padding: 16px 20px; gap: 14px; }
     .hero-nav .links { display: none; }
     .hero-nav .right { gap: 8px; }
@@ -1245,8 +1253,8 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
   <section class="hero">
     <div class="hero-bg">
       <picture>
-        <source media="(max-width: 760px)" type="image/webp" srcset="/assets/hero-bg-mobile.webp?v=2">
-        <img src="/assets/hero-bg.webp?v=2" alt="" fetchpriority="high" decoding="async">
+        <source media="(max-width: 760px)" type="image/webp" srcset="/assets/hero-bg-mobile.webp?v=3">
+        <img src="/assets/hero-bg.webp?v=3" alt="" fetchpriority="high" decoding="async">
       </picture>
     </div>
     <div class="fade-blobs"><div class="b bl"></div><div class="b br"></div><div class="b bc"></div></div>
