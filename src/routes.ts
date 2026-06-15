@@ -1225,8 +1225,8 @@ ${vanillaTokensCss}${themeStyles}  * { box-sizing: border-box; margin: 0; paddin
   <section class="hero">
     <div class="hero-bg">
       <picture>
-        <source media="(max-width: 760px)" type="image/webp" srcset="/assets/hero-bg-mobile.webp">
-        <img src="/assets/hero-bg.webp" alt="" fetchpriority="high" decoding="async">
+        <source media="(max-width: 760px)" type="image/webp" srcset="/assets/hero-bg-mobile.webp?v=2">
+        <img src="/assets/hero-bg.webp?v=2" alt="" fetchpriority="high" decoding="async">
       </picture>
     </div>
     <div class="fade-blobs"><div class="b bl"></div><div class="b br"></div><div class="b bc"></div></div>
