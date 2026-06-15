@@ -22,10 +22,15 @@ export const componentStyles = `  .toast {
     align-items: center;
     gap: 0.7rem;
     padding: 0.6rem 0.9rem;
-    margin: 0.6rem 40px 0;
+    /* Clear gap below the sticky header; z-index stays under the header (100)
+       so the opaque header occludes the banner cleanly as it scrolls away
+       rather than colliding with it. */
+    margin: 1rem 40px 0;
+    position: relative;
+    z-index: 1;
     border: 1px solid var(--rule);
     border-radius: 10px;
-    background: var(--butter-glow);
+    background: var(--surface-raised);
     font-size: 12.5px;
     color: var(--cream-dim);
     line-height: 1.5;
