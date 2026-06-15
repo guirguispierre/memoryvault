@@ -86,9 +86,10 @@ export const pageChromeCss = `  * { box-sizing: border-box; }
     border-radius: 7px;
     background: var(--butter-glow);
     color: var(--butter);
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.12em;
+    font-family: var(--ui);
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     padding: 0.32rem 0.6rem;
     margin-bottom: 1.1rem;
@@ -106,10 +107,10 @@ export const pageChromeCss = `  * { box-sizing: border-box; }
   .sub {
     margin: 0.55rem 0 1.5rem;
     color: var(--cream-faint);
-    font-family: var(--mono);
-    letter-spacing: 0.1em;
+    font-family: var(--ui);
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
   }
   .card {
     border: 1px solid var(--rule);
@@ -134,9 +135,10 @@ export const pageChromeCss = `  * { box-sizing: border-box; }
     border-radius: 8px;
     color: var(--cream-dim);
     text-decoration: none;
-    font-family: var(--mono);
-    font-size: 0.68rem;
-    letter-spacing: 0.08em;
+    font-family: var(--ui);
+    font-weight: 600;
+    font-size: 0.74rem;
+    letter-spacing: 0.02em;
     text-transform: uppercase;
     padding: 0.5rem 0.72rem;
     display: inline-block;

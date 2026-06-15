@@ -508,7 +508,7 @@ ${constellationTokensCss}    * { box-sizing: border-box; }
     .wordmark em { font-style: italic; color: var(--butter); }
     h1 { font-family: var(--disp); font-weight: 560; font-size: 18px; color: var(--cream); margin: 0 0 6px; }
     p { margin: 0 0 16px; color: var(--cream-dim); font-size: 14px; line-height: 1.5; }
-    label { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--cream-faint); margin: 14px 1px 6px; }
+    label { display: block; font-family: var(--ui); font-weight: 600; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cream-faint); margin: 14px 1px 6px; }
     input {
       width: 100%;
       background: var(--ground-3);
@@ -560,7 +560,7 @@ ${constellationTokensCss}    * { box-sizing: border-box; }
     <input type="email" name="email" autocomplete="username" />
     <label>Password</label>
     <input type="password" name="password" autocomplete="current-password" />
-    <label>Brain name — used when signing up</label>
+    <label>Brain name, used when signing up</label>
     <input type="text" name="brain_name" placeholder="My second brain" />
     <div class="row">
       <button class="primary" type="submit" name="auth_mode" value="login">Sign in</button>
