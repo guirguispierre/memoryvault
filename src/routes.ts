@@ -1044,8 +1044,15 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
   .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
 
   /* ── HERO (living memory graph) ── */
-  .hero-wrap { position: relative; height: 100vh; }
-  #sky { position: absolute; inset: 0; width: 100%; height: 100vh; z-index: 0; display: block; pointer-events: none; }
+  /* The canvas overflows past the hero and its lower edge is masked off, so the
+     stars thin out below the hero/section boundary instead of stopping on it. */
+  .hero-wrap { position: relative; height: 100vh; overflow: visible; }
+  #sky {
+    position: absolute; top: 0; left: 0; width: 100%; height: 135vh;
+    z-index: 0; display: block; pointer-events: none;
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 60%, transparent 88%);
+            mask-image: linear-gradient(180deg, #000 0%, #000 60%, transparent 88%);
+  }
   .wrap { position: relative; z-index: 1; }
 
   nav { display: flex; align-items: center; gap: 24px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; position: relative; z-index: 3; }
@@ -1070,6 +1077,10 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
   /* ── sections (one continuous space, no dividers) ── */
   main { position: relative; z-index: 1; background: var(--bg); }
   main::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(70% 40% at 50% 0%, rgba(40, 52, 110, 0.18), transparent 55%), radial-gradient(60% 50% at 85% 88%, rgba(30, 80, 70, 0.10), transparent 60%); }
+  /* Ease the background tone across a tall band that starts up in the hero and
+     finishes inside the first section, on a different row than the star fade. */
+  main::after { content: ""; position: absolute; top: -40vh; left: 0; right: 0; height: 60vh; z-index: 0; pointer-events: none; background: linear-gradient(180deg, transparent 0%, var(--bg) 70%); }
+  main > * { position: relative; z-index: 1; }
   .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.7s cubic-bezier(0.2,0.7,0.2,1), transform 0.7s cubic-bezier(0.2,0.7,0.2,1); }
   .reveal.in { opacity: 1; transform: none; }
 

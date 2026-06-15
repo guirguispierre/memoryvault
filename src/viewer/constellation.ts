@@ -101,9 +101,12 @@ export const starfieldJs = `(function(){
   }
   // Fade stars and links to nothing inside an ellipse over the hero text so
   // nothing renders close behind the copy. Calm pages have no centered text.
+  // The center/radii are fractions of the canvas height, which now runs to
+  // 135vh on the landing, so they are scaled to keep the protected ellipse over
+  // the same viewport region as before the canvas was extended.
   function deadZone(px, py) {
     if (calm) return 1;
-    var d = Math.hypot((px - W * 0.5) / (W * 0.34), (py - H * 0.46) / (H * 0.34));
+    var d = Math.hypot((px - W * 0.5) / (W * 0.34), (py - H * 0.34) / (H * 0.22));
     if (d >= 1) return 1;
     return Math.max(0, (d - 0.45) / 0.55);
   }
