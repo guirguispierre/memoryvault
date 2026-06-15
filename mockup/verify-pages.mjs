@@ -90,29 +90,41 @@ async function shoot(browser, name, url, width, height) {
   await ctx.close();
 }
 
-// The landing in motion: the living-graph hero settled, the product shot, a
-// revealed content section, and the FAQ with one item open.
+// The landing in motion: the living-graph hero settled (dead-zone clear behind
+// the text), the feature row with the wrangler.toml block + ledger, and the
+// how-it-works cards above the bled final-CTA gradient.
 async function shootLandingMotion(browser) {
-  log('shooting landing hero + product shot + section + faq');
+  log('shooting landing hero + feature + how/final');
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(FONT_SETTLE_MS);
   await page.screenshot({ path: `${SHOTS}/landing-hero.png` });
-  // Product shot just below the hero.
-  await page.locator('.shot').scrollIntoViewIfNeeded();
-  await page.waitForTimeout(700);
-  await page.screenshot({ path: `${SHOTS}/landing-product-shot.png` });
-  // A revealed mid section (calm, legible below the field).
+  // The self-hosted feature: wrangler.toml code block + the ledger panel above.
+  await page.locator('.codeblock').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: `${SHOTS}/landing-feature.png` });
+  // How it works above the final CTA, whose glow bleeds past the section.
   await page.locator('#how').scrollIntoViewIfNeeded();
   await page.waitForTimeout(900);
-  await page.screenshot({ path: `${SHOTS}/landing-section.png` });
-  // FAQ with the first item open.
-  await page.locator('#faq').scrollIntoViewIfNeeded();
-  await page.waitForTimeout(600);
-  await page.locator('.faq-q').first().click();
-  await page.waitForTimeout(600);
-  await page.screenshot({ path: `${SHOTS}/landing-faq.png` });
+  await page.screenshot({ path: `${SHOTS}/landing-how.png` });
+  await page.locator('.final').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: `${SHOTS}/landing-final.png` });
+  await ctx.close();
+}
+
+// Mobile: the hero with the hamburger, and the open dropdown sheet.
+async function shootMobile(browser) {
+  log('shooting mobile hero + open menu sheet');
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(FONT_SETTLE_MS);
+  await page.screenshot({ path: `${SHOTS}/landing-mobile.png` });
+  await page.locator('#menu').click();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${SHOTS}/landing-menu.png` });
   await ctx.close();
 }
 
@@ -124,9 +136,9 @@ async function screenshotAll() {
   await shoot(browser, 'page-mcp', `${BASE}/mcp`, 1280, 900);
   await shoot(browser, 'page-endpoint-guide', `${BASE}/api/memories`, 1280, 900);
   await shoot(browser, 'page-oauth-authorize', authorizeUrl, 1280, 840);
-  // Marketing landing: animated hero, sections, and the mobile reflow.
+  // Marketing landing: animated hero, sections, and the mobile reflow + menu.
   await shootLandingMotion(browser);
-  await shoot(browser, 'landing-mobile', `${BASE}/`, 390, 844);
+  await shootMobile(browser);
   await browser.close();
 }
 

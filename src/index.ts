@@ -24,10 +24,6 @@ import {
 } from './oauth.js';
 import { TOOLS } from './tools-schema.js';
 import { viewerHtml, viewerScript } from './viewer/index.js';
-import {
-  base64ImageResponse,
-  PRODUCT_SHOT_WEBP_BASE64,
-} from './assets.js';
 import { starfieldJs } from './viewer/constellation.js';
 import {
   handleMcp,
@@ -117,10 +113,6 @@ export default {
         return new Response(starfieldJs, {
           headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
         });
-      }
-
-      if (url.pathname === '/assets/product-shot.webp') {
-        return base64ImageResponse(PRODUCT_SHOT_WEBP_BASE64, 'image/webp');
       }
 
       if (isBrowserDocumentRequest(request)) {

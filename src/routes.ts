@@ -1001,11 +1001,30 @@ export const landingScript = `(function(){
       })(items[k]);
     }
   })();
+
+  // Mobile nav: hamburger toggles the dropdown sheet; tapping a link closes it.
+  (function(){
+    var m = document.getElementById('menu');
+    var sh = document.getElementById('sheet');
+    if (!m || !sh) return;
+    m.addEventListener('click', function(){
+      var open = sh.classList.toggle('open');
+      m.classList.toggle('open', open);
+      m.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    var links = sh.querySelectorAll('a');
+    for (var i = 0; i < links.length; i++) {
+      links[i].addEventListener('click', function(){
+        sh.classList.remove('open');
+        m.classList.remove('open');
+        m.setAttribute('aria-expanded', 'false');
+      });
+    }
+  })();
 })();`;
 
 export function rootLandingHtml(url: URL): string {
   const origin = url.origin;
-  const app = `${origin}/view`;
   const endpointsRef = `${origin}/endpoints`;
   const repo = 'https://github.com/guirguispierre/memoryvault';
   return `<!DOCTYPE html>
@@ -1013,295 +1032,278 @@ export function rootLandingHtml(url: URL): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MemoryVault — a living memory for your agents</title>
-<meta name="description" content="Persistent, graph-aware memory for AI agents. Open source, self-hosted on your own Cloudflare account, nothing paywalled.">
+<title>MemoryVault, open-source memory for AI agents</title>
+<meta name="description" content="MemoryVault gives any AI agent a memory it actually keeps. Open source, self-hosted on your own Cloudflare account, nothing paywalled.">
 ${FONT_LINK_TAGS}
 ${constellationHeadTags}
 <style>
 ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
-  body { font-family: var(--body); background: var(--ground); color: var(--cream); -webkit-font-smoothing: antialiased; line-height: 1.5; overflow-x: hidden; }
+  body { font-family: var(--ui); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; line-height: 1.5; overflow-x: hidden; }
   a { color: inherit; text-decoration: none; }
-  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
 
-  /* ── HERO (living constellation) ── */
-  .hero { position: relative; min-height: 100vh; overflow: hidden; }
-  .hero .sky { position: absolute; inset: 0; z-index: 0; }
+  /* ── HERO (living memory graph) ── */
+  .hero-wrap { position: relative; height: 100vh; }
+  #sky { position: absolute; inset: 0; width: 100%; height: 100vh; z-index: 0; display: block; pointer-events: none; }
+  .wrap { position: relative; z-index: 1; }
 
-  .hero-nav { position: relative; z-index: 2; display: flex; align-items: center; gap: 22px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; }
-  .brand { font-family: var(--disp); font-weight: 600; font-size: 18px; color: var(--cream); }
-  .brand .dot { color: var(--butter); }
-  .brand .md { font-family: var(--mono); font-size: 12px; color: var(--cream-faint); margin-left: 2px; }
-  .hero-nav .links { display: flex; gap: 6px; margin-left: 10px; }
-  .hero-nav .links a { font-size: 13px; color: var(--cream-dim); padding: 6px 10px; border-radius: 8px; transition: color 0.15s, background 0.15s; }
-  .hero-nav .links a:hover { color: var(--cream); background: var(--surface); }
-  .hero-nav .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  nav { display: flex; align-items: center; gap: 24px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; position: relative; z-index: 3; }
+  .brand { font-family: var(--doc); font-size: 18px; font-weight: 600; color: var(--ink); }
+  nav .links { display: flex; gap: 22px; margin-left: 14px; }
+  nav .links a { font-size: 14px; color: var(--dim); }
+  nav .links a:hover { color: var(--ink); }
+  nav .r { margin-left: auto; display: flex; gap: 12px; }
 
-  .btn { font-family: var(--body); font-weight: 600; font-size: 14px; border-radius: 10px; padding: 11px 20px; cursor: pointer; border: 1px solid var(--butter); background: var(--butter); color: var(--on-butter); display: inline-flex; align-items: center; gap: 8px; transition: transform 0.15s, box-shadow 0.15s, background 0.15s; }
-  .btn:hover { transform: translateY(-1px); box-shadow: 0 12px 34px var(--butter-glow); }
-  .btn.glass { background: var(--surface); color: var(--cream); border-color: var(--rule-bright); }
-  .btn.glass:hover { background: var(--surface-raised); box-shadow: none; }
-  .hero-nav .btn { font-size: 13px; padding: 9px 16px; }
-  :focus-visible { outline: 2px solid var(--butter); outline-offset: 2px; }
+  .btn { font-family: var(--ui); font-weight: 600; font-size: 14px; border-radius: 9px; padding: 10px 18px; border: 1px solid var(--accent); background: var(--accent); color: #070810; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.15s, box-shadow 0.15s; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(138, 176, 255, 0.3); }
+  .btn.g { background: rgba(255, 255, 255, 0.05); color: var(--ink); border-color: rgba(255, 255, 255, 0.18); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  .hero-body { position: relative; z-index: 2; max-width: 1120px; margin: 0 auto; padding: 13vh 32px 0; text-align: center; }
-  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--butter); margin-bottom: 26px; opacity: 0.92; }
-  .hero h1 { font-family: var(--disp); font-weight: 500; font-size: 70px; line-height: 1.04; letter-spacing: -0.02em; max-width: 15ch; margin: 0 auto; color: var(--cream); text-shadow: 0 2px 40px rgba(80, 110, 220, 0.30); }
-  .hero h1 em { font-style: italic; color: var(--butter); }
-  .hero .sub { font-size: 19px; color: var(--cream-dim); max-width: 48ch; margin: 26px auto 0; line-height: 1.55; }
-  .hero-cta { margin-top: 34px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
-  .hero-cta .btn { font-size: 15px; padding: 12px 22px; }
-  /* Tier legend ties the star colors to real memory states. */
-  .legend { margin-top: 10vh; padding-bottom: 12vh; display: flex; gap: 30px; justify-content: center; font-family: var(--mono); font-size: 11px; color: var(--cream-faint); flex-wrap: wrap; }
-  .legend span { display: flex; align-items: center; gap: 8px; }
-  .legend .ld { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
-  .legend .active { color: var(--sage); }
-  .legend .settling { color: var(--clay); }
-  .legend .fading { color: var(--cream-faint); }
-  .legend .reinforced { color: var(--butter); }
+  .hero { max-width: 1120px; margin: 0 auto; padding: 14vh 32px 0; text-align: center; position: relative; z-index: 2; }
+  .eyebrow { font-weight: 600; font-size: 13px; color: var(--accent); margin-bottom: 22px; }
+  .hero h1 { font-family: var(--doc); font-weight: 500; font-size: 72px; line-height: 1.04; letter-spacing: -0.02em; max-width: 14ch; margin: 0 auto; color: var(--ink); text-shadow: 0 2px 36px rgba(8, 12, 28, 0.55); }
+  .hero h1 em { font-style: italic; color: var(--accent); }
+  .hero .sub { font-size: 19px; color: var(--dim); max-width: 44ch; margin: 26px auto 0; line-height: 1.55; }
+  .cta { margin-top: 32px; display: flex; gap: 14px; justify-content: center; }
 
-  /* ── product shot — dark frame with a soft glow ── */
-  .shot { max-width: 1000px; margin: 0 auto; position: relative; z-index: 1; border: 1px solid var(--rule-bright); border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px var(--card-glow), 0 0 70px var(--butter-glow); background: var(--surface-raised); }
-  .shot img { display: block; width: 100%; }
-
-  /* ── scroll reveals ── (the observer adds .in; a noscript rule below reveals
-     everything when JS is off so nothing stays hidden) */
-  .reveal { opacity: 0; transform: translateY(16px); transition: opacity 0.7s cubic-bezier(0.2,0.7,0.2,1), transform 0.7s cubic-bezier(0.2,0.7,0.2,1); }
+  /* ── sections (one continuous space, no dividers) ── */
+  main { position: relative; z-index: 1; background: var(--bg); }
+  main::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(70% 40% at 50% 0%, rgba(40, 52, 110, 0.18), transparent 55%), radial-gradient(60% 50% at 85% 88%, rgba(30, 80, 70, 0.10), transparent 60%); }
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.7s cubic-bezier(0.2,0.7,0.2,1), transform 0.7s cubic-bezier(0.2,0.7,0.2,1); }
   .reveal.in { opacity: 1; transform: none; }
 
-  /* ── content sections ── */
-  .feature { padding: 88px 0; border-top: 1px solid var(--rule-soft); }
-  .feature:first-of-type { border-top: none; padding-top: 56px; }
-  .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
-  .feature h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; letter-spacing: -0.015em; margin-bottom: 16px; line-height: 1.15; color: var(--cream); }
-  .feature h2 em { font-style: italic; color: var(--butter); }
-  .feature p { font-size: 16px; color: var(--cream-dim); margin-bottom: 14px; line-height: 1.6; }
-  .feature .mini { font-family: var(--mono); font-size: 12px; color: var(--cream-faint); }
-  .panel { background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 12px; padding: 26px; box-shadow: 0 20px 50px var(--card-glow); }
-  .ledger-line { display: flex; align-items: baseline; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--rule-soft); font-size: 14px; }
-  .ledger-line:last-child { border: none; }
-  .ledger-line .k { font-family: var(--mono); font-size: 12px; color: var(--butter); }
-  .ledger-line .arr { color: var(--cream-faint); }
-  .ledger-line .v { font-family: var(--disp); color: var(--cream); }
-  .ledger-line .tag { margin-left: auto; font-family: var(--mono); font-size: 9px; text-transform: uppercase; color: var(--sage); border: 1px solid var(--rule); border-radius: 4px; padding: 1px 5px; }
-  .config { font-family: var(--mono); font-size: 12.5px; color: var(--cream-dim); line-height: 1.9; }
-  .config .c { color: var(--cream-faint); }
-  .config .b { color: var(--butter); }
-  .config .g { color: var(--sage); }
+  .feature { padding: 90px 0; }
+  .fg { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .feature h2 { font-family: var(--doc); font-weight: 500; font-size: 36px; letter-spacing: -0.02em; line-height: 1.14; margin-bottom: 16px; color: var(--ink); }
+  .feature h2 em { font-style: italic; color: var(--accent); }
+  .feature p { font-size: 16.5px; color: var(--dim); line-height: 1.6; margin-bottom: 12px; }
+  .feature .mini { color: var(--faint); font-size: 14px; }
+  .panel { background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0)), var(--surface); border: 1px solid var(--rule); border-radius: 18px; padding: 28px; box-shadow: 0 30px 80px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.05); }
+  /* genuine config / identifiers are the only monospace on the page */
+  .codeblock { font-family: var(--mono); font-size: 13px; line-height: 2; color: var(--dim); }
+  .codeblock .cm { color: var(--faint); }
+  .codeblock .c1 { color: var(--accent); }
+  .codeblock .s { color: var(--ink); }
+  .codeblock .ok { color: var(--good); }
+  .ll { display: flex; align-items: baseline; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--rule); font-size: 14px; }
+  .ll:last-child { border: none; }
+  .ll .k { color: var(--accent); font-family: var(--mono); font-size: 12.5px; }
+  .ll .arr { color: var(--faint); }
+  .ll .v { color: var(--ink); }
+  .ll .tag { margin-left: auto; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--good); border: 1px solid rgba(134,224,184,0.4); border-radius: 5px; padding: 2px 7px; }
 
-  .how { padding: 88px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
-  .how > h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; margin-bottom: 12px; color: var(--cream); }
-  .how > p { color: var(--cream-dim); max-width: 50ch; margin: 0 auto 48px; }
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; text-align: left; }
-  .step { background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 12px; padding: 26px; transition: transform 0.15s, box-shadow 0.15s; }
-  .step:hover { transform: translateY(-2px); box-shadow: 0 16px 40px var(--card-glow); }
-  .step .n { font-family: var(--mono); font-size: 12px; color: var(--butter); margin-bottom: 12px; }
-  .step h3 { font-family: var(--disp); font-weight: 500; font-size: 19px; margin-bottom: 8px; color: var(--cream); }
-  .step p { font-size: 14px; color: var(--cream-dim); line-height: 1.55; }
+  .how { padding: 90px 0; text-align: center; }
+  .how h2 { font-family: var(--doc); font-weight: 500; font-size: 40px; letter-spacing: -0.02em; margin-bottom: 12px; color: var(--ink); }
+  .how > p { color: var(--dim); max-width: 46ch; margin: 0 auto 50px; font-size: 17px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; text-align: left; }
+  .step { background: var(--surface); border: 1px solid var(--rule); border-radius: 16px; padding: 28px; transition: transform 0.2s, border-color 0.2s; }
+  .step:hover { transform: translateY(-3px); border-color: rgba(138,176,255,0.35); }
+  .step .n { font-family: var(--doc); font-style: italic; font-size: 15px; color: var(--accent); margin-bottom: 12px; }
+  .step h3 { font-family: var(--doc); font-weight: 500; font-size: 20px; margin-bottom: 8px; color: var(--ink); }
+  .step p { font-size: 14.5px; color: var(--dim); line-height: 1.55; }
 
-  .agents { padding: 60px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
-  .agents .lbl { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cream-faint); margin-bottom: 22px; }
-  .agent-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
-  .chip { font-family: var(--mono); font-size: 13px; color: var(--cream-dim); border: 1px solid var(--rule); border-radius: 999px; padding: 8px 16px; background: var(--surface-raised); }
+  .pricing { padding: 90px 0; text-align: center; }
+  .pricing h2 { font-family: var(--doc); font-weight: 500; font-size: 40px; letter-spacing: -0.02em; margin-bottom: 12px; color: var(--ink); }
+  .pricing > p { color: var(--dim); max-width: 46ch; margin: 0 auto 50px; font-size: 17px; }
+  .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; max-width: 760px; margin: 0 auto; text-align: left; }
+  .plan { background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; padding: 30px; display: flex; flex-direction: column; }
+  .plan.feat { border-color: rgba(138,176,255,0.5); box-shadow: 0 0 0 1px rgba(138,176,255,0.2), 0 30px 80px rgba(0,0,0,0.4); }
+  .plan .pname { font-family: var(--doc); font-size: 22px; font-weight: 500; margin-bottom: 4px; color: var(--ink); }
+  .plan .price { font-family: var(--doc); font-size: 36px; margin-bottom: 6px; color: var(--ink); }
+  .plan .price small { font-family: var(--ui); font-size: 14px; color: var(--faint); }
+  .plan .desc { font-size: 14.5px; color: var(--dim); margin-bottom: 18px; line-height: 1.5; }
+  .plan ul { list-style: none; margin-bottom: 22px; display: grid; gap: 9px; }
+  .plan li { font-size: 14px; color: var(--dim); padding-left: 22px; position: relative; }
+  .plan li::before { content: "\\2713"; position: absolute; left: 0; color: var(--good); }
+  .plan .pcta { margin-top: auto; display: block; text-align: center; border-radius: 9px; padding: 11px 16px; font-family: var(--ui); font-weight: 600; font-size: 14px; border: 1px solid var(--rule); color: var(--dim); }
+  .plan .pcta.primary { background: var(--accent); border-color: var(--accent); color: #070810; }
+  .plan .note { font-size: 12px; color: var(--faint); text-align: center; margin-top: 10px; line-height: 1.4; }
 
-  .pricing { padding: 88px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
-  .pricing > h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; margin-bottom: 12px; color: var(--cream); }
-  .pricing > p { color: var(--cream-dim); margin-bottom: 44px; }
-  .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 760px; margin: 0 auto; text-align: left; }
-  .plan { background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 14px; padding: 30px; display: flex; flex-direction: column; }
-  .plan.feat { border-color: var(--butter); box-shadow: 0 0 0 3px var(--butter-glow); }
-  .plan .name { font-family: var(--disp); font-size: 22px; font-weight: 500; margin-bottom: 4px; color: var(--cream); }
-  .plan .price { font-family: var(--disp); font-size: 34px; margin-bottom: 4px; color: var(--cream); }
-  .plan .price small { font-family: var(--body); font-size: 14px; color: var(--cream-faint); }
-  .plan .desc { font-size: 14px; color: var(--cream-dim); margin-bottom: 18px; }
-  .plan ul { list-style: none; margin-bottom: 22px; }
-  .plan li { font-size: 13.5px; color: var(--cream-dim); padding: 6px 0 6px 22px; position: relative; }
-  .plan li::before { content: "\\2713"; position: absolute; left: 0; color: var(--sage); font-weight: 600; }
-  .plan .cta { margin-top: auto; display: block; text-align: center; border-radius: 9px; padding: 10px 16px; font-family: var(--body); font-weight: 600; font-size: 13.5px; border: 1px solid var(--rule); color: var(--cream-dim); }
-  .plan .cta.primary { background: var(--butter); border-color: var(--butter); color: var(--on-butter); }
-  .plan .note { font-family: var(--mono); font-size: 10px; color: var(--cream-faint); text-align: center; margin-top: 8px; }
-
-  .faq { padding: 88px 0; border-top: 1px solid var(--rule-soft); }
-  .faq > h2 { font-family: var(--disp); font-weight: 500; font-size: 34px; margin-bottom: 24px; text-align: center; color: var(--cream); }
+  .faq { padding: 90px 0; }
+  .faq h2 { font-family: var(--doc); font-weight: 500; font-size: 40px; letter-spacing: -0.02em; margin-bottom: 28px; text-align: center; color: var(--ink); }
   .qa { max-width: 760px; margin: 0 auto; }
-  .faq-item { border-bottom: 1px solid var(--rule-soft); }
-  .faq-q { width: 100%; text-align: left; background: none; border: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 20px 0; font-family: var(--disp); font-size: 18px; font-weight: 500; color: var(--cream); }
-  .faq-q .chev { margin-left: auto; flex-shrink: 0; color: var(--cream-faint); transition: transform 0.25s; }
+  .faq-item { border-bottom: 1px solid var(--rule); }
+  .faq-q { width: 100%; text-align: left; background: none; border: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 22px 0; font-family: var(--doc); font-size: 19px; font-weight: 500; color: var(--ink); }
+  .faq-q .chev { margin-left: auto; flex-shrink: 0; color: var(--faint); transition: transform 0.25s; }
   .faq-item.open .faq-q .chev { transform: rotate(180deg); }
   .faq-a-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.3s ease; }
   .faq-item.open .faq-a-wrap { grid-template-rows: 1fr; }
   .faq-a-inner { overflow: hidden; }
-  .faq-a { padding: 0 0 20px; font-size: 15px; color: var(--cream-dim); line-height: 1.6; max-width: 64ch; }
+  .faq-a { padding: 0 0 22px; font-size: 15.5px; color: var(--dim); line-height: 1.6; max-width: 64ch; }
 
-  .final { padding: 100px 0; border-top: 1px solid var(--rule-soft); text-align: center; }
-  .final h2 { font-family: var(--disp); font-weight: 500; font-size: 44px; letter-spacing: -0.02em; max-width: 16ch; margin: 0 auto 24px; line-height: 1.1; color: var(--cream); }
-  .final h2 em { font-style: italic; color: var(--butter); }
-  .final-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-  .final-cta .btn { font-size: 15px; padding: 13px 26px; }
-  .final-cta .solid { background: var(--butter); color: var(--on-butter); }
-  .final-cta .ghost { background: transparent; color: var(--cream-dim); border-color: var(--rule); }
-  .final-cta .ghost:hover { border-color: var(--butter-deep); color: var(--cream); }
+  /* glow bleeds beyond the section so there is no hard cutoff band */
+  .final { padding: 130px 32px 120px; text-align: center; position: relative; overflow: visible; }
+  .final::before { content: ""; position: absolute; left: 0; right: 0; top: -340px; bottom: -120px; background: radial-gradient(50% 60% at 50% 50%, rgba(138,176,255,0.14), transparent 70%); pointer-events: none; }
+  .final h2 { position: relative; font-family: var(--doc); font-weight: 500; font-size: 46px; letter-spacing: -0.02em; max-width: 18ch; margin: 0 auto 26px; line-height: 1.08; color: var(--ink); }
+  .final h2 em { font-style: italic; color: var(--accent); }
+  .final .cta { position: relative; }
 
-  footer { border-top: 1px solid var(--rule); padding: 38px 0; color: var(--cream-faint); font-size: 13px; }
-  .foot-in { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .foot-in a:hover { color: var(--butter); }
-  .ok { font-family: var(--mono); font-size: 11px; color: var(--sage); display: inline-flex; align-items: center; }
-  .ping { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--sage); position: relative; margin-right: 8px; }
-  .ping::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--sage); animation: ping 1.8s cubic-bezier(0,0,0.2,1) infinite; }
-  @keyframes ping { 0% { transform: scale(1); opacity: 0.55; } 80%, 100% { transform: scale(2.6); opacity: 0; } }
+  footer { border-top: 1px solid var(--rule); padding: 36px 0; color: var(--faint); font-size: 13px; }
+  .fi { max-width: 1080px; margin: 0 auto; padding: 0 32px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .fi a:hover { color: var(--accent); }
+
+  /* mobile nav: hamburger + dropdown sheet */
+  .menu { display: none; margin-left: auto; width: 40px; height: 40px; border: 1px solid var(--rule); border-radius: 10px; background: rgba(255,255,255,0.04); cursor: pointer; flex-direction: column; gap: 4px; align-items: center; justify-content: center; }
+  .menu span { display: block; width: 18px; height: 1.5px; background: var(--ink); border-radius: 2px; transition: 0.2s; }
+  .menu.open span:nth-child(1) { transform: translateY(5.5px) rotate(45deg); }
+  .menu.open span:nth-child(2) { opacity: 0; }
+  .menu.open span:nth-child(3) { transform: translateY(-5.5px) rotate(-45deg); }
+  .sheet { display: none; position: fixed; top: 70px; left: 16px; right: 16px; z-index: 60; background: rgba(13,15,26,0.96); backdrop-filter: blur(14px); border: 1px solid var(--rule); border-radius: 16px; padding: 10px; flex-direction: column; box-shadow: 0 30px 80px rgba(0,0,0,0.6); }
+  .sheet.open { display: flex; }
+  .sheet a { padding: 14px 16px; color: var(--ink); font-size: 16px; border-radius: 10px; }
+  .sheet a:active { background: rgba(255,255,255,0.06); }
+  .sheet a.primary { background: var(--accent); color: #070810; font-weight: 600; text-align: center; margin-top: 4px; }
 
   @media (max-width: 760px) {
-    .container { padding: 0 20px; }
-    .hero-nav { padding: 16px 20px; gap: 12px; }
-    .hero-nav .links { display: none; }
-    .hero h1 { font-size: 42px; }
-    .hero .sub { font-size: 16px; }
-    .hero-body { padding: 9vh 20px 0; }
-    .legend { gap: 18px; margin-top: 8vh; padding-bottom: 10vh; }
-    .feature-grid { grid-template-columns: 1fr; gap: 28px; }
-    .feature, .how, .pricing, .faq, .final { padding: 56px 0; }
-    .steps { grid-template-columns: 1fr; }
-    .plans { grid-template-columns: 1fr; }
-    .final h2 { font-size: 32px; }
+    h1 { font-size: 38px; line-height: 1.06; }
+    .hero { padding: 13vh 22px 0; }
+    .hero .sub { font-size: 17px; margin-top: 20px; }
+    .cta { flex-direction: column; gap: 12px; align-items: center; }
+    .cta .btn { width: 100%; max-width: 300px; justify-content: center; }
+    nav .links, nav .r { display: none; }
+    .menu { display: flex; }
+    .container { padding: 0 22px; }
+    .fg { grid-template-columns: 1fr; gap: 26px; }
+    .steps, .plans { grid-template-columns: 1fr; }
+    .feature, .how, .pricing, .faq { padding: 64px 0; }
+    .feature h2, .how h2, .pricing h2, .faq h2, .final h2 { font-size: 30px; }
+    .final { padding: 90px 22px 100px; }
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
     .faq-a-wrap, .faq-q .chev, .step, .btn { transition: none !important; }
-    .ping::after { animation: none !important; }
   }
 </style>
 <noscript><style>.reveal { opacity: 1; transform: none; }</style></noscript>
 </head>
 <body>
   <div class="space"></div>
-  <section class="hero">
+  <div class="hero-wrap">
     <canvas id="sky" class="sky" aria-hidden="true"></canvas>
-
-    <nav class="hero-nav">
-      <a class="brand" href="${origin}/">memoryvault<span class="dot">.</span><span class="md">md</span></a>
-      <div class="links"><a href="#features">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a></div>
-      <div class="right"><a class="btn glass" href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="btn" href="${app}">Deploy free</a></div>
-    </nav>
-
-    <div class="hero-body">
-      <div class="eyebrow">a living memory for your agents</div>
-      <h1>Memory that <em>strengthens</em>, fades, and connects itself.</h1>
-      <p class="sub">Not a static file — a graph that reinforces what matters, lets the rest decay, and gives every agent the same evolving picture of you.</p>
-      <div class="hero-cta">
-        <a class="btn" href="${app}">Deploy your own — free <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
-        <a class="btn glass" href="${repo}" target="_blank" rel="noopener">View on GitHub</a>
+    <div class="wrap">
+      <nav>
+        <span class="brand">MemoryVault</span>
+        <div class="links"><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a></div>
+        <div class="r"><a class="btn g" href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy free</a></div>
+        <button class="menu" id="menu" type="button" aria-label="Menu" aria-expanded="false"><span></span><span></span><span></span></button>
+      </nav>
+      <div class="sheet" id="sheet">
+        <a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="primary" href="${repo}" target="_blank" rel="noopener">Deploy free</a>
       </div>
-      <div class="legend">
-        <span class="active"><i class="ld"></i>active</span>
-        <span class="settling"><i class="ld"></i>settling</span>
-        <span class="fading"><i class="ld"></i>fading</span>
-        <span class="reinforced"><i class="ld"></i>reinforced</span>
-      </div>
+      <section class="hero">
+        <div class="eyebrow">Open-source memory for AI agents</div>
+        <h1>Your agents forget everything. <em>Fix that.</em></h1>
+        <p class="sub">MemoryVault gives any AI agent a memory it actually keeps. It learns what matters, drops what doesn't, and runs entirely on servers you own.</p>
+        <div class="cta">
+          <a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy your own, free</a>
+          <a class="btn g" href="${repo}" target="_blank" rel="noopener">View on GitHub</a>
+        </div>
+      </section>
     </div>
-  </section>
+  </div>
 
-  <div class="shot reveal"><img src="/assets/product-shot.webp" alt="The MemoryVault viewer showing recall and the memory graph" decoding="async"></div>
+  <main>
+    <section class="feature container">
+      <div class="fg">
+        <div class="reveal">
+          <h2>A graph of memory, <em>nothing paywalled</em></h2>
+          <p>Most tools lock the graph behind a Pro tier, or keep it closed entirely. MemoryVault keeps it open from the first commit. Links, traversal, history, all of it.</p>
+          <p class="mini">Notes, facts, and journal entries. Connected, weighted, searchable.</p>
+        </div>
+        <div class="panel reveal">
+          <div class="ll"><span class="k">project.license</span><span class="arr">&rarr;</span><span class="v">MIT, fully open</span><span class="tag">verified</span></div>
+          <div class="ll"><span class="k">user.timezone</span><span class="arr">&rarr;</span><span class="v">Europe/Lisbon</span><span class="tag">verified</span></div>
+          <div class="ll"><span class="k">graph.enabled</span><span class="arr">&rarr;</span><span class="v">true. no upsell</span></div>
+        </div>
+      </div>
+    </section>
 
-  <section class="feature container" id="features">
-    <div class="feature-grid">
-      <div class="reveal">
-        <h2>A graph of memory, <em>nothing paywalled</em></h2>
-        <p>Most memory tools lock the graph behind a Pro tier or keep it closed-source entirely. MemoryVault ships connected, graph-aware memory in the open — links, traversal, and provenance included from the first commit.</p>
-        <p class="mini">notes · facts · journal — linked, scored, and queryable</p>
+    <section class="feature container">
+      <div class="fg">
+        <div class="panel reveal">
+          <div class="codeblock">
+            <div class="cm"># wrangler.toml</div>
+            <div><span class="c1">[[vectorize]]</span></div>
+            <div><span class="s">binding = "MEMORY_INDEX"</span></div>
+            <div><span class="c1">[[d1_databases]]</span></div>
+            <div><span class="s">database_name = "your-brain"</span></div>
+            <div class="ok">&#10003; nothing leaves your Cloudflare account</div>
+          </div>
+        </div>
+        <div class="reveal">
+          <h2>Self-hosted. <em>You own the data.</em></h2>
+          <p>Deploy to your own Cloudflare account in a few minutes. There's no server of ours in the middle. Your agent's memory lives under your keys, not ours.</p>
+          <p class="mini">One command. Runs on Workers, D1, and Vectorize.</p>
+        </div>
       </div>
-      <div class="panel reveal">
-        <div class="ledger-line"><span class="k">project.license</span><span class="arr">&rarr;</span><span class="v">MIT, fully open</span><span class="tag">verified</span></div>
-        <div class="ledger-line"><span class="k">user.timezone</span><span class="arr">&rarr;</span><span class="v">Europe/Lisbon</span><span class="tag">verified</span></div>
-        <div class="ledger-line"><span class="k">graph.enabled</span><span class="arr">&rarr;</span><span class="v">true — no upsell</span></div>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="feature container">
-    <div class="feature-grid">
-      <div class="panel config reveal">
-        <div class="c"># your account, your data</div>
-        <div><span class="b">[[vectorize]]</span> binding = "MEMORY_INDEX"</div>
-        <div><span class="b">[[d1_databases]]</span> name = "your-brain"</div>
-        <div class="g">&#10003; memories never leave your Cloudflare account</div>
+    <section class="how container" id="how">
+      <h2 class="reveal">How it works</h2>
+      <p class="reveal">Connect once. Your agents read your context before they answer, and write back what they learn.</p>
+      <div class="steps">
+        <div class="step reveal"><div class="n">First</div><h3>Deploy your vault</h3><p>One command stands up your own memory server on Cloudflare, under your account.</p></div>
+        <div class="step reveal"><div class="n">Then</div><h3>Connect your agents</h3><p>Point Claude, Codex, or any client at it. They read before they answer, then write back after.</p></div>
+        <div class="step reveal"><div class="n">Over time</div><h3>It gets sharper</h3><p>What you use is reinforced. What you don't fades. You stay in control of what sticks.</p></div>
       </div>
-      <div class="reveal">
-        <h2>Self-hosted. <em>You own the data.</em></h2>
-        <p>Deploy to your own Cloudflare account in minutes. There's no MemoryVault server in the middle — your agent's memory lives in your D1 and Vectorize, under your keys. Nothing to trust us with.</p>
-        <p class="mini">one-command deploy · D1 + Vectorize + Workers</p>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="how container" id="how">
-    <h2 class="reveal">How it works</h2>
-    <p class="reveal">Connect once. Your agents read and write memory before and after every answer.</p>
-    <div class="steps">
-      <div class="step reveal"><div class="n">01</div><h3>Deploy your vault</h3><p>One command stands up your own memory server on Cloudflare — D1, Vectorize, and Workers, under your account.</p></div>
-      <div class="step reveal"><div class="n">02</div><h3>Connect your agents</h3><p>Point Claude, Codex, or any MCP client at your endpoint. They read your context before answering and write back what they learn.</p></div>
-      <div class="step reveal"><div class="n">03</div><h3>Watch it strengthen</h3><p>Memories reinforce, decay, and link over time. The index sharpens itself — you review what sticks.</p></div>
-    </div>
-  </section>
+    <section class="pricing container" id="pricing">
+      <h2 class="reveal">Start free. Host it yourself, or let us.</h2>
+      <p class="reveal">The whole thing is open source. You only pay if you want us to run it for you.</p>
+      <div class="plans">
+        <div class="plan reveal">
+          <div class="pname">Self-host</div>
+          <div class="price">$0</div>
+          <div class="desc">Run it on your own Cloudflare account, forever.</div>
+          <ul><li>Full source, MIT licensed</li><li>Graph and all features</li><li>Your data, your keys</li><li>Community support</li></ul>
+          <a class="pcta" href="${repo}" target="_blank" rel="noopener">Deploy from GitHub</a>
+        </div>
+        <div class="plan feat reveal">
+          <div class="pname">Hosted</div>
+          <div class="price">$12<small>/mo</small></div>
+          <div class="desc">We run it for you. Backups, sync, and support.</div>
+          <ul><li>Everything in Self-host</li><li>Managed multi-device sync</li><li>Automatic backups</li><li>Priority support</li></ul>
+          <a class="pcta primary" href="${repo}" target="_blank" rel="noopener">Join the waitlist</a>
+          <div class="note">Not billable yet. The GitHub repo is where to follow along.</div>
+        </div>
+      </div>
+    </section>
 
-  <section class="agents container">
-    <div class="lbl reveal">Works with your stack</div>
-    <div class="agent-row reveal"><span class="chip">Claude</span><span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Any MCP client</span><span class="chip">REST API</span></div>
-  </section>
+    <section class="faq container" id="faq">
+      <h2 class="reveal">Questions</h2>
+      <div class="qa reveal">
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">Is it really fully open source?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">Yes. MIT licensed, graph and all. There is no paywalled tier of the software itself. The only thing you would ever pay for is optional managed hosting.</div></div></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">Where does my data live?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">In your own Cloudflare account. Your D1 database and Vectorize index, under your keys. If you self-host, your memories never touch our infrastructure.</div></div></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">Which agents does it work with?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">Anything that speaks MCP. Claude, Claude Code, Codex, and custom agents, plus a plain REST API for everything else.</div></div></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button" aria-expanded="false">How is it different from other memory tools?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">It is graph-aware and open with nothing paywalled, self-hosted so you own the data, and its tenant isolation is covered by an adversarial test suite, not asserted in a blog post.</div></div></div>
+        </div>
+      </div>
+    </section>
 
-  <section class="pricing container" id="pricing">
-    <h2 class="reveal">Start free. Host it yourself, or let us.</h2>
-    <p class="reveal">The whole thing is open source. Pay only if you want managed hosting.</p>
-    <div class="plans">
-      <div class="plan reveal">
-        <div class="name">Self-host</div>
-        <div class="price">$0</div>
-        <div class="desc">Run it on your own Cloudflare account, forever.</div>
-        <ul><li>Full source, MIT licensed</li><li>Graph + all features</li><li>Your data, your keys</li><li>Community support</li></ul>
-        <a class="cta" href="${repo}" target="_blank" rel="noopener">Deploy from GitHub</a>
+    <section class="final">
+      <h2>Give your agents a memory <em>you control</em></h2>
+      <div class="cta">
+        <a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy your own, free</a>
+        <a class="btn g" href="${endpointsRef}">Read the docs</a>
       </div>
-      <div class="plan feat reveal">
-        <div class="name">Hosted</div>
-        <div class="price">$12<small>/mo</small></div>
-        <div class="desc">We run it for you — backups, sync, and support.</div>
-        <ul><li>Everything in Self-host</li><li>Managed multi-device sync</li><li>Automatic backups</li><li>Priority support</li></ul>
-        <a class="cta primary" href="${repo}" target="_blank" rel="noopener">Coming soon</a>
-        <div class="note">not yet billable — follow along on GitHub</div>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="faq container" id="faq">
-    <h2 class="reveal">Questions</h2>
-    <div class="qa reveal">
-      <div class="faq-item">
-        <button class="faq-q" type="button" aria-expanded="false">Is it really fully open source?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-        <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">Yes — MIT licensed, graph and all. There's no paywalled tier of the software itself; the only thing you'd ever pay for is optional managed hosting.</div></div></div>
-      </div>
-      <div class="faq-item">
-        <button class="faq-q" type="button" aria-expanded="false">Where does my data live?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-        <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">In your own Cloudflare account — your D1 database and Vectorize index, under your keys. If you self-host, your memories never touch our infrastructure.</div></div></div>
-      </div>
-      <div class="faq-item">
-        <button class="faq-q" type="button" aria-expanded="false">Which agents does it work with?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-        <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">Anything that speaks MCP — Claude, Claude Code, Codex, and custom agents — plus a plain REST API for everything else.</div></div></div>
-      </div>
-      <div class="faq-item">
-        <button class="faq-q" type="button" aria-expanded="false">How is it different from other memory tools?<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-        <div class="faq-a-wrap"><div class="faq-a-inner"><div class="faq-a">Graph-aware and open with nothing paywalled, self-hosted so you own the data, and tenant isolation that's covered by an adversarial test suite rather than asserted in a blog post.</div></div></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="final container">
-    <h2 class="reveal">Give your agents a memory <em>you control</em></h2>
-    <div class="final-cta reveal">
-      <a class="btn solid" href="${app}">Deploy your own — free</a>
-      <a class="btn ghost" href="${endpointsRef}">Read the docs</a>
-    </div>
-  </section>
-
-  <footer><div class="container foot-in"><span>&copy; 2026 MemoryVault · MIT licensed · <a href="${endpointsRef}">endpoints</a></span><span class="ok"><span class="ping"></span>all systems operational</span></div></footer>
+    <footer><div class="fi"><span>&copy; 2026 MemoryVault &middot; MIT licensed</span><span>built on Cloudflare</span></div></footer>
+  </main>
 
   <script src="/starfield.js" defer></script>
   <script src="/landing.js"></script>
@@ -1370,7 +1372,7 @@ export function endpointsIndexHtml(url: URL): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MemoryVault — Endpoints</title>
+<title>Endpoints · MemoryVault</title>
 ${FONT_LINK_TAGS}
 ${constellationHeadTags}
 <style>
