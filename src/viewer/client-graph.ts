@@ -420,6 +420,9 @@ export const clientGraph = `
         case 'show-list':
           showList();
           break;
+        case 'toggle-graph-3d':
+          toggleGraph3d();
+          break;
         case 'open-new-memory':
           openNewMemory();
           break;

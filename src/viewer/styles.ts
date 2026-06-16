@@ -825,6 +825,10 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
   .connection-chip .chip-relation.supersedes { border-color: var(--butter-deep); color: var(--butter); }
   .connection-chip .chip-relation.supports { border-color: var(--sage); color: var(--sage); }
 
+  /* Opt-in 3D graph layer: fills the view, sits under the toolbar/legend. */
+  #graph-3d { position: absolute; inset: 0; display: none; z-index: 5; }
+  #graph-3d canvas { display: block; }
+
   /* ── GRAPH ── */
   .graph-node circle { stroke-width: 2px; cursor: pointer; transition: r 0.15s, opacity 0.18s, stroke-opacity 0.18s; }
   .graph-node circle:hover { r: 10; }

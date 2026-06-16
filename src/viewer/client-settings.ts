@@ -336,6 +336,8 @@ export const clientSettings = `  function fillSettingsForm() {
     if (wrap) wrap.style.display = '';
     syncModeSwitch('memories');
     if (typeof railSync === 'function') railSync();
+    // Leaving the graph view: tear down the WebGL renderer if 3D was on.
+    if (typeof teardownGraph3d === 'function') teardownGraph3d();
   }
 
   function setFilter(type) {
@@ -493,6 +495,8 @@ export const clientSettings = `  function fillSettingsForm() {
   function rerenderGraphFromCache() {
     const data = cloneGraphData();
     renderGraph(data.nodes, data.edges, data.inferred_edges);
+    // Keep the 3D view's data in step with filter/relation/search changes.
+    if (typeof graph3dUpdateData === 'function') graph3dUpdateData();
   }
 
   function toggleGraphInferred() {
@@ -569,6 +573,8 @@ export const clientSettings = `  function fillSettingsForm() {
       }
       syncGraphToolbarState();
       rerenderGraphFromCache();
+      // Render in 3D instead if the per-brain preference is on (lazy-loads CDN).
+      if (typeof applyGraphMode === 'function') applyGraphMode();
       showToast('Graph loaded: ' + lastGraphData.nodes.length + ' nodes.', 'success');
     } catch(e) {
       document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--clay);font-family:var(--mono);font-size:12px;letter-spacing:0.06em">The graph could not load — try again.</text>';

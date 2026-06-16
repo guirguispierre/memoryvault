@@ -109,6 +109,7 @@ export const bodyMarkup = `</style>
         <button class="graph-btn active" id="graph-toggle-labels" data-action="toggle-graph-labels">LABELS ON</button>
         <button class="graph-btn active" id="graph-toggle-physics" data-action="toggle-graph-physics">PHYSICS ON</button>
         <button class="graph-btn" data-action="reset-graph-view">RESET VIEW</button>
+        <button class="graph-btn" id="graph-toggle-3d" data-action="toggle-graph-3d" aria-pressed="false">3D OFF</button>
       </div>
       <div class="graph-toolbar-row">
         <button class="graph-btn relation active" id="graph-rel-related" data-action="toggle-graph-relation" data-relation="related">RELATED</button>
@@ -121,6 +122,7 @@ export const bodyMarkup = `</style>
     </div>
     <div class="graph-legend" id="graph-legend"></div>
     <svg id="graph-svg" style="width:100%;height:100%;min-height:600px"></svg>
+    <div id="graph-3d" aria-hidden="true"></div>
     <div id="graph-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;color:var(--cream-dim);font-size:14px;padding:1rem">Nothing here yet — save your first memory.</div>
   </div>
   <section id="onboarding" class="onboarding" hidden></section>
