@@ -490,8 +490,20 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
   function expandCard(idx) {
     const m = displayedMemories[idx];
     if (!m) return;
-    const date = new Date(m.created_at * 1000).toLocaleString();
-    const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';
+    selectedMemoryIndex = idx;
+    selectedMemoryId = m.id;
+    openMemoryDetail(m);
+  }
+
+  // Open the detail overlay for a memory object. Works for a full list record
+  // and for a graph node (which carries no created_at/updated_at), so a node
+  // outside the current list filter still opens.
+  function openMemoryDetail(m) {
+    if (!m) return;
+    const createdTs = Number(m.created_at);
+    const updatedTs = Number(m.updated_at);
+    const date = Number.isFinite(createdTs) && createdTs > 0 ? new Date(createdTs * 1000).toLocaleString() : '';
+    const updated = (Number.isFinite(updatedTs) && updatedTs > 0 && updatedTs !== createdTs) ? '  ·  Updated ' + new Date(updatedTs * 1000).toLocaleString() : '';
     const qualityChips = [
       m.source ? \`<span class="tag">src:\${esc(m.source)}</span>\` : '',
       Number.isFinite(Number(m.dynamic_confidence ?? m.confidence)) ? \`<span class="tag">conf:\${Math.round(Number(m.dynamic_confidence ?? m.confidence) * 100)}%</span>\` : '',
@@ -507,8 +519,8 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       \${showKeyLine ? \`<div class="expand-key" style="margin-bottom:0.4rem">\${esc(m.key)}</div>\` : ''}
       \${m.tags ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('')}</div>\` : ''}
       \${qualityChips ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${qualityChips}</div>\` : ''}\`;
-    document.getElementById('expand-content').textContent = m.content;
-    document.getElementById('expand-meta').textContent = 'ID: ' + m.id + '  ·  Created ' + date + updated;
+    document.getElementById('expand-content').textContent = m.content || '';
+    document.getElementById('expand-meta').textContent = 'ID: ' + m.id + (date ? '  ·  Created ' + date + updated : '');
     document.getElementById('expand-overlay').classList.add('open');
     document.body.style.overflow = 'hidden';
 

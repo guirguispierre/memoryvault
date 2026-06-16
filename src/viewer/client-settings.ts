@@ -355,25 +355,25 @@ export const clientSettings = `  function fillSettingsForm() {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  // Select a memory by id and open its detail. Resolves from the filtered list
+  // first (full record) and falls back to the graph payload, so clicking a graph
+  // node or a linked memory outside the current filter always opens.
   function expandById(id) {
-    const idx = displayedMemories.findIndex(m => m.id === id);
-    if (idx !== -1) {
-      expandCard(idx);
-    } else {
-      // Memory not found in current view (may be filtered out or not yet loaded)
-      const connEl = document.getElementById('expand-connections');
-      if (connEl) {
-        const note = document.createElement('div');
-        note.style.cssText = 'font-size:12px;color:var(--cream-faint);margin-top:0.5rem';
-        note.textContent = 'That linked memory is not visible in the current filter.';
-        const existing = connEl.querySelector('.connections-section');
-        if (existing) {
-          existing.appendChild(note);
-        } else {
-          connEl.appendChild(note);
-        }
-      }
+    const key = String(id);
+    const idx = displayedMemories.findIndex(m => String(m.id) === key);
+    let m = idx !== -1 ? displayedMemories[idx] : null;
+    if (!m && lastGraphData && Array.isArray(lastGraphData.nodes)) {
+      m = lastGraphData.nodes.find(n => String(n.id) === key) || null;
     }
+    if (!m) return;
+    selectedMemoryIndex = idx;
+    selectedMemoryId = m.id;
+    document.querySelectorAll('#grid .r').forEach((el) => {
+      el.classList.toggle('sel', Number(el.getAttribute('data-card-index')) === idx);
+    });
+    if (typeof updateRailSelection === 'function') updateRailSelection(m);
+    if (graphVisible && typeof focusGraphNode === 'function') focusGraphNode(key);
+    openMemoryDetail(m);
   }
 
   let lastPollSig = '';
