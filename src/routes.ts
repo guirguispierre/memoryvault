@@ -940,6 +940,7 @@ function sanitizeViewerSettings(raw: unknown): Record<string, unknown> {
     graph_show_labels: asViewerBool(src.graph_show_labels, true),
     graph_physics_enabled: asViewerBool(src.graph_physics_enabled, true),
     graph_focus_highlight: asViewerBool(src.graph_focus_highlight, true),
+    graph_3d: asViewerBool(src.graph_3d, false),
     auto_open_graph: asViewerBool(src.auto_open_graph, false),
     toasts_enabled: asViewerBool(src.toasts_enabled, true),
     toast_duration_ms: clampViewerInt(src.toast_duration_ms, 1200, 8000, 2300),
