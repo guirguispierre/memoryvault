@@ -311,17 +311,34 @@ export const clientSettings = `  function fillSettingsForm() {
   }
 
   function syncFilterPills(type) {
-    ['all','note','fact','journal','graph'].forEach(t => {
-      document.getElementById('stat-' + t).classList.toggle('active', (type === '' ? 'all' : type) === t);
+    ['all','note','fact','journal'].forEach(t => {
+      const el = document.getElementById('stat-' + t);
+      if (el) el.classList.toggle('active', (type === '' ? 'all' : type) === t);
     });
   }
 
-  function setFilter(type) {
+  // The top-bar segmented control: 'memories' = the list home, 'graph' = the
+  // full graph view. Kept in sync with whichever view is actually shown.
+  function syncModeSwitch(mode) {
+    const mem = document.getElementById('mode-memories');
+    const gr = document.getElementById('mode-graph');
+    if (mem) { mem.classList.toggle('active', mode === 'memories'); mem.setAttribute('aria-selected', mode === 'memories' ? 'true' : 'false'); }
+    if (gr) { gr.classList.toggle('active', mode === 'graph'); gr.setAttribute('aria-selected', mode === 'graph' ? 'true' : 'false'); }
+  }
+
+  // Return to the list home from the graph view without disturbing the active
+  // type filter (so the 'Memories' tab is not a reset).
+  function showList() {
     graphVisible = false;
     const graphView = document.getElementById('graph-view');
-    graphView.classList.remove('visible');
-    graphView.style.display = 'none';
-    document.querySelector('.grid-wrap').style.display = 'grid';
+    if (graphView) { graphView.classList.remove('visible'); graphView.style.display = 'none'; }
+    const wrap = document.querySelector('.grid-wrap');
+    if (wrap) wrap.style.display = '';
+    syncModeSwitch('memories');
+  }
+
+  function setFilter(type) {
+    showList();
     activeFilter = type;
     syncFilterPills(type);
     loadMemories();
@@ -519,11 +536,9 @@ export const clientSettings = `  function fillSettingsForm() {
   async function showGraph() {
     graphVisible = true;
     syncGraphToolbarState();
-    ['all','note','fact','journal'].forEach(t => {
-      document.getElementById('stat-' + t).classList.remove('active');
-    });
-    document.getElementById('stat-graph').classList.add('active');
-    document.querySelector('.grid-wrap').style.display = 'none';
+    syncModeSwitch('graph');
+    const wrap = document.querySelector('.grid-wrap');
+    if (wrap) wrap.style.display = 'none';
     const graphView = document.getElementById('graph-view');
     graphView.classList.remove('visible');
     graphView.style.display = 'block';

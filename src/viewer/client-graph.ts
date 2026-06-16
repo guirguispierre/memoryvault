@@ -379,6 +379,21 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
         case 'show-graph':
           showGraph();
           break;
+        case 'show-list':
+          showList();
+          break;
+        case 'open-new-memory':
+          openNewMemory();
+          break;
+        case 'close-new-memory':
+          closeNewMemory();
+          break;
+        case 'close-new-memory-overlay':
+          closeNewMemoryOverlay(event);
+          break;
+        case 'submit-new-memory':
+          submitNewMemory();
+          break;
         case 'refresh-memories':
           loadMemories();
           break;
@@ -568,7 +583,16 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
     const settingsOpen = document.getElementById('settings-overlay').classList.contains('open');
     const changelogOpen = document.getElementById('changelog-overlay').classList.contains('open');
     const expandOpen = document.getElementById('expand-overlay').classList.contains('open');
+    const newMemoryOpen = document.getElementById('newmem-overlay').classList.contains('open');
     const typing = isTypingTarget(e.target);
+
+    if (newMemoryOpen) {
+      if (key === 'escape') {
+        e.preventDefault();
+        closeNewMemory();
+      }
+      return;
+    }
 
     if ((e.ctrlKey || e.metaKey) && key === 'k') {
       e.preventDefault();

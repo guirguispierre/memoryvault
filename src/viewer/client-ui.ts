@@ -733,4 +733,79 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     else overlay.classList.add('open');
   }
 
+  // New-memory composer. Writes a real memory through the same authenticated
+  // MCP path agents use (memory_save); no new server surface, no faked data.
+  let newMemorySaving = false;
+
+  function setNewMemoryError(message) {
+    const el = document.getElementById('newmem-err');
+    if (!el) return;
+    el.textContent = message || '';
+    el.style.display = message ? 'block' : 'none';
+  }
+
+  function openNewMemory() {
+    if (!ensureAppReady('New memory')) return;
+    const overlay = document.getElementById('newmem-overlay');
+    if (!overlay) return;
+    setNewMemoryError('');
+    overlay.classList.add('open');
+    setTimeout(() => {
+      const content = document.getElementById('newmem-content');
+      if (content) content.focus();
+    }, 0);
+  }
+
+  function closeNewMemory() {
+    const overlay = document.getElementById('newmem-overlay');
+    if (overlay) overlay.classList.remove('open');
+  }
+
+  function closeNewMemoryOverlay(event) {
+    const overlay = document.getElementById('newmem-overlay');
+    if (!overlay) return;
+    if (event && event.target !== overlay) return;
+    overlay.classList.remove('open');
+  }
+
+  async function submitNewMemory() {
+    if (!ensureAppReady('New memory')) return;
+    if (newMemorySaving) return;
+    const typeEl = document.getElementById('newmem-type');
+    const titleEl = document.getElementById('newmem-title');
+    const keyEl = document.getElementById('newmem-key');
+    const contentEl = document.getElementById('newmem-content');
+    const btn = document.getElementById('newmem-save-btn');
+    const type = (typeEl && typeEl.value) || 'note';
+    const title = (titleEl && titleEl.value.trim()) || '';
+    const key = (keyEl && keyEl.value.trim()) || '';
+    const content = (contentEl && contentEl.value.trim()) || '';
+    if (!content) {
+      setNewMemoryError('Content is required.');
+      if (contentEl) contentEl.focus();
+      return;
+    }
+    setNewMemoryError('');
+    newMemorySaving = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    const args = { type: type, content: content, source: 'viewer' };
+    if (title) args.title = title;
+    if (key) args.key = key;
+    try {
+      await callMcpTool('memory_save', args, 'viewer-new-memory');
+      closeNewMemory();
+      if (typeEl) typeEl.value = 'note';
+      if (titleEl) titleEl.value = '';
+      if (keyEl) keyEl.value = '';
+      if (contentEl) contentEl.value = '';
+      showToast('Memory saved.', 'success', true);
+      await loadMemories(true);
+    } catch (err) {
+      setNewMemoryError((err && err.message) || 'Could not save the memory.');
+    } finally {
+      newMemorySaving = false;
+      if (btn) { btn.disabled = false; btn.textContent = 'Save memory'; }
+    }
+  }
+
 `;

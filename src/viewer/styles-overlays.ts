@@ -317,15 +317,78 @@ export const overlayStyles = `  .semantic-status-box {
     line-height: 1.45;
   }
 
-  /* Compact density, driven by data-density on the list container. */
-  .grid-wrap[data-density="compact"] .row {
+  /* ── NEW MEMORY COMPOSER ── */
+  .newmem-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 297;
+    background: var(--overlay-bg);
+    padding: 8vh 1rem 1rem;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .newmem-overlay.open { display: flex; }
+  .newmem-box {
+    width: min(520px, 100%);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    background: var(--panel-bg);
+    box-shadow: 0 20px 42px var(--panel-shadow);
+    padding: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+  .newmem-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+  }
+  .newmem-head h3 {
+    font-family: var(--disp);
+    font-weight: 560;
+    color: var(--cream);
+    font-size: 16px;
+  }
+  .newmem-body { display: flex; flex-direction: column; gap: 0.7rem; }
+  .newmem-field { display: flex; flex-direction: column; gap: 0.3rem; }
+  .newmem-field label {
+    color: var(--cream-dim);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+  .newmem-opt {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    color: var(--cream-faint);
+    font-weight: 400;
+    margin-left: 0.3rem;
+  }
+  .newmem-field textarea.setting-input {
+    resize: vertical;
+    min-height: 96px;
+    line-height: 1.5;
+    font-family: var(--body);
+  }
+  .newmem-err {
+    display: none;
+    color: var(--clay);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  /* Compact density, driven by data-density on the #grid rows host. */
+  #grid[data-density="compact"] .row {
     padding: 9px 16px;
     gap: 12px;
   }
-  .grid-wrap[data-density="compact"] .ttl { font-size: 15px; margin-bottom: 1px; }
-  .grid-wrap[data-density="compact"] .group { margin-top: 16px; }
+  #grid[data-density="compact"] .ttl { font-size: 15px; margin-bottom: 1px; }
+  #grid[data-density="compact"] .group { margin-top: 16px; }
   /* Clamp the body preview to a single line so rows stay tight. */
-  .grid-wrap[data-density="compact"] .txt {
+  #grid[data-density="compact"] .txt {
     font-size: 12.5px;
     line-height: 1.4;
     white-space: nowrap;

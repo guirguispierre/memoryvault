@@ -181,45 +181,67 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
   /* ── MAIN APP ── */
   #app { display: none; flex-direction: column; min-height: 100vh; animation: appEnter 0.4s ease; }
 
-  /* Header */
-  .hdr {
+  /* ── TOP BAR (control center) ── */
+  .topbar {
     display: flex;
     align-items: center;
-    gap: 26px;
-    padding: 20px 40px;
+    gap: 16px;
+    padding: 13px 26px;
     border-bottom: 1px solid var(--rule);
-    background: transparent;
     position: sticky;
     top: 0;
     z-index: 100;
     background: var(--ground);
   }
-  .hdr-brand {
+  .tb-brand {
     font-family: var(--disp);
-    font-weight: 560;
-    font-size: 21px;
+    font-weight: 600;
+    font-size: 18px;
     letter-spacing: 0.005em;
     color: var(--cream);
     white-space: nowrap;
   }
-  .hdr-brand em { font-style: italic; color: var(--butter); }
-  .hdr-brand .sub {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    color: var(--cream-faint);
-    margin-left: 12px;
-    text-transform: uppercase;
+  .tb-brand em { font-style: italic; color: var(--butter); }
+
+  /* Segmented mode switch: Memories / Graph */
+  .modeswitch {
+    display: flex;
+    gap: 2px;
+    background: var(--surface-raised);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 3px;
+    flex-shrink: 0;
   }
-  .search-wrap {
+  .modeswitch .mode {
+    background: none;
+    border: none;
+    color: var(--cream-dim);
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 7px 15px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background 0.14s, color 0.14s;
+    white-space: nowrap;
+  }
+  .modeswitch .mode:hover { color: var(--cream); }
+  .modeswitch .mode.active { background: var(--ground-3); color: var(--cream); }
+
+  /* Centered command search */
+  .cmdsearch {
     flex: 1;
-    max-width: 500px;
-    min-width: 160px;
+    max-width: 560px;
+    margin: 0 auto;
     position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 140px;
   }
-  .search-wrap .mag {
+  .cmdsearch .cs-mag {
     position: absolute;
-    left: 12px;
+    left: 13px;
     top: 50%;
     transform: translateY(-50%);
     color: var(--cream-faint);
@@ -227,77 +249,135 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
   }
   .search-input {
     width: 100%;
-    background: var(--ground-3);
+    background: var(--surface-raised);
     border: 1px solid var(--rule);
-    border-radius: 9px;
+    border-radius: 10px;
     color: var(--cream);
     font-family: var(--body);
     font-size: 13.5px;
-    padding: 11px 13px 11px 36px;
+    padding: 11px 70px 11px 38px;
     outline: none;
     transition: border-color 0.18s, background 0.18s;
   }
   .search-input::placeholder { color: var(--cream-faint); }
-  .search-input:focus { border-color: var(--butter-deep); background: var(--surface-raised); }
-  .hdr-right {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 18px;
-  }
-  .logout-btn {
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    color: var(--cream-faint);
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 4px 2px;
-    transition: color 0.16s;
-  }
-  .logout-btn:hover { color: var(--butter); }
-
-  /* Segmented type filter */
-  .stats-bar {
-    display: flex;
-    border: 1px solid var(--rule);
-    border-radius: 9px;
-    overflow: hidden;
-    background: var(--ground-2);
-    flex-shrink: 0;
-  }
-  .stat-pill {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    font-family: var(--body);
-    font-weight: 500;
-    font-size: 12.5px;
-    color: var(--cream-dim);
-    background: transparent;
-    border: none;
-    padding: 8px 14px;
-    cursor: pointer;
-    transition: background 0.14s, color 0.14s;
-    white-space: nowrap;
-  }
-  .stat-pill + .stat-pill { border-left: 1px solid var(--rule-soft); }
-  .stat-pill:hover { color: var(--cream); }
-  .stat-pill.active {
-    background: var(--butter);
-    color: var(--on-butter);
-    font-weight: 600;
-  }
-  .stat-label { order: 1; }
-  .stat-num {
-    order: 2;
+  .search-input:focus { border-color: var(--butter-deep); }
+  .cmdsearch .cs-kbd {
+    position: absolute;
+    right: 9px;
+    top: 50%;
+    transform: translateY(-50%);
     font-family: var(--mono);
     font-size: 10px;
     color: var(--cream-faint);
+    background: var(--ground-2);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 3px 7px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
   }
-  .stat-pill.active .stat-num { color: var(--on-butter); opacity: 0.7; }
-  .stat-pill.pulse .stat-num { animation: countPulse 0.45s ease; }
+  .cmdsearch .cs-kbd:hover { border-color: var(--butter-deep); color: var(--butter); }
+
+  /* Right-side action icons */
+  .topacts {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .ico {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    background: var(--surface-raised);
+    border: 1px solid var(--rule);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--cream-dim);
+    position: relative;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .ico:hover { color: var(--cream); border-color: var(--butter-deep); }
+  .ico svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .ico .tip {
+    position: absolute;
+    top: 40px;
+    right: 0;
+    background: var(--surface-raised);
+    border: 1px solid var(--rule);
+    color: var(--cream-dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 7px;
+    border-radius: 5px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s;
+    z-index: 20;
+  }
+  .ico:hover .tip { opacity: 1; }
+  .nbtn {
+    background: var(--butter);
+    color: var(--on-butter);
+    border: none;
+    border-radius: 9px;
+    padding: 9px 15px;
+    font-family: var(--body);
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: filter 0.15s;
+  }
+  .nbtn:hover { filter: brightness(1.06); }
+
+  /* ── FILTER BAR ── */
+  .feed { min-width: 0; }
+  .filterbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .filter-sp { flex: 1; }
+  .chip {
+    background: var(--surface-raised);
+    border: 1px solid var(--rule);
+    color: var(--cream-dim);
+    font-family: var(--body);
+    font-size: 12.5px;
+    border-radius: 20px;
+    padding: 6px 13px;
+    cursor: pointer;
+    transition: background 0.14s, border-color 0.14s, color 0.14s;
+    white-space: nowrap;
+  }
+  .chip:hover { color: var(--cream); }
+  .chip.active {
+    background: var(--butter-glow);
+    border-color: var(--butter-deep);
+    color: var(--cream);
+  }
+  .chip .chip-n {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--cream-faint);
+    margin-left: 3px;
+  }
+  .chip.active .chip-n { color: var(--butter); }
+  .chip .c {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
 
   /* The pour — activity seam under the header */
   .pour {
@@ -356,16 +436,7 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
     animation: livePulse 1.9s infinite;
   }
 
-  /* Utility strip */
-  .controls {
-    display: flex;
-    gap: 18px;
-    padding: 8px 40px;
-    border-bottom: 1px solid var(--rule-soft);
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    align-items: center;
-  }
+  /* Utility buttons (reused by settings / overlays) */
   .refresh-btn {
     background: none;
     border: none;
