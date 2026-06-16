@@ -317,28 +317,86 @@ export const overlayStyles = `  .semantic-status-box {
     line-height: 1.45;
   }
 
-  /* Compact density, driven by data-density on the list container. */
-  .grid-wrap[data-density="compact"] .row {
-    padding: 9px 16px;
-    gap: 12px;
+  /* ── NEW MEMORY COMPOSER ── */
+  .newmem-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 297;
+    background: var(--overlay-bg);
+    padding: 8vh 1rem 1rem;
+    align-items: flex-start;
+    justify-content: center;
   }
-  .grid-wrap[data-density="compact"] .ttl { font-size: 15px; margin-bottom: 1px; }
-  .grid-wrap[data-density="compact"] .group { margin-top: 16px; }
-  /* Clamp the body preview to a single line so rows stay tight. */
-  .grid-wrap[data-density="compact"] .txt {
+  .newmem-overlay.open { display: flex; }
+  .newmem-box {
+    width: min(520px, 100%);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    background: var(--panel-bg);
+    box-shadow: 0 20px 42px var(--panel-shadow);
+    padding: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+  .newmem-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+  }
+  .newmem-head h3 {
+    font-family: var(--disp);
+    font-weight: 560;
+    color: var(--cream);
+    font-size: 16px;
+  }
+  .newmem-body { display: flex; flex-direction: column; gap: 0.7rem; }
+  .newmem-field { display: flex; flex-direction: column; gap: 0.3rem; }
+  .newmem-field label {
+    color: var(--cream-dim);
     font-size: 12.5px;
+    font-weight: 500;
+  }
+  .newmem-opt {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    color: var(--cream-faint);
+    font-weight: 400;
+    margin-left: 0.3rem;
+  }
+  .newmem-field textarea.setting-input {
+    resize: vertical;
+    min-height: 96px;
+    line-height: 1.5;
+    font-family: var(--body);
+  }
+  .newmem-err {
+    display: none;
+    color: var(--clay);
+    font-size: 12px;
     line-height: 1.4;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
+  /* Compact density, driven by data-density on the #grid rows host: drop the
+     snippet line and tighten padding so more rows fit. */
+  #grid[data-density="compact"] .r { padding: 6px 12px; }
+  #grid[data-density="compact"] .ti .x { display: none; }
+  #grid[data-density="compact"] .stcell .mtr { height: 15px; }
+  #grid[data-density="compact"] .lh { padding-bottom: 6px; }
+
+  /* Below this width the three-zone layout can't sit side by side: collapse the
+     rail (reachable via the Graph tab) and drop the list to a single column. */
   @media (max-width: 900px) {
-    .hdr { padding: 14px 16px; gap: 14px; flex-wrap: wrap; }
-    .pour { padding: 12px 16px 10px; }
-    .controls { padding: 8px 16px; }
-    .grid-wrap { padding: 4px 16px 48px; }
-    .update-banner { margin: 0.6rem 16px 0; }
+    .topbar { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }
+    .statstrip { padding: 9px 16px; gap: 0; overflow-x: auto; scrollbar-width: none; }
+    .statstrip::-webkit-scrollbar { display: none; }
+    .grid-wrap { grid-template-columns: 1fr; padding: 12px 16px 48px; }
+    .feed { padding-right: 0; }
+    .rail { display: none; }
+    .update-banner { margin: 0.6rem 16px; }
     .footer { padding: 12px 16px; flex-wrap: wrap; gap: 0.45rem; }
   }
 
@@ -349,37 +407,28 @@ export const overlayStyles = `  .semantic-status-box {
     .login-btn-row { flex-direction: column; gap: 0.5rem; }
     .token-input, .search-input { font-size: 16px; }
 
-    .hdr {
+    /* Top bar collapses: brand + mode switch on the first line, the command
+       search wraps full-width below, action icons stay inline. */
+    .topbar {
       position: static;
-      gap: 10px 14px;
+      gap: 10px 12px;
+      flex-wrap: wrap;
     }
-    .hdr-brand { font-size: 19px; }
-    .hdr-brand .sub { display: none; }
-    .hdr-right { gap: 12px; }
-    .search-wrap {
-      order: 4;
-      flex-basis: 100%;
-      max-width: none;
-    }
-
-    .stats-bar {
+    .tb-brand { font-size: 17px; }
+    .cmdsearch {
       order: 5;
       flex-basis: 100%;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
+      max-width: none;
+      margin: 0;
     }
-    .stats-bar::-webkit-scrollbar { display: none; }
-    .stat-pill { flex: 1 0 auto; justify-content: center; padding: 8px 12px; }
+    .modeswitch .mode { padding: 7px 12px; }
+    .nbtn { padding: 9px 12px; }
 
-    .pour-ticks { gap: 2px; }
-    .pour-ticks i:nth-child(odd) { display: none; }
-    .pour-cap { flex-wrap: wrap; gap: 4px 14px; }
+    .statstrip { font-size: 12px; }
+    .stat-s { padding-right: 12px; margin-right: 12px; }
+    .stat-recall { display: none; }
 
-    .controls {
-      justify-content: space-between;
-      gap: 10px;
-    }
+    .filterbar { gap: 6px; }
 
     #graph-view { min-height: 54vh !important; }
     #graph-svg { min-height: 54vh !important; height: 54vh !important; }
@@ -404,21 +453,13 @@ export const overlayStyles = `  .semantic-status-box {
     }
     .graph-legend-item { font-size: 9px; letter-spacing: 0.06em; padding: 0.2rem 0.36rem; }
 
-    /* Rows: meta column stacks under the content */
-    .row {
-      grid-template-columns: 16px 1fr;
-      padding: 14px 10px;
+    /* Table drops the key and links columns; state | memory | type | seen. */
+    .lh, .r {
+      grid-template-columns: 14px minmax(0, 1fr) 54px 38px;
+      gap: 10px;
     }
-    .row .meta {
-      grid-column: 2;
-      flex-direction: row;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: flex-start;
-      gap: 12px;
-      padding-top: 8px;
-    }
-    .txt { max-width: none; }
+    .r .k, .lh span:nth-child(2),
+    .r .lk, .lh span:nth-child(5) { display: none; }
 
     .expand-overlay {
       padding: 0;

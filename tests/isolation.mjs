@@ -348,3 +348,25 @@ test('final cross-check: nothing leaked into either brain', async () => {
   const bobSearch = await api(bob, `/api/memories?search=hijacked&limit=50`);
   assert.equal(bobSearch.json.memories.length, 0, 'no hijack artifacts may exist in Bob brain');
 });
+
+test('hosted waitlist: public write works, but exposes no read or cross-tenant data', async () => {
+  const email = `wl-${runId}@example.com`;
+  // Unauthenticated POST captures the email and reports an honest success.
+  const first = await api(null, '/api/waitlist', { method: 'POST', body: JSON.stringify({ email }) });
+  assert.equal(first.status, 200, `waitlist POST should succeed, got ${first.status}: ${first.text.slice(0, 120)}`);
+  assert.ok(first.json && first.json.ok, 'waitlist POST should report ok');
+  assert.equal(first.json.status, 'added', 'first submission should be recorded as added');
+
+  // Re-submitting the same address is an idempotent no-op, not a fake success.
+  const dupe = await api(null, '/api/waitlist', { method: 'POST', body: JSON.stringify({ email }) });
+  assert.equal(dupe.json.status, 'exists', 'duplicate submission should dedupe to exists');
+
+  // A malformed email is rejected.
+  const bad = await api(null, '/api/waitlist', { method: 'POST', body: JSON.stringify({ email: 'not-an-email' }) });
+  assert.equal(bad.status, 400, `invalid email must be rejected, got ${bad.status}`);
+
+  // There is no public read of the waitlist, and GET is not allowed.
+  const get = await api(null, '/api/waitlist');
+  assert.ok(get.status === 405 || get.status === 404, `GET /api/waitlist must not read the list, got ${get.status}`);
+  assert.ok(!get.text.includes(email), 'the waitlist must never be readable from the public endpoint');
+});

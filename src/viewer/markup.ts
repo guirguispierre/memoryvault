@@ -50,34 +50,26 @@ export const bodyMarkup = `</style>
 
 <!-- APP -->
 <div id="app">
-  <header class="hdr">
-    <div class="hdr-brand">Memory<em>Vault</em><span class="sub">your index</span></div>
-    <div class="search-wrap">
-      <svg class="mag" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-      <input type="text" class="search-input" id="search-input" placeholder="recall a memory — text, key, or meaning…" inputmode="search">
+  <header class="topbar">
+    <div class="tb-brand">Memory<em>Vault</em></div>
+    <div class="modeswitch" role="tablist" aria-label="View mode">
+      <button class="mode active" id="mode-memories" data-action="show-list" role="tab" aria-selected="true">Memories</button>
+      <button class="mode" id="mode-graph" data-action="show-graph" role="tab" aria-selected="false">Graph</button>
     </div>
-    <div class="stats-bar">
-      <button class="stat-pill active" id="stat-all" data-action="set-filter" data-filter="">
-        <span class="stat-label">All</span><span class="stat-num" id="count-all">0</span>
-      </button>
-      <button class="stat-pill" id="stat-note" data-action="set-filter" data-filter="note">
-        <span class="stat-label">Notes</span><span class="stat-num" id="count-note">0</span>
-      </button>
-      <button class="stat-pill" id="stat-fact" data-action="set-filter" data-filter="fact">
-        <span class="stat-label">Facts</span><span class="stat-num" id="count-fact">0</span>
-      </button>
-      <button class="stat-pill" id="stat-journal" data-action="set-filter" data-filter="journal">
-        <span class="stat-label">Journal</span><span class="stat-num" id="count-journal">0</span>
-      </button>
-      <button class="stat-pill" id="stat-graph" data-action="show-graph">
-        <span class="stat-label">Graph</span>
-      </button>
+    <div class="cmdsearch">
+      <svg class="cs-mag" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <input type="text" class="search-input" id="search-input" placeholder="Search, jump to a memory, or run a command…" inputmode="search">
+      <button type="button" class="cs-kbd" data-action="open-command-palette" title="Command palette" aria-label="Open command palette">&#8984;K</button>
     </div>
-    <div class="hdr-right">
+    <div class="topacts">
       <div id="live-indicator" style="display:none;align-items:center;font-family:var(--mono);font-size:10px;letter-spacing:0.08em;color:var(--cream-faint)">
         <span class="live-dot"></span>live
       </div>
-      <button class="logout-btn" data-action="logout">lock</button>
+      <button type="button" class="ico" data-action="refresh-memories" aria-label="Refresh memories"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg><span class="tip">Refresh</span></button>
+      <button type="button" class="ico" data-action="open-settings-overlay" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span class="tip">Settings</span></button>
+      <button type="button" class="ico" data-action="toggle-shortcuts-overlay" aria-label="Keyboard shortcuts"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8"/></svg><span class="tip">Shortcuts</span></button>
+      <button type="button" class="ico" data-action="logout" aria-label="Lock session"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span class="tip">Lock</span></button>
+      <button type="button" class="nbtn" data-action="open-new-memory">New memory</button>
     </div>
   </header>
 
@@ -93,19 +85,18 @@ export const bodyMarkup = `</style>
     </div>
   </div>
 
-  <div class="pour">
-    <div class="pour-cap">
-      <span class="pour-label">Recall, <b>last 24 hours</b></span>
-      <span class="pour-meta"><span id="hdr-count">— entries</span><span>&middot;</span><span>synced <span id="hdr-time"></span></span></span>
+  <div class="statstrip">
+    <div class="stat-s"><b id="stat-total">0</b> memories</div>
+    <div class="stat-s"><i class="stat-dot" style="background:var(--mem-active)"></i><b id="stat-active">0</b> active</div>
+    <div class="stat-s"><i class="stat-dot" style="background:var(--mem-settling)"></i><b id="stat-settling">0</b> settling</div>
+    <div class="stat-s"><i class="stat-dot" style="background:var(--mem-fading)"></i><b id="stat-fading">0</b> fading</div>
+    <div class="stat-s stat-s-end"><b id="stat-links">0</b> links</div>
+    <span class="stat-sp"></span>
+    <div class="stat-recall" title="Recall activity, last 24 hours">
+      <span class="stat-recall-label">recall 24h</span>
+      <div class="pour-ticks" id="pour-ticks" aria-hidden="true"></div>
+      <span class="stat-recall-time">synced <span id="hdr-time"></span></span>
     </div>
-    <div class="pour-ticks" id="pour-ticks" aria-hidden="true"></div>
-  </div>
-
-  <div class="controls">
-    <button class="refresh-btn" data-action="refresh-memories">Refresh</button>
-    <button class="refresh-btn utility-btn" data-action="open-command-palette">Command</button>
-    <button class="refresh-btn utility-btn" data-action="toggle-shortcuts-overlay">Shortcuts</button>
-    <button class="refresh-btn utility-btn" data-action="open-settings-overlay">Settings</button>
   </div>
 
   <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--ground);min-height:600px">
@@ -118,6 +109,7 @@ export const bodyMarkup = `</style>
         <button class="graph-btn active" id="graph-toggle-labels" data-action="toggle-graph-labels">LABELS ON</button>
         <button class="graph-btn active" id="graph-toggle-physics" data-action="toggle-graph-physics">PHYSICS ON</button>
         <button class="graph-btn" data-action="reset-graph-view">RESET VIEW</button>
+        <button class="graph-btn" id="graph-toggle-3d" data-action="toggle-graph-3d" aria-pressed="false">3D OFF</button>
       </div>
       <div class="graph-toolbar-row">
         <button class="graph-btn relation active" id="graph-rel-related" data-action="toggle-graph-relation" data-relation="related">RELATED</button>
@@ -130,10 +122,36 @@ export const bodyMarkup = `</style>
     </div>
     <div class="graph-legend" id="graph-legend"></div>
     <svg id="graph-svg" style="width:100%;height:100%;min-height:600px"></svg>
+    <div id="graph-3d" aria-hidden="true"></div>
     <div id="graph-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;color:var(--cream-dim);font-size:14px;padding:1rem">Nothing here yet — save your first memory.</div>
   </div>
-  <div class="grid-wrap" id="grid">
-    <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>
+  <section id="onboarding" class="onboarding" hidden></section>
+  <div class="grid-wrap">
+    <div class="feed">
+      <div class="filterbar">
+        <div class="chips chips-type">
+          <button class="chip active" id="stat-all" data-action="set-filter" data-filter="">All <span class="chip-n" id="count-all">0</span></button>
+          <button class="chip" id="stat-note" data-action="set-filter" data-filter="note">Notes <span class="chip-n" id="count-note">0</span></button>
+          <button class="chip" id="stat-fact" data-action="set-filter" data-filter="fact">Facts <span class="chip-n" id="count-fact">0</span></button>
+          <button class="chip" id="stat-journal" data-action="set-filter" data-filter="journal">Journal <span class="chip-n" id="count-journal">0</span></button>
+        </div>
+        <span class="filter-sp"></span>
+        <div class="chips chips-state">
+          <button class="chip active" id="state-active" data-action="toggle-state-filter" data-state="active"><i class="c" style="background:var(--mem-active)"></i>Active</button>
+          <button class="chip active" id="state-settling" data-action="toggle-state-filter" data-state="settling"><i class="c" style="background:var(--mem-settling)"></i>Settling</button>
+          <button class="chip active" id="state-resting" data-action="toggle-state-filter" data-state="resting"><i class="c" style="background:var(--mem-fading)"></i>Fading</button>
+        </div>
+        <button class="dens" id="density-toggle" data-action="toggle-density" aria-pressed="false">&#8862; compact</button>
+      </div>
+      <div id="grid" class="grid-list">
+        <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>
+      </div>
+    </div>
+    <aside class="rail">
+      <h3>Memory graph <button type="button" class="exp" data-action="show-graph">Expand &#8599;</button></h3>
+      <div class="mini"><canvas id="rail-canvas"></canvas></div>
+      <div class="railcard" id="rail-card"></div>
+    </aside>
   </div>
 
   <footer class="footer">
@@ -317,6 +335,7 @@ export const bodyMarkup = `</style>
                 <label>Dark theme</label>
                 <div class="setting-help">Palette used in dark mode.</div>
                 <div class="theme-picker" id="theme-picker">
+                  <button type="button" class="theme-swatch" data-theme-value="constellation" title="Constellation"><span style="background:#070810;border:2px solid #8AB0FF"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="slate" title="Slate"><span style="background:#0F1011;border:2px solid #7FA6C9"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="paper" title="Paper"><span style="background:#16161A;border:2px solid #8AA0F0"></span></button>
                   <button type="button" class="theme-swatch" data-theme-value="vanilla" title="Vanilla"><span style="background:#181511;border:2px solid #E3C98F"></span></button>
@@ -548,6 +567,42 @@ export const bodyMarkup = `</style>
     <div class="changelog-list" id="changelog-list"></div>
     <div class="settings-actions" style="margin-top:0.7rem">
       <button class="refresh-btn utility-btn" data-action="open-full-changelog">Open full changelog</button>
+    </div>
+  </div>
+</div>
+
+<div class="newmem-overlay" id="newmem-overlay" data-action="close-new-memory-overlay">
+  <div class="newmem-box">
+    <div class="newmem-head">
+      <h3>New memory</h3>
+      <button class="settings-close" data-action="close-new-memory">Close</button>
+    </div>
+    <div class="newmem-body">
+      <div class="newmem-field">
+        <label for="newmem-type">Type</label>
+        <select class="setting-input" id="newmem-type">
+          <option value="note">Note</option>
+          <option value="fact">Fact</option>
+          <option value="journal">Journal</option>
+        </select>
+      </div>
+      <div class="newmem-field">
+        <label for="newmem-title">Title <span class="newmem-opt">optional</span></label>
+        <input type="text" class="setting-input" id="newmem-title" placeholder="A short title" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="newmem-field">
+        <label for="newmem-key">Key <span class="newmem-opt">optional — recommended for facts</span></label>
+        <input type="text" class="setting-input" id="newmem-key" placeholder="e.g. user.timezone" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="newmem-field">
+        <label for="newmem-content">Content</label>
+        <textarea class="setting-input" id="newmem-content" rows="5" placeholder="What should be remembered?" spellcheck="false"></textarea>
+      </div>
+      <div class="newmem-err" id="newmem-err"></div>
+    </div>
+    <div class="settings-actions">
+      <button class="refresh-btn utility-btn" data-action="close-new-memory">Cancel</button>
+      <button class="refresh-btn" id="newmem-save-btn" data-action="submit-new-memory">Save memory</button>
     </div>
   </div>
 </div>

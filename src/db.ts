@@ -268,6 +268,12 @@ export async function ensureSchema(env: Env): Promise<void> {
         )`
       );
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_memory_watches_brain_active ON memory_watches(brain_id, is_active, updated_at DESC)");
+      await runMigrationStatement(env,
+        `CREATE TABLE IF NOT EXISTS waitlist (
+          email TEXT PRIMARY KEY,
+          created_at INTEGER NOT NULL
+        )`
+      );
 
       const ts = now();
       await env.DB.prepare(
@@ -279,6 +285,21 @@ export async function ensureSchema(env: Env): Promise<void> {
     });
   }
   await schemaReady;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Hosted-tier waitlist                                              */
+/* ------------------------------------------------------------------ */
+
+// Store an email for the hosted waitlist. The email is the primary key, so a
+// repeat submission is a no-op (returns 'exists'); a new one returns 'added'.
+// Write-only: there is no companion read function exposed to the public API.
+export async function insertWaitlistEmail(env: Env, email: string): Promise<'added' | 'exists'> {
+  const result = await env.DB.prepare(
+    'INSERT OR IGNORE INTO waitlist (email, created_at) VALUES (?, ?)'
+  ).bind(email, now()).run();
+  const changes = result.meta?.changes ?? 0;
+  return changes > 0 ? 'added' : 'exists';
 }
 
 /* ------------------------------------------------------------------ */

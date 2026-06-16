@@ -270,6 +270,50 @@ export const themeStyles = `  [data-theme="vanilla-light"] {
     background: radial-gradient(1000px 460px at 50% -12%, rgba(62, 110, 153, 0.07), transparent 62%), var(--ground);
   }
 
+  /* Constellation: the public-site dark identity as a calm, static /view theme.
+     Same deep-space palette, Spectral content / Inter UI / JetBrains Mono code,
+     and the blue accent. No animation: the body carries one faint static wash,
+     the same single-radial pattern every other theme already uses. Dark only,
+     so it is offered as a dark base and never gets a -light variant. */
+  [data-theme="constellation"] {
+    --ground: #070810;
+    --ground-2: #0B0D18;
+    --ground-3: #11131F;
+    --rule: rgba(255, 255, 255, 0.08);
+    --rule-soft: rgba(255, 255, 255, 0.05);
+    --rule-bright: rgba(255, 255, 255, 0.14);
+    --cream: #F5F4EF;
+    --cream-dim: #9AA0B4;
+    --cream-faint: #565D72;
+    --butter: #8AB0FF;
+    --butter-deep: #5E7FD0;
+    --latte: #9AA0B4;
+    --sage: #86E0B8;
+    --clay: #EF9D9D;
+    --on-butter: #070810;
+    --butter-glow: rgba(138, 176, 255, 0.08);
+    --panel-bg: #0B0D18;
+    --surface: rgba(255, 255, 255, 0.035);
+    --surface-raised: #11131F;
+    --toast-bg: #11131F;
+    --overlay-bg: rgba(4, 5, 12, 0.82);
+    --disp: 'Spectral', Georgia, serif;
+    --body: 'Inter', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    /* Exact control-center state hues: green active, warm settling, dim
+       fading, violet links. */
+    --mem-active: #86E0B8;
+    --mem-settling: #FFCAA0;
+    --mem-fading: #565D72;
+    --mem-link: #B9A3FF;
+  }
+  [data-theme="constellation"] body {
+    background:
+      radial-gradient(1000px 480px at 50% -12%, rgba(40, 52, 110, 0.20), transparent 62%),
+      radial-gradient(760px 520px at 88% 108%, rgba(30, 80, 70, 0.08), transparent 60%),
+      var(--ground);
+  }
+
   /* Paper: warm near-white reading surface with Spectral for content, Inter for
      UI chrome, JetBrains Mono for data, and one restrained indigo accent. This
      is the default light theme; the generic -light block below fills the panel

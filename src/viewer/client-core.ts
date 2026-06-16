@@ -20,6 +20,12 @@ export const clientCore = `
   let TOKEN = '';
   let SESSION_MODE = 'none';
   let activeFilter = '';
+  // Client-side state-tier filter (drawn from the same strength tiers the list
+  // groups by). All tiers shown by default; toggling re-renders the grid only.
+  let memoryStateFilter = new Set(['active', 'settling', 'resting']);
+  // The row the user has selected; drives the graph rail and its card.
+  let selectedMemoryIndex = -1;
+  let selectedMemoryId = null;
   let searchTimeout = null;
   // corpusMemories is the whole brain (no type/search filter) and drives the
   // recall ribbon and header summary; displayedMemories is the filtered set
@@ -35,6 +41,10 @@ export const clientCore = `
   let graphSvgSelection = null;
   let graphZoomBehavior = null;
   let graphSimulation = null;
+  // Focus helper from the current renderGraph closure + the persistently
+  // selected node, so a clicked node keeps its neighborhood highlighted.
+  let graphApplyFocus = null;
+  let graphSelectedNodeId = null;
   let graphAutoTunedLabels = false;
   let graphSearchQuery = '';
   let graphRelationFilter = new Set(GRAPH_RELATION_TYPES);
@@ -59,7 +69,9 @@ export const clientCore = `
 
   function buildDefaultViewerSettings() {
     return {
-      theme: 'slate',
+      // Constellation is the default dark base, paired with paper for day, so an
+      // unset/new brain gets the brand dark theme at night and paper by day.
+      theme: 'constellation',
       light_theme: 'paper',
       theme_mode: 'auto',
       live_poll_enabled: true,
@@ -73,6 +85,7 @@ export const clientCore = `
       graph_show_labels: !window.matchMedia('(max-width: 640px)').matches,
       graph_physics_enabled: true,
       graph_focus_highlight: true,
+      graph_3d: false,
       auto_open_graph: false,
       toasts_enabled: true,
       toast_duration_ms: 2300,
@@ -105,7 +118,7 @@ export const clientCore = `
     const defaultFilter = ['note', 'fact', 'journal'].includes(source.default_memory_filter)
       ? source.default_memory_filter
       : '';
-    const validThemes = ['slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom'];
+    const validThemes = ['constellation', 'slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom'];
     // 'cyberpunk' was the pre-vanilla default; migrate stored settings to the new default.
     const migrateTheme = (value) => (value === 'cyberpunk' ? 'vanilla' : value);
     const theme = validThemes.includes(migrateTheme(source.theme)) ? migrateTheme(source.theme) : defaults.theme;
@@ -127,6 +140,7 @@ export const clientCore = `
       graph_show_labels: source.graph_show_labels === undefined ? defaults.graph_show_labels : source.graph_show_labels !== false,
       graph_physics_enabled: source.graph_physics_enabled !== false,
       graph_focus_highlight: source.graph_focus_highlight !== false,
+      graph_3d: source.graph_3d === true,
       auto_open_graph: source.auto_open_graph === true,
       toasts_enabled: source.toasts_enabled !== false,
       toast_duration_ms: Math.min(Math.max(Math.round(toastDuration), 1200), 8000),
@@ -242,6 +256,7 @@ export const clientCore = `
     graphPhysicsEnabled = viewerSettings.graph_physics_enabled;
     const grid = document.getElementById('grid');
     if (grid) grid.setAttribute('data-density', viewerSettings.compact_cards ? 'compact' : 'comfortable');
+    syncDensityToggle();
     document.body.classList.toggle('scanlines-off', !viewerSettings.show_scanlines);
     document.body.classList.toggle('motion-reduced', viewerSettings.reduce_motion);
     applyCustomTheme();
@@ -251,6 +266,9 @@ export const clientCore = `
     if (restartPolling) startLivePolling(true);
     if (rerenderGrid) renderGrid(displayedMemories);
     if (rerenderGraph && graphVisible) rerenderGraphFromCache();
+    // Recolour the rail constellation for the active theme and honour a
+    // reduce-motion change.
+    if (typeof railBuildNodes === 'function') { railBuildNodes(); railSync(); }
   }
 
   function initializeViewerSettings() {
@@ -318,6 +336,9 @@ export const clientCore = `
     const defaultFilter = viewerSettings?.default_memory_filter || '';
     activeFilter = defaultFilter;
     syncFilterPills(activeFilter);
+    syncStateChips();
+    syncDensityToggle();
+    railInit();
     loadMemories();
     startLivePolling();
     reconcileServerViewerSettings();

@@ -225,6 +225,10 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       }
       updateStats(data.stats || []);
       renderGrid(displayedMemories);
+      // Keep the calm rail constellation in step with the brain (throttled).
+      railEnsureGraph(!silent);
+      // First-run onboarding keys off the whole-brain count, not the filtered view.
+      renderOnboarding(corpusMemories.length);
       if (silent) window.scrollTo(0, scrollY);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><div class="empty-icon">hm.</div>Connection error — check your network and try refresh.</div>';
@@ -252,8 +256,23 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     lastStatsSnapshot = { all: total, note: counts.note, fact: counts.fact, journal: counts.journal };
     const linkEnds = corpusMemories.reduce((sum, m) => sum + (Number.isFinite(Number(m.link_count)) ? Number(m.link_count) : 0), 0);
     const linkTotal = Math.round(linkEnds / 2);
-    document.getElementById('hdr-count').textContent =
-      total + (total === 1 ? ' entry' : ' entries') + ' · ' + linkTotal + (linkTotal === 1 ? ' link' : ' links');
+    // State tiers are derived per-memory from the loaded corpus (capped at 500);
+    // total is the full-corpus server count, so on very large brains the tier
+    // counts cover the loaded window while the total stays whole-brain.
+    const tsNow = Date.now() / 1000;
+    let activeN = 0, settlingN = 0, fadingN = 0;
+    for (const m of corpusMemories) {
+      const tier = strengthTier(memoryStrength(m, tsNow));
+      if (tier === 'active') activeN += 1;
+      else if (tier === 'settling') settlingN += 1;
+      else fadingN += 1;
+    }
+    const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    setText('stat-total', total);
+    setText('stat-active', activeN);
+    setText('stat-settling', settlingN);
+    setText('stat-fading', fadingN);
+    setText('stat-links', linkTotal);
     renderPour(corpusMemories);
   }
 
@@ -338,40 +357,49 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     wrap.innerHTML = html;
   }
 
-  const TIER_ORDER = [
-    { key: 'active', label: 'Active', note: 'reinforced this week', bead: 'full' },
-    { key: 'settling', label: 'Settling', note: 'quiet for a few days', bead: 'half' },
-    { key: 'resting', label: 'Resting', note: 'fading — review soon', bead: 'ring' },
-  ];
+  // Tier → control-center hue + label. 'resting' is surfaced as "fading".
+  const TIER_META = {
+    active: { label: 'Active', colorVar: '--mem-active' },
+    settling: { label: 'Settling', colorVar: '--mem-settling' },
+    resting: { label: 'Fading', colorVar: '--mem-fading' },
+  };
 
-  function renderMemoryRow(m, index, strength, bead, dimmed, order) {
-    const accId = 'MV·' + String(m.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase();
-    const accTime = formatAccessionTime(Number(m.updated_at ?? m.created_at ?? 0));
-    const kind = '<span class="kind">' + esc(m.type) + '</span>';
-    const confidence = clampUnit(m.dynamic_confidence ?? m.confidence, 0.7);
-    const verified = m.type === 'fact' && confidence >= 0.85 ? '<span class="ver">verified</span>' : '';
-    const isLedgerFact = m.type === 'fact' && m.key;
-    // For facts the key IS the title; the body shows only the value so the
-    // key is never repeated on both lines.
-    const titleText = isLedgerFact ? m.key : (m.title || m.key || 'untitled');
-    const body = isLedgerFact
-      ? '<div class="txt ledger"><span class="a">&rarr;</span><span class="v">' + esc(m.content) + '</span></div>'
-      : '<div class="txt">' + esc(String(m.content || '').slice(0, 280)) + '</div>';
-    const linked = Number(m.link_count) > 0
-      ? '<span class="links">&#8627; ' + Number(m.link_count) + ' linked</span>'
-      : '';
-    const pct = Math.round(strength * 100);
-    return '<div class="row' + (dimmed ? ' dim' : '') + '" data-type="' + esc(m.type) + '" data-action="expand-card" data-card-index="' + index + '" style="animation-delay:' + Math.min(order * 0.03, 0.36) + 's">' +
-      '<div class="bead ' + bead + '"></div>' +
-      '<div>' +
-        '<div class="ttl">' + esc(titleText) + ' ' + kind + verified + '</div>' +
-        body +
+  // Short "last seen" — relative age of the most recent touch.
+  function formatSeenShort(ts) {
+    if (!Number.isFinite(ts) || ts <= 0) return '';
+    const s = Date.now() / 1000 - ts;
+    if (s < 60) return 'now';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h';
+    if (s < 86400 * 30) return Math.floor(s / 86400) + 'd';
+    if (s < 86400 * 365) return Math.floor(s / (86400 * 30)) + 'mo';
+    return Math.floor(s / (86400 * 365)) + 'y';
+  }
+
+  function renderMemoryRow(m, index, strength, tier, order, selected) {
+    const meta = TIER_META[tier] || TIER_META.resting;
+    const cvar = 'var(' + meta.colorVar + ')';
+    const pct = Math.max(6, Math.round(strength * 100));
+    const hasTitle = !!(m.title && String(m.title).trim());
+    const titleText = hasTitle ? m.title : (m.content ? String(m.content).slice(0, 90) : (m.key || 'untitled'));
+    const snippet = hasTitle ? String(m.content || '') : '';
+    const keyText = m.key ? m.key : ('MV·' + String(m.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase());
+    const linkN = Number(m.link_count);
+    const links = Number.isFinite(linkN) && linkN > 0 ? '&#9670; ' + linkN : '';
+    const seen = formatSeenShort(Number(m.updated_at ?? m.created_at ?? 0));
+    return '<div class="r' + (selected ? ' sel' : '') + '" data-type="' + esc(m.type) + '" data-action="select-row" data-card-index="' + index + '" data-memory-id="' + esc(String(m.id || '')) + '" style="animation-delay:' + Math.min(order * 0.025, 0.3) + 's">' +
+      '<div class="stcell">' +
+        '<span class="dot" style="background:' + cvar + ';color:' + cvar + '"></span>' +
+        '<span class="mtr"><i style="height:' + pct + '%;background:' + cvar + '"></i></span>' +
       '</div>' +
-      '<div class="meta">' +
-        '<span class="acc">' + esc(accId) + (accTime ? ' · ' + esc(accTime) : '') + '</span>' +
-        '<span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:' + pct + '%"></i></span></span>' +
-        linked +
+      '<span class="k" title="' + esc(keyText) + '">' + esc(keyText) + '</span>' +
+      '<div class="ti">' +
+        '<div class="t">' + esc(titleText) + '</div>' +
+        (snippet ? '<div class="x">' + esc(snippet) + '</div>' : '') +
       '</div>' +
+      '<span class="type">' + esc(m.type) + '</span>' +
+      '<span class="lk">' + links + '</span>' +
+      '<span class="when">' + esc(seen) + '</span>' +
     '</div>';
   }
 
@@ -382,28 +410,102 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       return;
     }
     const tsNow = Date.now() / 1000;
-    const scored = memories.map((m, index) => ({ m, index, strength: memoryStrength(m, tsNow) }));
-    let html = '';
+    // Flat aligned table, strongest first so the strength meter reads as a
+    // gradient. The state-tier chips filter the rows client-side.
+    const scored = memories
+      .map((m, index) => {
+        const strength = memoryStrength(m, tsNow);
+        return { m, index, strength, tier: strengthTier(strength) };
+      })
+      .filter((item) => memoryStateFilter.has(item.tier))
+      .sort((a, b) => b.strength - a.strength);
+    if (!scored.length) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">filtered.</div>No memories match the selected states.</div>';
+      return;
+    }
+    let html = '<div class="lh"><span></span><span>key</span><span>memory</span><span>type</span><span>links</span><span>seen</span></div>';
     let order = 0;
-    for (const tier of TIER_ORDER) {
-      const group = scored
-        .filter((item) => strengthTier(item.strength) === tier.key)
-        .sort((a, b) => b.strength - a.strength);
-      if (!group.length) continue;
-      html += '<div class="group"><span class="t">' + tier.label + '</span><span class="ln"></span><span class="n">' + tier.note + '</span></div>';
-      for (const item of group) {
-        html += renderMemoryRow(item.m, item.index, item.strength, tier.bead, tier.key === 'resting', order);
-        order += 1;
-      }
+    for (const item of scored) {
+      const sel = selectedMemoryId != null && item.m.id === selectedMemoryId;
+      html += renderMemoryRow(item.m, item.index, item.strength, item.tier, order, sel);
+      order += 1;
     }
     grid.innerHTML = html;
+  }
+
+  // Single click selects a row: highlights it and drives the graph rail. The
+  // full detail overlay opens on double-click (and from the rail card), so the
+  // existing expand path is preserved.
+  function selectRow(idx) {
+    const m = displayedMemories[idx];
+    if (!m) return;
+    selectedMemoryIndex = idx;
+    selectedMemoryId = m.id;
+    document.querySelectorAll('#grid .r').forEach((el) => {
+      el.classList.toggle('sel', Number(el.getAttribute('data-card-index')) === idx);
+    });
+    if (typeof updateRailSelection === 'function') updateRailSelection(m);
+    // Keep the open graph (if any) and the rail node in step with the row.
+    if (typeof focusGraphNode === 'function') focusGraphNode(m.id);
+  }
+
+  function syncStateChips() {
+    [['active', 'state-active'], ['settling', 'state-settling'], ['resting', 'state-resting']].forEach(([key, id]) => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('active', memoryStateFilter.has(key));
+    });
+  }
+
+  function toggleStateFilter(state) {
+    if (!['active', 'settling', 'resting'].includes(state)) return;
+    if (memoryStateFilter.has(state)) {
+      // Keep at least one tier on so the list never goes fully blank by toggle.
+      if (memoryStateFilter.size === 1) return;
+      memoryStateFilter.delete(state);
+    } else {
+      memoryStateFilter.add(state);
+    }
+    syncStateChips();
+    renderGrid(displayedMemories);
+  }
+
+  function syncDensityToggle() {
+    const btn = document.getElementById('density-toggle');
+    if (!btn) return;
+    const compact = !!(viewerSettings && viewerSettings.compact_cards);
+    btn.classList.toggle('active', compact);
+    btn.setAttribute('aria-pressed', compact ? 'true' : 'false');
+    btn.innerHTML = compact ? '\\u229F comfortable' : '\\u229E compact';
+  }
+
+  function toggleDensity() {
+    if (!viewerSettings) return;
+    viewerSettings.compact_cards = !viewerSettings.compact_cards;
+    persistViewerSettings();
+    scheduleServerSettingsSave();
+    applyViewerSettingsToRuntime({ restartPolling: false, rerenderGrid: false });
+    const compactCheck = document.getElementById('settings-compact-cards');
+    if (compactCheck) compactCheck.checked = viewerSettings.compact_cards;
+    syncDensityToggle();
   }
 
   function expandCard(idx) {
     const m = displayedMemories[idx];
     if (!m) return;
-    const date = new Date(m.created_at * 1000).toLocaleString();
-    const updated = m.updated_at !== m.created_at ? '  ·  Updated ' + new Date(m.updated_at * 1000).toLocaleString() : '';
+    selectedMemoryIndex = idx;
+    selectedMemoryId = m.id;
+    openMemoryDetail(m);
+  }
+
+  // Open the detail overlay for a memory object. Works for a full list record
+  // and for a graph node (which carries no created_at/updated_at), so a node
+  // outside the current list filter still opens.
+  function openMemoryDetail(m) {
+    if (!m) return;
+    const createdTs = Number(m.created_at);
+    const updatedTs = Number(m.updated_at);
+    const date = Number.isFinite(createdTs) && createdTs > 0 ? new Date(createdTs * 1000).toLocaleString() : '';
+    const updated = (Number.isFinite(updatedTs) && updatedTs > 0 && updatedTs !== createdTs) ? '  ·  Updated ' + new Date(updatedTs * 1000).toLocaleString() : '';
     const qualityChips = [
       m.source ? \`<span class="tag">src:\${esc(m.source)}</span>\` : '',
       Number.isFinite(Number(m.dynamic_confidence ?? m.confidence)) ? \`<span class="tag">conf:\${Math.round(Number(m.dynamic_confidence ?? m.confidence) * 100)}%</span>\` : '',
@@ -419,8 +521,8 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       \${showKeyLine ? \`<div class="expand-key" style="margin-bottom:0.4rem">\${esc(m.key)}</div>\` : ''}
       \${m.tags ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${m.tags.split(',').map(t => \`<span class="tag">\${esc(t.trim())}</span>\`).join('')}</div>\` : ''}
       \${qualityChips ? \`<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.25rem">\${qualityChips}</div>\` : ''}\`;
-    document.getElementById('expand-content').textContent = m.content;
-    document.getElementById('expand-meta').textContent = 'ID: ' + m.id + '  ·  Created ' + date + updated;
+    document.getElementById('expand-content').textContent = m.content || '';
+    document.getElementById('expand-meta').textContent = 'ID: ' + m.id + (date ? '  ·  Created ' + date + updated : '');
     document.getElementById('expand-overlay').classList.add('open');
     document.body.style.overflow = 'hidden';
 
@@ -729,6 +831,81 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     if (!overlay) return;
     if (overlay.classList.contains('open')) overlay.classList.remove('open');
     else overlay.classList.add('open');
+  }
+
+  // New-memory composer. Writes a real memory through the same authenticated
+  // MCP path agents use (memory_save); no new server surface, no faked data.
+  let newMemorySaving = false;
+
+  function setNewMemoryError(message) {
+    const el = document.getElementById('newmem-err');
+    if (!el) return;
+    el.textContent = message || '';
+    el.style.display = message ? 'block' : 'none';
+  }
+
+  function openNewMemory() {
+    if (!ensureAppReady('New memory')) return;
+    const overlay = document.getElementById('newmem-overlay');
+    if (!overlay) return;
+    setNewMemoryError('');
+    overlay.classList.add('open');
+    setTimeout(() => {
+      const content = document.getElementById('newmem-content');
+      if (content) content.focus();
+    }, 0);
+  }
+
+  function closeNewMemory() {
+    const overlay = document.getElementById('newmem-overlay');
+    if (overlay) overlay.classList.remove('open');
+  }
+
+  function closeNewMemoryOverlay(event) {
+    const overlay = document.getElementById('newmem-overlay');
+    if (!overlay) return;
+    if (event && event.target !== overlay) return;
+    overlay.classList.remove('open');
+  }
+
+  async function submitNewMemory() {
+    if (!ensureAppReady('New memory')) return;
+    if (newMemorySaving) return;
+    const typeEl = document.getElementById('newmem-type');
+    const titleEl = document.getElementById('newmem-title');
+    const keyEl = document.getElementById('newmem-key');
+    const contentEl = document.getElementById('newmem-content');
+    const btn = document.getElementById('newmem-save-btn');
+    const type = (typeEl && typeEl.value) || 'note';
+    const title = (titleEl && titleEl.value.trim()) || '';
+    const key = (keyEl && keyEl.value.trim()) || '';
+    const content = (contentEl && contentEl.value.trim()) || '';
+    if (!content) {
+      setNewMemoryError('Content is required.');
+      if (contentEl) contentEl.focus();
+      return;
+    }
+    setNewMemoryError('');
+    newMemorySaving = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    const args = { type: type, content: content, source: 'viewer' };
+    if (title) args.title = title;
+    if (key) args.key = key;
+    try {
+      await callMcpTool('memory_save', args, 'viewer-new-memory');
+      closeNewMemory();
+      if (typeEl) typeEl.value = 'note';
+      if (titleEl) titleEl.value = '';
+      if (keyEl) keyEl.value = '';
+      if (contentEl) contentEl.value = '';
+      showToast('Memory saved.', 'success', true);
+      await loadMemories(true);
+    } catch (err) {
+      setNewMemoryError((err && err.message) || 'Could not save the memory.');
+    } finally {
+      newMemorySaving = false;
+      if (btn) { btn.disabled = false; btn.textContent = 'Save memory'; }
+    }
   }
 
 `;

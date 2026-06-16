@@ -24,8 +24,9 @@ export const componentStyles = `  .toast {
     padding: 0.6rem 0.9rem;
     /* Clear gap below the sticky header; z-index stays under the header (100)
        so the opaque header occludes the banner cleanly as it scrolls away
-       rather than colliding with it. */
-    margin: 1rem 40px 0;
+       rather than colliding with it. The bottom margin keeps the content below
+       from crowding the banner. */
+    margin: 1rem 40px;
     position: relative;
     z-index: 1;
     border: 1px solid var(--rule);
@@ -441,5 +442,47 @@ export const componentStyles = `  .toast {
     width: 18px;
     height: 18px;
     accent-color: var(--butter);
+  }
+
+  /* ── FIRST-RUN ONBOARDING ── */
+  .onboarding { margin: 0 0 1.4rem; }
+  .ob-card { background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 16px; padding: 1.6rem 1.6rem 1.3rem; }
+  .ob-head { margin-bottom: 1.3rem; }
+  .ob-eyebrow { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--butter); margin-bottom: 0.5rem; }
+  .ob-title { font-family: var(--disp); font-weight: 560; font-size: 1.5rem; color: var(--cream); margin: 0 0 0.4rem; }
+  .ob-lede { color: var(--cream-dim); font-size: 0.92rem; line-height: 1.55; max-width: 60ch; }
+  .ob-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.2rem; }
+  .ob-step { display: grid; grid-template-columns: auto 1fr; gap: 0.9rem; align-items: start; }
+  .ob-num { width: 26px; height: 26px; border-radius: 50%; background: var(--butter-glow); color: var(--butter); font-family: var(--mono); font-size: 0.8rem; display: flex; align-items: center; justify-content: center; border: 1px solid var(--rule); }
+  .ob-bd h3 { font-family: var(--disp); font-weight: 560; font-size: 1.05rem; color: var(--cream); margin: 0 0 0.3rem; }
+  .ob-bd p { color: var(--cream-dim); font-size: 0.88rem; line-height: 1.5; margin: 0 0 0.7rem; max-width: 62ch; }
+  .ob-row { display: flex; gap: 0.5rem; align-items: stretch; flex-wrap: wrap; }
+  .ob-mono { font-family: var(--mono); font-size: 0.78rem; color: var(--cream); background: var(--ground); border: 1px solid var(--rule); border-radius: 8px; padding: 0.6rem 0.7rem; flex: 1; min-width: 220px; overflow-x: auto; white-space: nowrap; }
+  .ob-mono.ob-pre { white-space: pre; line-height: 1.7; }
+  .ob-copy { font-family: var(--body); font-weight: 600; font-size: 0.74rem; color: var(--on-butter); background: var(--butter); border: 1px solid var(--butter); border-radius: 8px; padding: 0.4rem 0.85rem; cursor: pointer; white-space: nowrap; }
+  .ob-copy:hover { filter: brightness(1.05); }
+  .ob-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.7rem; }
+  .ob-tab { font-family: var(--body); font-size: 0.78rem; color: var(--cream-dim); background: transparent; border: 1px solid var(--rule); border-radius: 7px; padding: 0.35rem 0.7rem; cursor: pointer; }
+  .ob-tab.on { color: var(--cream); border-color: var(--butter-deep); background: var(--butter-glow); }
+  .ob-note { color: var(--cream-faint); font-size: 0.8rem; margin: 0.6rem 0 0; }
+  .ob-kv { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.3rem 0; }
+  .ob-kv span { color: var(--cream-faint); min-width: 96px; font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  .ob-kv code { font-family: var(--mono); color: var(--cream); font-size: 0.78rem; }
+  .ob-primary { font-family: var(--body); font-weight: 600; font-size: 0.85rem; color: var(--on-butter); background: var(--butter); border: 1px solid var(--butter); border-radius: 9px; padding: 0.6rem 1.1rem; cursor: pointer; }
+  .ob-primary:hover { filter: brightness(1.05); }
+  .ob-primary:disabled { opacity: 0.6; cursor: default; }
+  .ob-skip { margin-top: 1.2rem; font-family: var(--body); font-size: 0.78rem; color: var(--cream-faint); background: none; border: none; cursor: pointer; text-decoration: underline; }
+  .ob-skip:hover { color: var(--cream-dim); }
+  .ob-hint { display: flex; align-items: center; gap: 0.6rem; background: var(--surface-raised); border: 1px solid var(--rule); border-radius: 11px; padding: 0.6rem 0.8rem; font-size: 0.82rem; color: var(--cream-dim); }
+  .ob-hint-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sage); flex-shrink: 0; }
+  .ob-hint-text { flex: 1; }
+  .ob-hint-link { font-family: var(--body); font-weight: 600; font-size: 0.78rem; color: var(--butter); background: none; border: none; cursor: pointer; }
+  .ob-hint-x { font-size: 1.1rem; line-height: 1; color: var(--cream-faint); background: none; border: none; cursor: pointer; padding: 0 0.2rem; }
+  .ob-hint-x:hover { color: var(--cream); }
+  @media (max-width: 640px) {
+    .ob-step { grid-template-columns: 1fr; }
+    .ob-num { display: none; }
+    .ob-mono { white-space: pre-wrap; word-break: break-all; }
+    .ob-mono.ob-pre { white-space: pre-wrap; }
   }
 `;

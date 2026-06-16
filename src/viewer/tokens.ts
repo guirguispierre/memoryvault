@@ -41,6 +41,14 @@ export const vanillaTokensCss = `  :root {
     --toast-bg: #241F18;
     --card-glow: rgba(0, 0, 0, 0.35);
 
+    /* Memory-state tiers (active / settling / fading) and link accent. Defaults
+       reference per-theme tokens so they adapt to any palette; a theme may
+       override them for an exact look (constellation does). */
+    --mem-active: var(--sage);
+    --mem-settling: var(--butter);
+    --mem-fading: var(--cream-faint);
+    --mem-link: var(--latte);
+
     /* Legacy aliases: graph client reads these via getComputedStyle and
        relation styling keys off them, so they track the vanilla tokens. */
     --bg: var(--ground);
@@ -168,7 +176,7 @@ export const themeRuntimeJs = `  var CUSTOM_FONT_PRESETS = {
   };
   var CUSTOM_FONT_KEYS = Object.keys(CUSTOM_FONT_PRESETS);
   var CUSTOM_COLOR_TOKENS = ['ground', 'ground_2', 'cream', 'cream_dim', 'butter', 'rule'];
-  var VALID_THEMES = { slate: 1, paper: 1, vanilla: 1, midnight: 1, solarized: 1, ember: 1, arctic: 1, custom: 1 };
+  var VALID_THEMES = { constellation: 1, slate: 1, paper: 1, vanilla: 1, midnight: 1, solarized: 1, ember: 1, arctic: 1, custom: 1 };
 
   function buildVanillaCustomTheme() {
     // Mirrors the default :root tokens so 'reset' returns to vanilla dark.
@@ -266,7 +274,7 @@ export const themeRuntimeJs = `  var CUSTOM_FONT_PRESETS = {
   function resolveThemeFromSettings(s) {
     var src = s && typeof s === 'object' ? s : {};
     var migrate = function (v) { return v === 'cyberpunk' ? 'vanilla' : v; };
-    var theme = VALID_THEMES[migrate(src.theme)] ? migrate(src.theme) : 'slate';
+    var theme = VALID_THEMES[migrate(src.theme)] ? migrate(src.theme) : 'constellation';
     var lightBase = VALID_THEMES[migrate(src.light_theme)] ? migrate(src.light_theme) : 'paper';
     var mode = (src.theme_mode === 'light' || src.theme_mode === 'dark') ? src.theme_mode : 'auto';
     var light = lightBase === 'custom' ? 'custom' : lightBase + '-light';
