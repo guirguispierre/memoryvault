@@ -18,6 +18,13 @@ export const clientGraph = `
     return tier === 'active' ? '--mem-active' : (tier === 'settling' ? '--mem-settling' : '--mem-fading');
   }
 
+  // Persistently highlight a node and its neighbors in the open graph (used when
+  // a node is clicked or a list row is selected). Passing '' clears it.
+  function focusGraphNode(id) {
+    graphSelectedNodeId = id ? String(id) : null;
+    if (graphVisible && typeof graphApplyFocus === 'function') graphApplyFocus(graphSelectedNodeId || '');
+  }
+
   function renderGraph(nodes, edges, inferredEdges = []) {
     const svgEl = document.getElementById('graph-svg');
     const emptyEl = document.getElementById('graph-empty');
@@ -334,9 +341,13 @@ export const clientGraph = `
       });
     };
 
+    // Expose the focus helper so a click/selection can keep a node's
+    // neighborhood highlighted after the pointer leaves.
+    graphApplyFocus = applyGraphFocus;
     node
       .on('mouseenter', (event, d) => { applyGraphFocus(String(d.id)); })
-      .on('mouseleave', () => { applyGraphFocus(''); });
+      .on('mouseleave', () => { applyGraphFocus(graphSelectedNodeId || ''); });
+    if (graphSelectedNodeId) applyGraphFocus(graphSelectedNodeId);
 
     node.append('title').text((d) => {
       const label = d.title || d.key || (d.content || '').slice(0, 70) || d.id;

@@ -100,10 +100,10 @@ async function main() {
   const cookie = await signup(email, 'Verify View index');
   await seed(cookie);
 
-  const shoot = async (name, { width, height, theme = 'constellation', mode = 'dark', compact = false, mobile = false }, fn) => {
+  const shoot = async (name, { width, height, theme = 'constellation', mode = 'dark', compact = false, mobile = false, settings = {} }, fn) => {
     const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: mode === 'light' ? 'light' : 'dark', isMobile: mobile });
     const page = await ctx.newPage();
-    await setTheme(page, { theme, light_theme: 'paper', theme_mode: mode, compact_cards: compact, live_poll_interval_sec: 30 });
+    await setTheme(page, { theme, light_theme: 'paper', theme_mode: mode, compact_cards: compact, live_poll_interval_sec: 30, ...settings });
     if (fn) await fn(page);
     await ctx.close();
   };
@@ -186,6 +186,48 @@ async function main() {
       await loginUi(page, paperEmail);
       await page.waitForTimeout(FONT_SETTLE_MS);
       await page.screenshot({ path: `${SHOTS}/vh-paper-390.png` });
+    });
+  }
+
+  if (only === 'all' || only === 'graph') {
+    log('full graph: 2D state colors, node clicked, hover neighbors');
+    await shoot('graph', { width: 1280, height: 940 }, async (page) => {
+      await loginUi(page, email);
+      await page.click('#mode-graph');
+      await page.waitForSelector('#graph-svg .graph-node', { timeout: 15000 });
+      await page.waitForTimeout(3000);
+      await page.screenshot({ path: `${SHOTS}/vh-graph-2d-1280.png` });
+      // Pause physics so nodes hold still for hover/click; target the circle
+      // (the group has empty SVG space that doesn't capture clicks).
+      await page.click('#graph-toggle-physics'); await page.waitForTimeout(600);
+      const circles = page.locator('#graph-svg .graph-node circle');
+      const n = await circles.count();
+      const hoverTarget = circles.nth(Math.min(3, n - 1));
+      await hoverTarget.hover({ force: true }); await page.waitForTimeout(700);
+      await page.screenshot({ path: `${SHOTS}/vh-graph-hover-1280.png` });
+      const clickTarget = circles.nth(Math.min(2, n - 1));
+      await clickTarget.click({ force: true });
+      await page.waitForSelector('#expand-overlay.open', { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(700);
+      await page.screenshot({ path: `${SHOTS}/vh-graph-click-1280.png` });
+    });
+  }
+
+  if (only === 'graph3d') {
+    log('full graph: 3D toggle on, node clicked');
+    await shoot('graph-3d', { width: 1280, height: 940, settings: { graph_3d: true } }, async (page) => {
+      await loginUi(page, email);
+      await page.click('#mode-graph');
+      await page.waitForTimeout(1200);
+      const toggle = page.locator('[data-action="toggle-graph-3d"]');
+      if (await toggle.count()) {
+        await toggle.click();
+        await page.waitForTimeout(6000); // CDN load + render
+        await page.screenshot({ path: `${SHOTS}/vh-graph-3d-1280.png` });
+        const cv = page.locator('#graph-3d canvas');
+        if (await cv.count()) { await cv.click({ position: { x: 640, y: 460 } }); await page.waitForTimeout(900); }
+        await page.screenshot({ path: `${SHOTS}/vh-graph-3d-click-1280.png` });
+      }
     });
   }
 

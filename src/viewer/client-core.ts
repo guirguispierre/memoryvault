@@ -41,6 +41,10 @@ export const clientCore = `
   let graphSvgSelection = null;
   let graphZoomBehavior = null;
   let graphSimulation = null;
+  // Focus helper from the current renderGraph closure + the persistently
+  // selected node, so a clicked node keeps its neighborhood highlighted.
+  let graphApplyFocus = null;
+  let graphSelectedNodeId = null;
   let graphAutoTunedLabels = false;
   let graphSearchQuery = '';
   let graphRelationFilter = new Set(GRAPH_RELATION_TYPES);

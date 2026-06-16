@@ -9,6 +9,7 @@
 export const clientRail = `
   var railCanvas = null, railCtx = null, railDPR = 1, railW = 0, railH = 0;
   var railNodes = [], railEdges = [], railRAF = 0, railT = 0;
+  var railLastPos = [];
   var railVisible = true, railLastFetch = 0, railFetching = false;
   var RAIL_MAX_NODES = 40, RAIL_MAX_EDGES = 60;
 
@@ -108,6 +109,8 @@ export const clientRail = `
       var ang = n.a + railT * n.sp * 0.5;
       return [cx + Math.cos(ang) * n.rad * R, cy + Math.sin(ang) * n.rad * R];
     });
+    // Cache node positions in CSS px for click hit-testing.
+    railLastPos = railNodes.map(function (n, i) { return { id: n.id, x: pos[i][0] / railDPR, y: pos[i][1] / railDPR }; });
     railCtx.strokeStyle = railRgba(cols.accent, 0.13);
     railCtx.lineWidth = railDPR * 0.7;
     for (var e = 0; e < railEdges.length; e++) {
@@ -245,6 +248,28 @@ export const clientRail = `
         if (a) expandById(a.getAttribute('data-rail-link-id'));
       });
     }
+    // Clicking a node in the rail selects its row (or opens it if it is outside
+    // the current filter).
+    railCanvas.style.cursor = 'pointer';
+    railCanvas.addEventListener('click', function (e) {
+      if (!railLastPos.length) return;
+      var rect = railCanvas.getBoundingClientRect();
+      var px = e.clientX - rect.left, py = e.clientY - rect.top;
+      var best = null, bestD = 1e9;
+      for (var i = 0; i < railLastPos.length; i++) {
+        var dx = railLastPos[i].x - px, dy = railLastPos[i].y - py, d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = railLastPos[i]; }
+      }
+      if (!best || bestD > 24 * 24) return;
+      var idx = displayedMemories.findIndex(function (m) { return String(m.id) === String(best.id); });
+      if (idx !== -1) {
+        selectRow(idx);
+        var row = document.querySelector('#grid .r[data-card-index="' + idx + '"]');
+        if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else {
+        expandById(best.id);
+      }
+    });
     railEnsureGraph(true);
   }
 `;

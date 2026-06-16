@@ -445,6 +445,8 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       el.classList.toggle('sel', Number(el.getAttribute('data-card-index')) === idx);
     });
     if (typeof updateRailSelection === 'function') updateRailSelection(m);
+    // Keep the open graph (if any) and the rail node in step with the row.
+    if (typeof focusGraphNode === 'function') focusGraphNode(m.id);
   }
 
   function syncStateChips() {
