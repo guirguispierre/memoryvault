@@ -380,21 +380,12 @@ export const overlayStyles = `  .semantic-status-box {
     line-height: 1.4;
   }
 
-  /* Compact density, driven by data-density on the #grid rows host. */
-  #grid[data-density="compact"] .row {
-    padding: 9px 16px;
-    gap: 12px;
-  }
-  #grid[data-density="compact"] .ttl { font-size: 15px; margin-bottom: 1px; }
-  #grid[data-density="compact"] .group { margin-top: 16px; }
-  /* Clamp the body preview to a single line so rows stay tight. */
-  #grid[data-density="compact"] .txt {
-    font-size: 12.5px;
-    line-height: 1.4;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  /* Compact density, driven by data-density on the #grid rows host: drop the
+     snippet line and tighten padding so more rows fit. */
+  #grid[data-density="compact"] .r { padding: 6px 12px; }
+  #grid[data-density="compact"] .ti .x { display: none; }
+  #grid[data-density="compact"] .stcell .mtr { height: 15px; }
+  #grid[data-density="compact"] .lh { padding-bottom: 6px; }
 
   @media (max-width: 900px) {
     .hdr { padding: 14px 16px; gap: 14px; flex-wrap: wrap; }

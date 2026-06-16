@@ -23,6 +23,9 @@ export const clientCore = `
   // Client-side state-tier filter (drawn from the same strength tiers the list
   // groups by). All tiers shown by default; toggling re-renders the grid only.
   let memoryStateFilter = new Set(['active', 'settling', 'resting']);
+  // The row the user has selected; drives the graph rail and its card.
+  let selectedMemoryIndex = -1;
+  let selectedMemoryId = null;
   let searchTimeout = null;
   // corpusMemories is the whole brain (no type/search filter) and drives the
   // recall ribbon and header summary; displayedMemories is the filtered set

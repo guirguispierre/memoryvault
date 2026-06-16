@@ -487,6 +487,9 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
         case 'open-full-changelog':
           window.open('https://github.com/guirguispierre/memoryvault/blob/main/CHANGELOG.md', '_blank', 'noopener');
           break;
+        case 'select-row':
+          selectRow(Number(target.getAttribute('data-card-index') || '-1'));
+          break;
         case 'expand-card':
           expandCard(Number(target.getAttribute('data-card-index') || target.getAttribute('data-idx') || '-1'));
           break;
@@ -526,6 +529,14 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
         applyViewerSettingsToRuntime({ restartPolling: false, rerenderGraph: graphVisible, rerenderGrid: false });
         return;
       }
+    });
+
+    // Double-clicking a memory row opens the full detail overlay (single click
+    // selects it for the rail), so the expand path stays reachable.
+    document.addEventListener('dblclick', (event) => {
+      const row = event.target instanceof Element ? event.target.closest('#grid .r[data-card-index]') : null;
+      if (!row) return;
+      expandCard(Number(row.getAttribute('data-card-index') || '-1'));
     });
 
     bindInput('search-input', onSearch);

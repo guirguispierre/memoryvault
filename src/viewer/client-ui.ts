@@ -355,40 +355,49 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     wrap.innerHTML = html;
   }
 
-  const TIER_ORDER = [
-    { key: 'active', label: 'Active', note: 'reinforced this week', bead: 'full' },
-    { key: 'settling', label: 'Settling', note: 'quiet for a few days', bead: 'half' },
-    { key: 'resting', label: 'Resting', note: 'fading — review soon', bead: 'ring' },
-  ];
+  // Tier → control-center hue + label. 'resting' is surfaced as "fading".
+  const TIER_META = {
+    active: { label: 'Active', colorVar: '--mem-active' },
+    settling: { label: 'Settling', colorVar: '--mem-settling' },
+    resting: { label: 'Fading', colorVar: '--mem-fading' },
+  };
 
-  function renderMemoryRow(m, index, strength, bead, dimmed, order) {
-    const accId = 'MV·' + String(m.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase();
-    const accTime = formatAccessionTime(Number(m.updated_at ?? m.created_at ?? 0));
-    const kind = '<span class="kind">' + esc(m.type) + '</span>';
-    const confidence = clampUnit(m.dynamic_confidence ?? m.confidence, 0.7);
-    const verified = m.type === 'fact' && confidence >= 0.85 ? '<span class="ver">verified</span>' : '';
-    const isLedgerFact = m.type === 'fact' && m.key;
-    // For facts the key IS the title; the body shows only the value so the
-    // key is never repeated on both lines.
-    const titleText = isLedgerFact ? m.key : (m.title || m.key || 'untitled');
-    const body = isLedgerFact
-      ? '<div class="txt ledger"><span class="a">&rarr;</span><span class="v">' + esc(m.content) + '</span></div>'
-      : '<div class="txt">' + esc(String(m.content || '').slice(0, 280)) + '</div>';
-    const linked = Number(m.link_count) > 0
-      ? '<span class="links">&#8627; ' + Number(m.link_count) + ' linked</span>'
-      : '';
-    const pct = Math.round(strength * 100);
-    return '<div class="row' + (dimmed ? ' dim' : '') + '" data-type="' + esc(m.type) + '" data-action="expand-card" data-card-index="' + index + '" style="animation-delay:' + Math.min(order * 0.03, 0.36) + 's">' +
-      '<div class="bead ' + bead + '"></div>' +
-      '<div>' +
-        '<div class="ttl">' + esc(titleText) + ' ' + kind + verified + '</div>' +
-        body +
+  // Short "last seen" — relative age of the most recent touch.
+  function formatSeenShort(ts) {
+    if (!Number.isFinite(ts) || ts <= 0) return '';
+    const s = Date.now() / 1000 - ts;
+    if (s < 60) return 'now';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h';
+    if (s < 86400 * 30) return Math.floor(s / 86400) + 'd';
+    if (s < 86400 * 365) return Math.floor(s / (86400 * 30)) + 'mo';
+    return Math.floor(s / (86400 * 365)) + 'y';
+  }
+
+  function renderMemoryRow(m, index, strength, tier, order, selected) {
+    const meta = TIER_META[tier] || TIER_META.resting;
+    const cvar = 'var(' + meta.colorVar + ')';
+    const pct = Math.max(6, Math.round(strength * 100));
+    const hasTitle = !!(m.title && String(m.title).trim());
+    const titleText = hasTitle ? m.title : (m.content ? String(m.content).slice(0, 90) : (m.key || 'untitled'));
+    const snippet = hasTitle ? String(m.content || '') : '';
+    const keyText = m.key ? m.key : ('MV·' + String(m.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase());
+    const linkN = Number(m.link_count);
+    const links = Number.isFinite(linkN) && linkN > 0 ? '&#9670; ' + linkN : '';
+    const seen = formatSeenShort(Number(m.updated_at ?? m.created_at ?? 0));
+    return '<div class="r' + (selected ? ' sel' : '') + '" data-type="' + esc(m.type) + '" data-action="select-row" data-card-index="' + index + '" data-memory-id="' + esc(String(m.id || '')) + '" style="animation-delay:' + Math.min(order * 0.025, 0.3) + 's">' +
+      '<div class="stcell">' +
+        '<span class="dot" style="background:' + cvar + ';color:' + cvar + '"></span>' +
+        '<span class="mtr"><i style="height:' + pct + '%;background:' + cvar + '"></i></span>' +
       '</div>' +
-      '<div class="meta">' +
-        '<span class="acc">' + esc(accId) + (accTime ? ' · ' + esc(accTime) : '') + '</span>' +
-        '<span class="strength"><span class="lab">strength</span><span class="bar"><i style="width:' + pct + '%"></i></span></span>' +
-        linked +
+      '<span class="k" title="' + esc(keyText) + '">' + esc(keyText) + '</span>' +
+      '<div class="ti">' +
+        '<div class="t">' + esc(titleText) + '</div>' +
+        (snippet ? '<div class="x">' + esc(snippet) + '</div>' : '') +
       '</div>' +
+      '<span class="type">' + esc(m.type) + '</span>' +
+      '<span class="lk">' + links + '</span>' +
+      '<span class="when">' + esc(seen) + '</span>' +
     '</div>';
   }
 
@@ -399,28 +408,41 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       return;
     }
     const tsNow = Date.now() / 1000;
-    const scored = memories.map((m, index) => ({ m, index, strength: memoryStrength(m, tsNow) }));
-    let html = '';
-    let order = 0;
-    let shown = 0;
-    for (const tier of TIER_ORDER) {
-      if (!memoryStateFilter.has(tier.key)) continue;
-      const group = scored
-        .filter((item) => strengthTier(item.strength) === tier.key)
-        .sort((a, b) => b.strength - a.strength);
-      if (!group.length) continue;
-      html += '<div class="group"><span class="t">' + tier.label + '</span><span class="ln"></span><span class="n">' + tier.note + '</span></div>';
-      for (const item of group) {
-        html += renderMemoryRow(item.m, item.index, item.strength, tier.bead, tier.key === 'resting', order);
-        order += 1;
-        shown += 1;
-      }
-    }
-    if (!shown) {
+    // Flat aligned table, strongest first so the strength meter reads as a
+    // gradient. The state-tier chips filter the rows client-side.
+    const scored = memories
+      .map((m, index) => {
+        const strength = memoryStrength(m, tsNow);
+        return { m, index, strength, tier: strengthTier(strength) };
+      })
+      .filter((item) => memoryStateFilter.has(item.tier))
+      .sort((a, b) => b.strength - a.strength);
+    if (!scored.length) {
       grid.innerHTML = '<div class="empty-state"><div class="empty-icon">filtered.</div>No memories match the selected states.</div>';
       return;
     }
+    let html = '<div class="lh"><span></span><span>key</span><span>memory</span><span>type</span><span>links</span><span>seen</span></div>';
+    let order = 0;
+    for (const item of scored) {
+      const sel = selectedMemoryId != null && item.m.id === selectedMemoryId;
+      html += renderMemoryRow(item.m, item.index, item.strength, item.tier, order, sel);
+      order += 1;
+    }
     grid.innerHTML = html;
+  }
+
+  // Single click selects a row: highlights it and drives the graph rail. The
+  // full detail overlay opens on double-click (and from the rail card), so the
+  // existing expand path is preserved.
+  function selectRow(idx) {
+    const m = displayedMemories[idx];
+    if (!m) return;
+    selectedMemoryIndex = idx;
+    selectedMemoryId = m.id;
+    document.querySelectorAll('#grid .r').forEach((el) => {
+      el.classList.toggle('sel', Number(el.getAttribute('data-card-index')) === idx);
+    });
+    if (typeof updateRailSelection === 'function') updateRailSelection(m);
   }
 
   function syncStateChips() {

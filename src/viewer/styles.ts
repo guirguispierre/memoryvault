@@ -512,58 +512,91 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
     transform: translateY(0);
   }
 
-  /* Tier group header */
-  .group {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    margin: 26px 2px 4px;
-  }
-  .group .t {
-    font-family: var(--disp);
-    font-style: italic;
-    font-weight: 420;
-    font-size: 16px;
-    color: var(--butter);
-  }
-  .group .ln { flex: 1; height: 1px; background: var(--rule-soft); transform: translateY(-4px); }
-  .group .n {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--cream-faint);
-  }
-
-  /* Memory row */
-  .row {
+  /* ── MEMORY TABLE ── */
+  /* Column header + rows share one grid so the columns line up exactly:
+     state | key | memory | type | links | seen */
+  .lh, .r {
     display: grid;
-    grid-template-columns: 16px 1fr auto;
-    gap: 15px;
-    align-items: start;
-    padding: 16px;
-    border: 1px solid transparent;
-    border-radius: 11px;
-    transition: background 0.15s, border-color 0.15s;
+    grid-template-columns: 16px 158px minmax(0, 1fr) 70px 58px 46px;
+    gap: 14px;
+    align-items: center;
+  }
+  .lh {
+    padding: 0 12px 8px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--cream-faint);
+    border-bottom: 1px solid var(--rule);
+  }
+  .lh span:nth-child(4), .lh span:nth-child(5), .lh span:nth-child(6) { text-align: right; }
+  .r {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--rule-soft);
     cursor: pointer;
+    position: relative;
+    transition: background 0.1s;
     animation: slideUp 0.3s ease backwards;
   }
-  .row:hover { background: var(--ground-2); border-color: var(--rule); }
-  .bead { width: 9px; height: 9px; border-radius: 50%; margin-top: 6px; }
-  .bead.full { background: var(--butter); }
-  .bead.half { background: var(--butter-deep); }
-  .bead.ring { background: transparent; border: 1.5px solid var(--latte); }
-  .ttl {
-    font-family: var(--disp);
-    font-weight: 560;
-    font-size: 16.5px;
-    letter-spacing: 0.002em;
-    margin-bottom: 4px;
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    flex-wrap: wrap;
-    color: var(--cream);
-    word-break: break-word;
+  .r:hover { background: var(--surface-raised); }
+  .r.sel { background: var(--surface-raised); }
+  .r.sel::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: var(--butter);
   }
+  /* State cell: glowing dot (memory state) over a vertical strength meter. */
+  .stcell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .stcell .dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 7px currentColor; }
+  .stcell .mtr {
+    width: 8px;
+    height: 22px;
+    border-radius: 2px;
+    background: var(--ground-3);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  .stcell .mtr i { display: block; width: 100%; }
+  .r .k {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--butter);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .r .ti { min-width: 0; }
+  .r .ti .t {
+    font-family: var(--disp);
+    font-size: 14.5px;
+    color: var(--cream);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .r .ti .x {
+    font-size: 11.5px;
+    color: var(--cream-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+  }
+  .r .type {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--cream-dim);
+    text-align: right;
+  }
+  .r .lk { font-family: var(--mono); font-size: 11px; color: var(--mem-link); text-align: right; white-space: nowrap; }
+  .r .when { font-family: var(--mono); font-size: 10.5px; color: var(--cream-faint); text-align: right; }
+  /* .kind retained: used by the expand/detail overlay header. */
   .kind {
     font-family: var(--mono);
     font-size: 9.5px;
@@ -571,56 +604,6 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
     text-transform: uppercase;
     color: var(--cream-faint);
   }
-  .ver {
-    font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--sage);
-    border: 1px solid rgba(157, 179, 154, 0.35);
-    border-radius: 4px;
-    padding: 1px 6px;
-    transform: translateY(-1px);
-  }
-  .txt {
-    font-size: 14px;
-    line-height: 1.55;
-    color: var(--cream-dim);
-    max-width: 64ch;
-    word-break: break-word;
-  }
-  .ledger .k { font-family: var(--mono); font-size: 12.5px; color: var(--butter-deep); }
-  .ledger .a { color: var(--cream-faint); margin: 0 7px; }
-  .ledger .v { font-size: 14.5px; color: var(--cream-dim); }
-  .meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 7px;
-    white-space: nowrap;
-    padding-top: 2px;
-  }
-  .acc { font-family: var(--mono); font-size: 10.5px; color: var(--cream-faint); }
-  .strength { display: flex; align-items: center; gap: 6px; }
-  .strength .lab {
-    font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--cream-faint);
-  }
-  .strength .bar {
-    width: 54px;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--ground-3);
-    border: 1px solid var(--rule);
-    overflow: hidden;
-  }
-  .strength .bar i { display: block; height: 100%; background: var(--butter); }
-  .links { font-family: var(--mono); font-size: 10.5px; color: var(--sage); }
-  .row.dim .strength .bar i { background: var(--latte); }
-  .row.dim .ttl { color: var(--cream-dim); }
 
   /* Expand overlay */
   .expand-overlay {
