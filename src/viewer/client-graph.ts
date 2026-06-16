@@ -1,4 +1,24 @@
-export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges = []) {
+export const clientGraph = `
+  // Memory state for a graph node, shared by the full graph and the home rail so
+  // both read the same living system as the list/table. The /api/graph payload
+  // carries no per-node updated_at, so this weights the dynamic importance and
+  // confidence the server already computed rather than a client recency term.
+  function graphNodeStrength(n) {
+    const imp = Math.min(Math.max(Number.isFinite(Number(n.dynamic_importance ?? n.importance)) ? Number(n.dynamic_importance ?? n.importance) : 0.5, 0), 1);
+    const conf = Math.min(Math.max(Number.isFinite(Number(n.dynamic_confidence ?? n.confidence)) ? Number(n.dynamic_confidence ?? n.confidence) : 0.7, 0), 1);
+    return Math.min(Math.max(0.6 * imp + 0.4 * conf, 0), 1);
+  }
+  function graphNodeTier(n) {
+    const s = graphNodeStrength(n);
+    if (s >= 0.62) return 'active';
+    if (s >= 0.42) return 'settling';
+    return 'resting';
+  }
+  function graphStateColorVar(tier) {
+    return tier === 'active' ? '--mem-active' : (tier === 'settling' ? '--mem-settling' : '--mem-fading');
+  }
+
+  function renderGraph(nodes, edges, inferredEdges = []) {
     const svgEl = document.getElementById('graph-svg');
     const emptyEl = document.getElementById('graph-empty');
     svgEl.innerHTML = '';
@@ -234,22 +254,22 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
       )
       .on('click', (event, d) => { expandById(d.id); });
 
+    // Colour encodes memory state (active/settling/fading) in the Constellation
+    // tier palette; size encodes strength so the graph reads like the rest of
+    // the app. Falls back to the type colour only if a state token is unset.
+    const stateColor = (d) => _cs.getPropertyValue(graphStateColorVar(graphNodeTier(d))).trim() || typeColor[d.type] || '#888';
     node.append('circle')
       .attr('r', d => {
         const degree = degreeById.get(d.id) || 0;
-        const base = isMobile ? 8 : 6;
-        const maxR = isMobile ? 17 : 15;
-        const importance = Math.min(Math.max(Number.isFinite(Number(d.dynamic_importance ?? d.importance)) ? Number(d.dynamic_importance ?? d.importance) : 0.5, 0), 1);
-        return Math.min(maxR, base + degree * 0.4 + importance * (isMobile ? 4.2 : 3.6));
+        const base = isMobile ? 7 : 5.5;
+        const maxR = isMobile ? 18 : 16;
+        return Math.min(maxR, base + degree * 0.35 + graphNodeStrength(d) * (isMobile ? 7 : 6));
       })
-      .attr('fill', d => typeColor[d.type] || '#888')
+      .attr('fill', stateColor)
       .attr('fill-opacity', baseNodeOpacity)
-      .attr('stroke', d => typeColor[d.type] || '#888')
+      .attr('stroke', stateColor)
       .attr('stroke-opacity', baseNodeStrokeOpacity)
-      .attr('stroke-width', (d) => {
-        const importance = Math.min(Math.max(Number.isFinite(Number(d.dynamic_importance ?? d.importance)) ? Number(d.dynamic_importance ?? d.importance) : 0.5, 0), 1);
-        return 1.4 + importance * 1.6;
-      });
+      .attr('stroke-width', (d) => 1.4 + graphNodeStrength(d) * 1.6);
 
     node.append('text')
       .attr('dx', 12).attr('dy', 4)
@@ -322,8 +342,9 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
       const label = d.title || d.key || (d.content || '').slice(0, 70) || d.id;
       const confidence = Math.round(Math.min(Math.max(Number(d.dynamic_confidence ?? d.confidence) || 0.7, 0), 1) * 100);
       const importance = Math.round(Math.min(Math.max(Number(d.dynamic_importance ?? d.importance) || 0.5, 0), 1) * 100);
+      const stateLabel = { active: 'active', settling: 'settling', resting: 'fading' }[graphNodeTier(d)] || 'fading';
       const source = d.source ? \`\\nsource: \${d.source}\` : '';
-      return \`\${label}\\nconfidence: \${confidence}%\\nimportance: \${importance}%\${source}\`;
+      return \`\${label}\\nstate: \${stateLabel}\\nconfidence: \${confidence}%\\nimportance: \${importance}%\${source}\`;
     });
 
     simulation.on('tick', () => {

@@ -60,16 +60,15 @@ export const clientRail = `
 
   function railBuildNodes() {
     var cols = railColors();
-    var palette = [cols.active, cols.settling, cols.accent, cols.link];
     var src = (lastGraphData && lastGraphData.nodes) ? lastGraphData.nodes : [];
     var used = src.slice(0, RAIL_MAX_NODES);
     var idIndex = {};
     railNodes = used.map(function (n, i) {
       var id = String(n.id != null ? n.id : i);
       idIndex[id] = i;
-      var color = palette[i % palette.length];
-      var st = n.strength != null ? Number(n.strength) : null;
-      if (st != null && Number.isFinite(st)) color = st >= 0.62 ? cols.active : (st >= 0.38 ? cols.settling : cols.fading);
+      // Same state tiers as the full graph and the list, so the rail is faithful.
+      var tier = typeof graphNodeTier === 'function' ? graphNodeTier(n) : 'resting';
+      var color = tier === 'active' ? cols.active : (tier === 'settling' ? cols.settling : cols.fading);
       return {
         id: id,
         a: railHash(id, 7) * 6.2832,
