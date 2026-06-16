@@ -254,8 +254,23 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     lastStatsSnapshot = { all: total, note: counts.note, fact: counts.fact, journal: counts.journal };
     const linkEnds = corpusMemories.reduce((sum, m) => sum + (Number.isFinite(Number(m.link_count)) ? Number(m.link_count) : 0), 0);
     const linkTotal = Math.round(linkEnds / 2);
-    document.getElementById('hdr-count').textContent =
-      total + (total === 1 ? ' entry' : ' entries') + ' · ' + linkTotal + (linkTotal === 1 ? ' link' : ' links');
+    // State tiers are derived per-memory from the loaded corpus (capped at 500);
+    // total is the full-corpus server count, so on very large brains the tier
+    // counts cover the loaded window while the total stays whole-brain.
+    const tsNow = Date.now() / 1000;
+    let activeN = 0, settlingN = 0, fadingN = 0;
+    for (const m of corpusMemories) {
+      const tier = strengthTier(memoryStrength(m, tsNow));
+      if (tier === 'active') activeN += 1;
+      else if (tier === 'settling') settlingN += 1;
+      else fadingN += 1;
+    }
+    const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    setText('stat-total', total);
+    setText('stat-active', activeN);
+    setText('stat-settling', settlingN);
+    setText('stat-fading', fadingN);
+    setText('stat-links', linkTotal);
     renderPour(corpusMemories);
   }
 
@@ -387,7 +402,9 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
     const scored = memories.map((m, index) => ({ m, index, strength: memoryStrength(m, tsNow) }));
     let html = '';
     let order = 0;
+    let shown = 0;
     for (const tier of TIER_ORDER) {
+      if (!memoryStateFilter.has(tier.key)) continue;
       const group = scored
         .filter((item) => strengthTier(item.strength) === tier.key)
         .sort((a, b) => b.strength - a.strength);
@@ -396,9 +413,54 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       for (const item of group) {
         html += renderMemoryRow(item.m, item.index, item.strength, tier.bead, tier.key === 'resting', order);
         order += 1;
+        shown += 1;
       }
     }
+    if (!shown) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">filtered.</div>No memories match the selected states.</div>';
+      return;
+    }
     grid.innerHTML = html;
+  }
+
+  function syncStateChips() {
+    [['active', 'state-active'], ['settling', 'state-settling'], ['resting', 'state-resting']].forEach(([key, id]) => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('active', memoryStateFilter.has(key));
+    });
+  }
+
+  function toggleStateFilter(state) {
+    if (!['active', 'settling', 'resting'].includes(state)) return;
+    if (memoryStateFilter.has(state)) {
+      // Keep at least one tier on so the list never goes fully blank by toggle.
+      if (memoryStateFilter.size === 1) return;
+      memoryStateFilter.delete(state);
+    } else {
+      memoryStateFilter.add(state);
+    }
+    syncStateChips();
+    renderGrid(displayedMemories);
+  }
+
+  function syncDensityToggle() {
+    const btn = document.getElementById('density-toggle');
+    if (!btn) return;
+    const compact = !!(viewerSettings && viewerSettings.compact_cards);
+    btn.classList.toggle('active', compact);
+    btn.setAttribute('aria-pressed', compact ? 'true' : 'false');
+    btn.innerHTML = compact ? '\\u229F comfortable' : '\\u229E compact';
+  }
+
+  function toggleDensity() {
+    if (!viewerSettings) return;
+    viewerSettings.compact_cards = !viewerSettings.compact_cards;
+    persistViewerSettings();
+    scheduleServerSettingsSave();
+    applyViewerSettingsToRuntime({ restartPolling: false, rerenderGrid: false });
+    const compactCheck = document.getElementById('settings-compact-cards');
+    if (compactCheck) compactCheck.checked = viewerSettings.compact_cards;
+    syncDensityToggle();
   }
 
   function expandCard(idx) {

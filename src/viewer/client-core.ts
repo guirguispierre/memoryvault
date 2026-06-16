@@ -20,6 +20,9 @@ export const clientCore = `
   let TOKEN = '';
   let SESSION_MODE = 'none';
   let activeFilter = '';
+  // Client-side state-tier filter (drawn from the same strength tiers the list
+  // groups by). All tiers shown by default; toggling re-renders the grid only.
+  let memoryStateFilter = new Set(['active', 'settling', 'resting']);
   let searchTimeout = null;
   // corpusMemories is the whole brain (no type/search filter) and drives the
   // recall ribbon and header summary; displayedMemories is the filtered set
@@ -244,6 +247,7 @@ export const clientCore = `
     graphPhysicsEnabled = viewerSettings.graph_physics_enabled;
     const grid = document.getElementById('grid');
     if (grid) grid.setAttribute('data-density', viewerSettings.compact_cards ? 'compact' : 'comfortable');
+    syncDensityToggle();
     document.body.classList.toggle('scanlines-off', !viewerSettings.show_scanlines);
     document.body.classList.toggle('motion-reduced', viewerSettings.reduce_motion);
     applyCustomTheme();
@@ -320,6 +324,8 @@ export const clientCore = `
     const defaultFilter = viewerSettings?.default_memory_filter || '';
     activeFilter = defaultFilter;
     syncFilterPills(activeFilter);
+    syncStateChips();
+    syncDensityToggle();
     loadMemories();
     startLivePolling();
     reconcileServerViewerSettings();

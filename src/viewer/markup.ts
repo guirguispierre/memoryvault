@@ -85,12 +85,18 @@ export const bodyMarkup = `</style>
     </div>
   </div>
 
-  <div class="pour">
-    <div class="pour-cap">
-      <span class="pour-label">Recall, <b>last 24 hours</b></span>
-      <span class="pour-meta"><span id="hdr-count">— entries</span><span>&middot;</span><span>synced <span id="hdr-time"></span></span></span>
+  <div class="statstrip">
+    <div class="stat-s"><b id="stat-total">0</b> memories</div>
+    <div class="stat-s"><i class="stat-dot" style="background:var(--mem-active)"></i><b id="stat-active">0</b> active</div>
+    <div class="stat-s"><i class="stat-dot" style="background:var(--mem-settling)"></i><b id="stat-settling">0</b> settling</div>
+    <div class="stat-s"><i class="stat-dot" style="background:var(--mem-fading)"></i><b id="stat-fading">0</b> fading</div>
+    <div class="stat-s stat-s-end"><b id="stat-links">0</b> links</div>
+    <span class="stat-sp"></span>
+    <div class="stat-recall" title="Recall activity, last 24 hours">
+      <span class="stat-recall-label">recall 24h</span>
+      <div class="pour-ticks" id="pour-ticks" aria-hidden="true"></div>
+      <span class="stat-recall-time">synced <span id="hdr-time"></span></span>
     </div>
-    <div class="pour-ticks" id="pour-ticks" aria-hidden="true"></div>
   </div>
 
   <div id="graph-view" style="display:none;flex:1;position:relative;background:var(--ground);min-height:600px">
@@ -128,6 +134,12 @@ export const bodyMarkup = `</style>
           <button class="chip" id="stat-journal" data-action="set-filter" data-filter="journal">Journal <span class="chip-n" id="count-journal">0</span></button>
         </div>
         <span class="filter-sp"></span>
+        <div class="chips chips-state">
+          <button class="chip active" id="state-active" data-action="toggle-state-filter" data-state="active"><i class="c" style="background:var(--mem-active)"></i>Active</button>
+          <button class="chip active" id="state-settling" data-action="toggle-state-filter" data-state="settling"><i class="c" style="background:var(--mem-settling)"></i>Settling</button>
+          <button class="chip active" id="state-resting" data-action="toggle-state-filter" data-state="resting"><i class="c" style="background:var(--mem-fading)"></i>Fading</button>
+        </div>
+        <button class="dens" id="density-toggle" data-action="toggle-density" aria-pressed="false">&#8862; compact</button>
       </div>
       <div id="grid" class="grid-list">
         <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>

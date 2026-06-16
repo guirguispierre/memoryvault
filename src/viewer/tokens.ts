@@ -41,6 +41,14 @@ export const vanillaTokensCss = `  :root {
     --toast-bg: #241F18;
     --card-glow: rgba(0, 0, 0, 0.35);
 
+    /* Memory-state tiers (active / settling / fading) and link accent. Defaults
+       reference per-theme tokens so they adapt to any palette; a theme may
+       override them for an exact look (constellation does). */
+    --mem-active: var(--sage);
+    --mem-settling: var(--butter);
+    --mem-fading: var(--cream-faint);
+    --mem-link: var(--latte);
+
     /* Legacy aliases: graph client reads these via getComputedStyle and
        relation styling keys off them, so they track the vanilla tokens. */
     --bg: var(--ground);

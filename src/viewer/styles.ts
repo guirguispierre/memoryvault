@@ -378,40 +378,63 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
     margin-right: 6px;
     vertical-align: middle;
   }
-
-  /* The pour — activity seam under the header */
-  .pour {
-    position: relative;
-    padding: 16px 40px 14px;
-    border-bottom: 1px solid var(--rule);
-    background: linear-gradient(180deg, var(--butter-glow), transparent 80%);
-  }
-  .pour-cap {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 14px;
-    margin-bottom: 10px;
-  }
-  .pour-label {
-    font-family: var(--disp);
-    font-style: italic;
-    font-weight: 420;
-    font-size: 14px;
-    color: var(--cream-dim);
-    white-space: nowrap;
-  }
-  .pour-label b { font-style: normal; font-weight: 560; color: var(--cream); }
-  .pour-meta {
+  /* A state chip that is toggled off reads as muted, not selected. */
+  .chips-state .chip:not(.active) { opacity: 0.5; }
+  .dens {
     font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.05em;
+    font-size: 11px;
     color: var(--cream-faint);
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
+    cursor: pointer;
+    background: var(--surface-raised);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 5px 9px;
     white-space: nowrap;
-    overflow: hidden;
+    transition: border-color 0.14s, color 0.14s;
+  }
+  .dens:hover { border-color: var(--butter-deep); color: var(--cream); }
+  .dens.active { border-color: var(--butter-deep); color: var(--butter); }
+
+  /* ── STAT STRIP ── */
+  .statstrip {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 10px 26px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 12.5px;
+    color: var(--cream-dim);
+  }
+  .stat-s {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding-right: 18px;
+    margin-right: 18px;
+    border-right: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  .stat-s.stat-s-end { border-right: none; }
+  .stat-s b { color: var(--cream); font-weight: 600; font-family: var(--mono); }
+  .stat-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .stat-sp { flex: 1; }
+  .stat-recall {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+  .stat-recall-label, .stat-recall-time {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--cream-faint);
+    white-space: nowrap;
+  }
+  .stat-recall .pour-ticks {
+    width: 120px;
+    height: 22px;
   }
   .pour-ticks {
     display: flex;

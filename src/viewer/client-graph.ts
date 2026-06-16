@@ -376,6 +376,12 @@ export const clientGraph = `  function renderGraph(nodes, edges, inferredEdges =
         case 'set-filter':
           setFilter(target.getAttribute('data-filter') || '');
           break;
+        case 'toggle-state-filter':
+          toggleStateFilter(target.getAttribute('data-state') || '');
+          break;
+        case 'toggle-density':
+          toggleDensity();
+          break;
         case 'show-graph':
           showGraph();
           break;

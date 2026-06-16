@@ -300,6 +300,12 @@ export const themeStyles = `  [data-theme="vanilla-light"] {
     --disp: 'Spectral', Georgia, serif;
     --body: 'Inter', system-ui, sans-serif;
     --mono: 'JetBrains Mono', ui-monospace, monospace;
+    /* Exact control-center state hues: green active, warm settling, dim
+       fading, violet links. */
+    --mem-active: #86E0B8;
+    --mem-settling: #FFCAA0;
+    --mem-fading: #565D72;
+    --mem-link: #B9A3FF;
   }
   [data-theme="constellation"] body {
     background:
