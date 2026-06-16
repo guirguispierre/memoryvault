@@ -486,7 +486,7 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
     align-items: start;
     padding: 16px 26px 60px;
     width: 100%;
-    max-width: 1200px;
+    max-width: none;
     margin: 0 auto;
   }
   .feed { padding-right: 22px; }
