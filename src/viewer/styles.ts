@@ -477,16 +477,88 @@ export const baseStyles = `  *, *::before, *::after { box-sizing: border-box; ma
   .utility-btn { color: var(--cream-faint); }
   .utility-btn:hover { color: var(--butter); }
 
-  /* ── MEMORY LIST ── */
+  /* ── HOME: list feed + graph rail ── */
   .grid-wrap {
     flex: 1;
-    padding: 6px 40px 60px;
-    /* Centered reading column for the document feel; the graph view sits
-       outside this wrap and stays full-width. */
-    max-width: 920px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 0;
+    align-items: start;
+    padding: 16px 26px 60px;
     width: 100%;
+    max-width: 1200px;
     margin: 0 auto;
   }
+  .feed { padding-right: 22px; }
+
+  /* Graph rail */
+  .rail {
+    border-left: 1px solid var(--rule);
+    padding: 4px 0 0 18px;
+    position: sticky;
+    top: 78px;
+  }
+  .rail h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--cream-faint);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .rail h3 .exp {
+    color: var(--butter);
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: var(--body);
+    font-size: 12px;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .rail h3 .exp:hover { filter: brightness(1.1); text-decoration: underline; }
+  .mini {
+    height: 280px;
+    border-radius: 14px;
+    background:
+      radial-gradient(circle at 50% 45%, var(--butter-glow), transparent 70%),
+      var(--surface-raised);
+    border: 1px solid var(--rule);
+    position: relative;
+    overflow: hidden;
+  }
+  .mini canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .railcard {
+    margin-top: 14px;
+    background: var(--surface-raised);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .railcard .k2 { font-family: var(--mono); font-size: 11px; color: var(--butter); margin-bottom: 4px; word-break: break-word; }
+  .railcard .t2 { font-family: var(--disp); font-size: 15px; color: var(--cream); margin-bottom: 8px; line-height: 1.3; }
+  .railcard .links { font-size: 12px; color: var(--cream-dim); line-height: 1.7; word-break: break-word; }
+  .railcard .links a { color: var(--mem-link); text-decoration: none; cursor: pointer; }
+  .railcard .links a:hover { text-decoration: underline; }
+  .railcard .rail-dim { color: var(--cream-faint); }
+  .railcard .rail-empty { color: var(--cream-faint); font-size: 12.5px; line-height: 1.55; }
+  .rail-detail {
+    margin-top: 12px;
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    color: var(--cream-dim);
+    font-family: var(--body);
+    font-size: 12px;
+    padding: 6px 11px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .rail-detail:hover { border-color: var(--butter-deep); color: var(--butter); }
   .empty-state {
     padding: 5rem 2rem;
     text-align: center;

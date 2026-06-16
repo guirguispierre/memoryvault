@@ -145,6 +145,11 @@ export const bodyMarkup = `</style>
         <div class="loading"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>
       </div>
     </div>
+    <aside class="rail">
+      <h3>Memory graph <button type="button" class="exp" data-action="show-graph">Expand &#8599;</button></h3>
+      <div class="mini"><canvas id="rail-canvas"></canvas></div>
+      <div class="railcard" id="rail-card"></div>
+    </aside>
   </div>
 
   <footer class="footer">

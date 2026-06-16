@@ -260,6 +260,9 @@ export const clientCore = `
     if (restartPolling) startLivePolling(true);
     if (rerenderGrid) renderGrid(displayedMemories);
     if (rerenderGraph && graphVisible) rerenderGraphFromCache();
+    // Recolour the rail constellation for the active theme and honour a
+    // reduce-motion change.
+    if (typeof railBuildNodes === 'function') { railBuildNodes(); railSync(); }
   }
 
   function initializeViewerSettings() {
@@ -329,6 +332,7 @@ export const clientCore = `
     syncFilterPills(activeFilter);
     syncStateChips();
     syncDensityToggle();
+    railInit();
     loadMemories();
     startLivePolling();
     reconcileServerViewerSettings();

@@ -335,6 +335,7 @@ export const clientSettings = `  function fillSettingsForm() {
     const wrap = document.querySelector('.grid-wrap');
     if (wrap) wrap.style.display = '';
     syncModeSwitch('memories');
+    if (typeof railSync === 'function') railSync();
   }
 
   function setFilter(type) {
@@ -537,6 +538,7 @@ export const clientSettings = `  function fillSettingsForm() {
     graphVisible = true;
     syncGraphToolbarState();
     syncModeSwitch('graph');
+    if (typeof railSync === 'function') railSync();
     const wrap = document.querySelector('.grid-wrap');
     if (wrap) wrap.style.display = 'none';
     const graphView = document.getElementById('graph-view');

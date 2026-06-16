@@ -225,6 +225,8 @@ export const clientUi = `  function runImportFromSettings() { return runImport('
       }
       updateStats(data.stats || []);
       renderGrid(displayedMemories);
+      // Keep the calm rail constellation in step with the brain (throttled).
+      railEnsureGraph(!silent);
       // First-run onboarding keys off the whole-brain count, not the filtered view.
       renderOnboarding(corpusMemories.length);
       if (silent) window.scrollTo(0, scrollY);

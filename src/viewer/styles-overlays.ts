@@ -387,11 +387,15 @@ export const overlayStyles = `  .semantic-status-box {
   #grid[data-density="compact"] .stcell .mtr { height: 15px; }
   #grid[data-density="compact"] .lh { padding-bottom: 6px; }
 
+  /* Below this width the three-zone layout can't sit side by side: collapse the
+     rail (reachable via the Graph tab) and drop the list to a single column. */
   @media (max-width: 900px) {
-    .hdr { padding: 14px 16px; gap: 14px; flex-wrap: wrap; }
-    .pour { padding: 12px 16px 10px; }
-    .controls { padding: 8px 16px; }
-    .grid-wrap { padding: 4px 16px 48px; }
+    .topbar { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }
+    .statstrip { padding: 9px 16px; gap: 0; overflow-x: auto; scrollbar-width: none; }
+    .statstrip::-webkit-scrollbar { display: none; }
+    .grid-wrap { grid-template-columns: 1fr; padding: 12px 16px 48px; }
+    .feed { padding-right: 0; }
+    .rail { display: none; }
     .update-banner { margin: 0.6rem 16px; }
     .footer { padding: 12px 16px; flex-wrap: wrap; gap: 0.45rem; }
   }
@@ -403,37 +407,28 @@ export const overlayStyles = `  .semantic-status-box {
     .login-btn-row { flex-direction: column; gap: 0.5rem; }
     .token-input, .search-input { font-size: 16px; }
 
-    .hdr {
+    /* Top bar collapses: brand + mode switch on the first line, the command
+       search wraps full-width below, action icons stay inline. */
+    .topbar {
       position: static;
-      gap: 10px 14px;
+      gap: 10px 12px;
+      flex-wrap: wrap;
     }
-    .hdr-brand { font-size: 19px; }
-    .hdr-brand .sub { display: none; }
-    .hdr-right { gap: 12px; }
-    .search-wrap {
-      order: 4;
-      flex-basis: 100%;
-      max-width: none;
-    }
-
-    .stats-bar {
+    .tb-brand { font-size: 17px; }
+    .cmdsearch {
       order: 5;
       flex-basis: 100%;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
+      max-width: none;
+      margin: 0;
     }
-    .stats-bar::-webkit-scrollbar { display: none; }
-    .stat-pill { flex: 1 0 auto; justify-content: center; padding: 8px 12px; }
+    .modeswitch .mode { padding: 7px 12px; }
+    .nbtn { padding: 9px 12px; }
 
-    .pour-ticks { gap: 2px; }
-    .pour-ticks i:nth-child(odd) { display: none; }
-    .pour-cap { flex-wrap: wrap; gap: 4px 14px; }
+    .statstrip { font-size: 12px; }
+    .stat-s { padding-right: 12px; margin-right: 12px; }
+    .stat-recall { display: none; }
 
-    .controls {
-      justify-content: space-between;
-      gap: 10px;
-    }
+    .filterbar { gap: 6px; }
 
     #graph-view { min-height: 54vh !important; }
     #graph-svg { min-height: 54vh !important; height: 54vh !important; }
@@ -458,21 +453,13 @@ export const overlayStyles = `  .semantic-status-box {
     }
     .graph-legend-item { font-size: 9px; letter-spacing: 0.06em; padding: 0.2rem 0.36rem; }
 
-    /* Rows: meta column stacks under the content */
-    .row {
-      grid-template-columns: 16px 1fr;
-      padding: 14px 10px;
+    /* Table drops the key and links columns; state | memory | type | seen. */
+    .lh, .r {
+      grid-template-columns: 14px minmax(0, 1fr) 54px 38px;
+      gap: 10px;
     }
-    .row .meta {
-      grid-column: 2;
-      flex-direction: row;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: flex-start;
-      gap: 12px;
-      padding-top: 8px;
-    }
-    .txt { max-width: none; }
+    .r .k, .lh span:nth-child(2),
+    .r .lk, .lh span:nth-child(5) { display: none; }
 
     .expand-overlay {
       padding: 0;

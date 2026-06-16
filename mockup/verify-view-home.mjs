@@ -149,8 +149,8 @@ async function main() {
     await shoot('selected', { width: 1280, height: 940 }, async (page) => {
       await loginUi(page, email);
       await page.waitForTimeout(1600);
-      const row = page.locator('#grid .row').first();
-      if (await row.count()) { await row.click(); await page.waitForTimeout(1400); }
+      const row = page.locator('#grid .r').first();
+      if (await row.count()) { await row.click(); await page.waitForTimeout(1600); }
       await page.screenshot({ path: `${SHOTS}/vh-selected-1280.png` });
     });
   }
@@ -172,13 +172,18 @@ async function main() {
 
   if (only === 'all' || only === 'paper') {
     log('paper theme');
+    // A dedicated brain so the server-settings reconcile seeds from this run's
+    // localStorage (paper/light) instead of an earlier constellation/dark row.
+    const paperEmail = `verify-view-paper-${Date.now()}@example.com`;
+    const paperCookie = await signup(paperEmail, 'Verify View paper');
+    await seed(paperCookie);
     await shoot('paper', { width: 1280, height: 940, theme: 'paper', mode: 'light' }, async (page) => {
-      await loginUi(page, email);
+      await loginUi(page, paperEmail);
       await page.waitForTimeout(FONT_SETTLE_MS);
       await page.screenshot({ path: `${SHOTS}/vh-paper-1280.png` });
     });
     await shoot('paper-m', { width: 390, height: 844, theme: 'paper', mode: 'light', mobile: true }, async (page) => {
-      await loginUi(page, email);
+      await loginUi(page, paperEmail);
       await page.waitForTimeout(FONT_SETTLE_MS);
       await page.screenshot({ path: `${SHOTS}/vh-paper-390.png` });
     });
