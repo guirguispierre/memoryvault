@@ -38,6 +38,10 @@ import {
   handleApiViewerSettings,
   rootLandingHtml,
   landingScript,
+  deployHtml,
+  deployScript,
+  handleApiWaitlist,
+  docsHtml,
   endpointsIndexHtml,
   mcpLandingHtml,
   endpointGuideForPath,
@@ -91,6 +95,12 @@ export default {
         });
       }
 
+      if (url.pathname === '/docs') {
+        return new Response(docsHtml(url), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
       if (url.pathname === '/endpoints') {
         return new Response(endpointsIndexHtml(url), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -113,6 +123,23 @@ export default {
         return new Response(starfieldJs, {
           headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
         });
+      }
+
+      if (url.pathname === '/deploy') {
+        return new Response(deployHtml(url), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
+      if (url.pathname === '/deploy.js') {
+        return new Response(deployScript, {
+          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
+        });
+      }
+
+      // Unauthenticated, write-only hosted-tier waitlist capture.
+      if (url.pathname === '/api/waitlist') {
+        return handleApiWaitlist(request, env, url.origin);
       }
 
       if (isBrowserDocumentRequest(request)) {

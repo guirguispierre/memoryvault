@@ -30,6 +30,7 @@ import {
 
 import {
   CORS_HEADERS,
+  corsJsonResponse,
 } from './cors.js';
 
 import {
@@ -40,6 +41,7 @@ import {
   getViewerSettings,
   setViewerSettings,
   logChangelog,
+  insertWaitlistEmail,
 } from './db.js';
 
 import {
@@ -61,6 +63,14 @@ import {
 import {
   callTool,
 } from './tools/index.js';
+
+import {
+  mcpUrlFor,
+  claudeCodeCommand,
+  mcpJsonConfig,
+  MCP_TRANSPORT_LABEL,
+  MCP_AUTH_LABEL,
+} from './connect-snippets.js';
 
 import {
   FONT_LINK_TAGS,
@@ -878,7 +888,7 @@ export async function handleApiPurge(request: Request, env: Env, brainId: string
 // but this is the trust boundary: only known keys survive, numbers are
 // clamped to the same ranges the UI enforces, and the custom palette is
 // reduced to six hex colours plus a vetted font key.
-const VIEWER_THEME_NAMES = new Set(['slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
+const VIEWER_THEME_NAMES = new Set(['constellation', 'slate', 'paper', 'vanilla', 'midnight', 'solarized', 'ember', 'arctic', 'custom']);
 const VIEWER_THEME_MODES = new Set(['auto', 'light', 'dark']);
 const VIEWER_FONT_KEYS = new Set(['fraunces', 'grotesk', 'system', 'typewriter']);
 const VIEWER_FILTERS = new Set(['', 'note', 'fact', 'journal']);
@@ -911,7 +921,7 @@ function sanitizeCustomTheme(raw: unknown): Record<string, string> {
 
 function sanitizeViewerSettings(raw: unknown): Record<string, unknown> {
   const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
-  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'slate';
+  const theme = typeof src.theme === 'string' && VIEWER_THEME_NAMES.has(src.theme) ? src.theme : 'constellation';
   const lightTheme = typeof src.light_theme === 'string' && VIEWER_THEME_NAMES.has(src.light_theme) ? src.light_theme : 'paper';
   const mode = typeof src.theme_mode === 'string' && VIEWER_THEME_MODES.has(src.theme_mode) ? src.theme_mode : 'auto';
   const filter = typeof src.default_memory_filter === 'string' && VIEWER_FILTERS.has(src.default_memory_filter) ? src.default_memory_filter : '';
@@ -930,6 +940,7 @@ function sanitizeViewerSettings(raw: unknown): Record<string, unknown> {
     graph_show_labels: asViewerBool(src.graph_show_labels, true),
     graph_physics_enabled: asViewerBool(src.graph_physics_enabled, true),
     graph_focus_highlight: asViewerBool(src.graph_focus_highlight, true),
+    graph_3d: asViewerBool(src.graph_3d, false),
     auto_open_graph: asViewerBool(src.auto_open_graph, false),
     toasts_enabled: asViewerBool(src.toasts_enabled, true),
     toast_duration_ms: clampViewerInt(src.toast_duration_ms, 1200, 8000, 2300),
@@ -1025,7 +1036,8 @@ export const landingScript = `(function(){
 
 export function rootLandingHtml(url: URL): string {
   const origin = url.origin;
-  const endpointsRef = `${origin}/endpoints`;
+  const deploy = `${origin}/deploy`;
+  const docs = `${origin}/docs`;
   const repo = 'https://github.com/guirguispierre/memoryvault';
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1196,19 +1208,19 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
     <div class="wrap">
       <nav>
         <span class="brand">MemoryVault</span>
-        <div class="links"><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a></div>
-        <div class="r"><a class="btn g" href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy free</a></div>
+        <div class="links"><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${docs}">Docs</a></div>
+        <div class="r"><a class="btn g" href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="btn" href="${deploy}">Deploy free</a></div>
         <button class="menu" id="menu" type="button" aria-label="Menu" aria-expanded="false"><span></span><span></span><span></span></button>
       </nav>
       <div class="sheet" id="sheet">
-        <a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${endpointsRef}">Docs</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="primary" href="${repo}" target="_blank" rel="noopener">Deploy free</a>
+        <a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="${docs}">Docs</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a><a class="primary" href="${deploy}">Deploy free</a>
       </div>
       <section class="hero">
         <div class="eyebrow">Open-source memory for AI agents</div>
         <h1>Your agents forget everything. <em>Fix that.</em></h1>
         <p class="sub">MemoryVault gives any AI agent a memory it actually keeps. It learns what matters, drops what doesn't, and runs entirely on servers you own.</p>
         <div class="cta">
-          <a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy your own, free</a>
+          <a class="btn" href="${deploy}">Deploy your own, free</a>
           <a class="btn g" href="${repo}" target="_blank" rel="noopener">View on GitHub</a>
         </div>
       </section>
@@ -1270,14 +1282,14 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
           <div class="price">$0</div>
           <div class="desc">Run it on your own Cloudflare account, forever.</div>
           <ul><li>Full source, MIT licensed</li><li>Graph and all features</li><li>Your data, your keys</li><li>Community support</li></ul>
-          <a class="pcta" href="${repo}" target="_blank" rel="noopener">Deploy from GitHub</a>
+          <a class="pcta" href="${deploy}">Deploy it yourself</a>
         </div>
         <div class="plan feat reveal">
           <div class="pname">Hosted</div>
           <div class="price">$12<small>/mo</small></div>
           <div class="desc">We run it for you. Backups, sync, and support.</div>
           <ul><li>Everything in Self-host</li><li>Managed multi-device sync</li><li>Automatic backups</li><li>Priority support</li></ul>
-          <a class="pcta primary" href="${repo}" target="_blank" rel="noopener">Join the waitlist</a>
+          <a class="pcta primary" href="${deploy}">Join the waitlist</a>
           <div class="note">Not billable yet. The GitHub repo is where to follow along.</div>
         </div>
       </div>
@@ -1308,8 +1320,8 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
     <section class="final">
       <h2>Give your agents a memory <em>you control</em></h2>
       <div class="cta">
-        <a class="btn" href="${repo}" target="_blank" rel="noopener">Deploy your own, free</a>
-        <a class="btn g" href="${endpointsRef}">Read the docs</a>
+        <a class="btn" href="${deploy}">Deploy your own, free</a>
+        <a class="btn g" href="${docs}">Read the docs</a>
       </div>
     </section>
 
@@ -1318,6 +1330,534 @@ ${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
 
   <script src="/starfield.js" defer></script>
   <script src="/landing.js"></script>
+</body>
+</html>`;
+}
+
+// Client script for the /deploy waitlist form: progressive enhancement over a
+// native POST, so it submits with or without JS. Served from /deploy.js because
+// the page CSP forbids inline scripts.
+export const deployScript = `(function(){
+  var form = document.getElementById('wl-form');
+  if (!form) return;
+  var status = document.getElementById('wl-status');
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var input = form.querySelector('input[name="email"]');
+    var btn = form.querySelector('button[type="submit"]');
+    var email = (input.value || '').trim();
+    if (!email) { input.focus(); return; }
+    var prev = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Joining...';
+    function fail(msg){ btn.disabled = false; btn.textContent = prev; status.textContent = msg; status.className = 'wl-status err'; }
+    fetch('/api/waitlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ email: email })
+    }).then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+      .then(function(res){
+        if (res.ok) {
+          form.style.display = 'none';
+          status.textContent = "You're on the list. We'll email you when hosting opens.";
+          status.className = 'wl-status ok';
+        } else {
+          fail((res.d && res.d.error) || 'Something went wrong. Please try again.');
+        }
+      })
+      .catch(function(){ fail('Network error. Please try again.'); });
+  });
+})();`;
+
+// Minimal honest success page for a no-JS native form POST to /api/waitlist.
+function waitlistConfirmationHtml(origin: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>You're on the list · MemoryVault</title>
+${FONT_LINK_TAGS}
+${constellationHeadTags}
+<style>
+${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--ui); background: var(--bg); color: var(--ink); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; text-align: center; }
+  .card { max-width: 460px; }
+  h1 { font-family: var(--doc); font-weight: 500; font-size: 30px; margin-bottom: 12px; }
+  p { color: var(--dim); font-size: 16px; line-height: 1.6; margin-bottom: 22px; }
+  a { color: var(--bg); background: var(--accent); font-weight: 600; font-size: 14px; padding: 11px 20px; border-radius: 9px; text-decoration: none; display: inline-block; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>You're on the list.</h1>
+    <p>We'll email you when hosting opens. In the meantime you can run MemoryVault yourself, free, on your own Cloudflare account.</p>
+    <a href="${origin}/deploy">Back to deploy options</a>
+  </div>
+</body>
+</html>`;
+}
+
+// Unauthenticated, write-only waitlist capture for the hosted tier. Accepts JSON
+// (the enhanced form) or urlencoded (the no-JS fallback); validates the email
+// shape and dedupes on the address. No read endpoint is exposed publicly.
+export async function handleApiWaitlist(request: Request, env: Env, origin: string): Promise<Response> {
+  if (request.method !== 'POST') {
+    return corsJsonResponse({ error: 'Method not allowed' }, 405);
+  }
+  const contentType = request.headers.get('Content-Type') || '';
+  const isJson = contentType.includes('application/json');
+  let email = '';
+  try {
+    if (isJson) {
+      const body = (await request.json()) as { email?: unknown };
+      email = typeof body.email === 'string' ? body.email : '';
+    } else {
+      const form = await request.formData();
+      const value = form.get('email');
+      email = typeof value === 'string' ? value : '';
+    }
+  } catch {
+    return corsJsonResponse({ error: 'Invalid request body' }, 400);
+  }
+  email = email.trim().toLowerCase();
+  const valid = email.length >= 3 && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  if (!valid) {
+    return corsJsonResponse({ error: 'Please enter a valid email address.' }, 400);
+  }
+  const outcome = await insertWaitlistEmail(env, email);
+  // A no-JS native form post wants a page back, not JSON.
+  const wantsHtml = !isJson && (request.headers.get('Accept') || '').includes('text/html');
+  if (wantsHtml) {
+    return new Response(waitlistConfirmationHtml(origin), {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+  return corsJsonResponse({ ok: true, status: outcome });
+}
+
+// The deploy decision page: two honest paths, hosted featured and recommended,
+// self-host kept genuinely free and complete. Hosted's action is an email
+// waitlist (billing is not live yet); self-host offers the Cloudflare one-click
+// button plus an accurate CLI quickstart.
+export function deployHtml(url: URL): string {
+  const origin = url.origin;
+  const repo = 'https://github.com/guirguispierre/memoryvault';
+  const cfDeploy = `https://deploy.workers.cloudflare.com/?url=${repo}`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deploy MemoryVault</title>
+<meta name="description" content="Two ways to run MemoryVault: let us host it for you, or deploy the open-source code to your own Cloudflare account, free.">
+${FONT_LINK_TAGS}
+${constellationHeadTags}
+<style>
+${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--ui); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; line-height: 1.5; overflow-x: hidden; }
+  a { color: inherit; text-decoration: none; }
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
+
+  nav { display: flex; align-items: center; gap: 22px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; position: relative; z-index: 1; }
+  .brand { font-family: var(--doc); font-size: 18px; font-weight: 600; color: var(--ink); }
+  nav .r { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+  nav .back { font-size: 14px; color: var(--dim); }
+  nav .back:hover { color: var(--ink); }
+  .btn { font-family: var(--ui); font-weight: 600; font-size: 14px; border-radius: 9px; padding: 10px 18px; border: 1px solid var(--accent); background: var(--accent); color: #070810; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.15s, box-shadow 0.15s; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(138, 176, 255, 0.3); }
+  .btn.g { background: rgba(255, 255, 255, 0.05); color: var(--ink); border-color: rgba(255, 255, 255, 0.18); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .intro { text-align: center; padding: 6vh 32px 2vh; max-width: 720px; margin: 0 auto; position: relative; z-index: 1; }
+  .intro h1 { font-family: var(--doc); font-weight: 500; font-size: 46px; letter-spacing: -0.02em; line-height: 1.06; margin-bottom: 14px; }
+  .intro p { font-size: 18px; color: var(--dim); line-height: 1.55; }
+
+  .paths { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr); gap: 24px; align-items: start; padding: 30px 0 24px; }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 20px; padding: 32px; position: relative; }
+  .card.hosted { border-color: rgba(138, 176, 255, 0.55); background: linear-gradient(180deg, rgba(138, 176, 255, 0.06), rgba(255, 255, 255, 0)), var(--surface); box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(138, 176, 255, 0.18); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); border: 1px solid rgba(138, 176, 255, 0.4); border-radius: 999px; padding: 4px 11px; margin-bottom: 16px; }
+  .badge.free { color: var(--good); border-color: rgba(134, 224, 184, 0.4); }
+  .card h2 { font-family: var(--doc); font-weight: 500; letter-spacing: -0.01em; margin-bottom: 6px; }
+  .card.hosted h2 { font-size: 30px; }
+  .card.self h2 { font-size: 25px; }
+  .price { font-family: var(--doc); font-size: 30px; margin-bottom: 16px; }
+  .price small { font-family: var(--ui); font-size: 14px; color: var(--faint); }
+  .lede { color: var(--dim); font-size: 15.5px; line-height: 1.6; margin-bottom: 18px; }
+  ul { list-style: none; display: grid; gap: 10px; margin-bottom: 24px; }
+  li { font-size: 14.5px; color: var(--dim); padding-left: 24px; position: relative; line-height: 1.5; }
+  li::before { content: "\\2713"; position: absolute; left: 0; color: var(--accent); }
+  .card.self li::before { color: var(--good); }
+
+  .wl { display: flex; gap: 10px; flex-wrap: wrap; }
+  .wl input { flex: 1; min-width: 180px; background: var(--bg2); border: 1px solid var(--rule); color: var(--ink); border-radius: 9px; padding: 12px 14px; font-family: var(--ui); font-size: 15px; outline: none; transition: border-color 0.15s; }
+  .wl input::placeholder { color: var(--faint); }
+  .wl input:focus { border-color: var(--accent); }
+  .wl button { font-size: 15px; padding: 12px 20px; }
+  .wl-status { margin-top: 12px; font-size: 14px; min-height: 1em; }
+  .wl-status.ok { color: var(--good); }
+  .wl-status.err { color: var(--warm); }
+  .micro { margin-top: 12px; font-size: 12.5px; color: var(--faint); line-height: 1.5; }
+
+  .cf { display: inline-flex; align-items: center; gap: 8px; width: 100%; justify-content: center; margin-bottom: 18px; }
+  .or { text-align: center; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin-bottom: 14px; }
+  .code { font-family: var(--mono); font-size: 12.5px; line-height: 1.85; color: var(--dim); background: var(--bg2); border: 1px solid var(--rule); border-radius: 12px; padding: 16px 18px; overflow-x: auto; white-space: pre; }
+  .code .cm { color: var(--faint); }
+  .code .c1 { color: var(--accent); }
+
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 760px; margin: 8px auto 0; padding: 24px 0 0; border-top: 1px solid var(--rule); }
+  .compare div { font-size: 14px; color: var(--dim); line-height: 1.55; }
+  .compare strong { color: var(--ink); font-weight: 600; display: block; margin-bottom: 4px; }
+
+  footer { border-top: 1px solid var(--rule); padding: 36px 0; margin-top: 50px; color: var(--faint); font-size: 13px; }
+  .fi { max-width: 1080px; margin: 0 auto; padding: 0 32px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 760px) {
+    .intro h1 { font-size: 32px; }
+    .paths { grid-template-columns: 1fr; }
+    .compare { grid-template-columns: 1fr; gap: 16px; }
+    .container { padding: 0 20px; }
+  }
+</style>
+</head>
+<body>
+  ${constellationCalmField}
+  <nav>
+    <a class="brand" href="${origin}/">MemoryVault</a>
+    <div class="r"><a class="back" href="${origin}/">Back to home</a><a class="btn g" href="${repo}" target="_blank" rel="noopener">View on GitHub</a></div>
+  </nav>
+
+  <section class="intro">
+    <h1>Deploy MemoryVault</h1>
+    <p>Two honest ways to run it. Let us host it for you, or deploy the open-source code to your own Cloudflare account. Same software, nothing paywalled either way.</p>
+  </section>
+
+  <div class="container">
+    <div class="paths">
+      <div class="card hosted">
+        <span class="badge">Recommended</span>
+        <h2>Let us host it for you</h2>
+        <div class="price">$12<small>/mo</small></div>
+        <p class="lede">The fastest path. We run your instance, keep it updated, and back it up. No Cloudflare account, no CLI, no setup.</p>
+        <ul>
+          <li>Ready in seconds, nothing to configure</li>
+          <li>Managed multi-device sync</li>
+          <li>Automatic backups</li>
+          <li>Priority support</li>
+          <li>No Cloudflare account or CLI needed</li>
+        </ul>
+        <form class="wl" id="wl-form" method="post" action="/api/waitlist">
+          <input type="email" name="email" placeholder="you@example.com" autocomplete="email" required aria-label="Email address">
+          <button class="btn" type="submit">Join the waitlist</button>
+        </form>
+        <div class="wl-status" id="wl-status" role="status" aria-live="polite"></div>
+        <p class="micro">Hosting is not open yet, so this is a waitlist, not a checkout. Join and we'll email you the moment it opens. You can self-host today in the meantime.</p>
+      </div>
+
+      <div class="card self">
+        <span class="badge free">Free forever</span>
+        <h2>Run it yourself</h2>
+        <div class="price">$0</div>
+        <p class="lede">Deploy the open-source code to your own Cloudflare account. Your data lives under your keys. Graph and every feature included.</p>
+        <ul>
+          <li>Full source, MIT licensed</li>
+          <li>Your data, your keys, your account</li>
+          <li>Nothing paywalled</li>
+        </ul>
+        <a class="btn cf" href="${cfDeploy}" target="_blank" rel="noopener">Deploy to Cloudflare</a>
+        <div class="or">or deploy from your terminal</div>
+        <div class="code"><span class="cm"># clone, install, and point wrangler.toml at your own resources</span>
+git clone ${repo}.git
+cd memoryvault
+npm install
+npx wrangler d1 create ai-memory
+npx wrangler kv namespace create RATE_LIMIT_KV
+npx wrangler vectorize create ai-memory-semantic-v1 --dimensions=768 --metric=cosine
+<span class="cm"># set AUTH_SECRET, apply the schema, then deploy</span>
+npx wrangler secret put AUTH_SECRET
+npx wrangler d1 execute ai-memory --remote --file=schema.sql
+npm run deploy</div>
+      </div>
+    </div>
+
+    <div class="compare">
+      <div><strong>Hosted</strong>We manage it. Updates, backups, and sync are handled for you, so you can point an agent at it and forget the infrastructure.</div>
+      <div><strong>Self-host</strong>You manage it. Full control on your own Cloudflare account, your keys, your bill. The same graph and features, no upsell.</div>
+    </div>
+  </div>
+
+  <footer><div class="fi"><span>&copy; 2026 MemoryVault &middot; MIT licensed</span><span>built on Cloudflare</span></div></footer>
+
+  <script src="/deploy.js" defer></script>
+</body>
+</html>`;
+}
+
+// The docs area: quickstart, the connect guide (shared snippets), an organized
+// API reference (the full per-endpoint reference stays at /endpoints), and a
+// plain-language concepts page. Calm constellation theme, no animation behind text.
+export function docsHtml(url: URL): string {
+  const origin = url.origin;
+  const app = `${origin}/view`;
+  const deploy = `${origin}/deploy`;
+  const endpointsRef = `${origin}/endpoints`;
+  const repo = 'https://github.com/guirguispierre/memoryvault';
+  const mcpUrl = mcpUrlFor(origin);
+  const claudeCmd = escapeHtml(claudeCodeCommand(mcpUrl));
+  const jsonCfg = escapeHtml(mcpJsonConfig(mcpUrl));
+  const restExample = escapeHtml(
+    'curl ' + origin + '/api/memories \\\n  -H "Authorization: Bearer YOUR_TOKEN"'
+  );
+  const mcpCurl = escapeHtml(
+    'curl ' + mcpUrl + ' -X POST \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n' +
+    '  -H "Content-Type: application/json" \\\n  -d \'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\''
+  );
+  const selfHost = escapeHtml(
+    'git clone ' + repo + '.git\n' +
+    'cd memoryvault\n' +
+    'npm install\n' +
+    'npx wrangler d1 create ai-memory\n' +
+    'npx wrangler kv namespace create RATE_LIMIT_KV\n' +
+    'npx wrangler vectorize create ai-memory-semantic-v1 --dimensions=768 --metric=cosine\n' +
+    '# put the printed ids into wrangler.toml, then:\n' +
+    'npx wrangler secret put AUTH_SECRET\n' +
+    'npx wrangler d1 execute ai-memory --remote --file=schema.sql\n' +
+    'npm run deploy'
+  );
+
+  const apiGroups: Array<{ title: string; rows: Array<[string, string, string]> }> = [
+    { title: 'Auth', rows: [
+      ['POST', '/auth/signup', 'Create an account and its brain'],
+      ['POST', '/auth/login', 'Sign in, returns a session'],
+      ['POST', '/auth/refresh', 'Exchange a refresh token'],
+      ['POST', '/auth/logout', 'End the current session'],
+      ['GET', '/auth/me', 'The signed-in account and brain'],
+      ['GET', '/auth/sessions', 'List active sessions'],
+      ['POST', '/auth/sessions/revoke', 'Revoke a session'],
+    ] },
+    { title: 'OAuth (for MCP clients)', rows: [
+      ['POST', '/register', 'Dynamic client registration'],
+      ['GET/POST', '/authorize', 'Authorization and sign-in screen'],
+      ['POST', '/token', 'Token exchange with PKCE'],
+      ['GET', '/.well-known/oauth-authorization-server', 'Discovery metadata'],
+      ['GET', '/.well-known/oauth-protected-resource', 'Protected-resource metadata'],
+    ] },
+    { title: 'MCP', rows: [
+      ['POST', '/mcp', 'JSON-RPC: initialize, tools/list, tools/call'],
+      ['GET', '/mcp', 'SSE stream (streamable HTTP)'],
+    ] },
+    { title: 'Memory and data', rows: [
+      ['GET', '/api/memories', 'List and search memories (type, search, limit)'],
+      ['GET', '/api/memories/signature', 'Change fingerprint for live updates'],
+      ['GET', '/api/links/:id', 'Links for one memory'],
+      ['GET', '/api/graph', 'The memory graph'],
+      ['GET', '/api/tools', 'Available MCP tools'],
+      ['GET', '/api/export', 'Export the brain as JSON'],
+      ['POST', '/api/import', 'Import memories'],
+      ['POST', '/api/purge', 'Delete all data in the brain'],
+    ] },
+    { title: 'Viewer and waitlist', rows: [
+      ['GET/PUT', '/api/viewer-settings', 'Per-brain viewer settings'],
+      ['POST', '/api/waitlist', 'Hosted-tier email waitlist (public)'],
+    ] },
+  ];
+  const apiHtml = apiGroups.map((g) =>
+    `<div class="api-group"><h3>${escapeHtml(g.title)}</h3><div class="api-rows">` +
+    g.rows.map(([m, p, d]) =>
+      `<div class="api-row"><span class="api-m">${escapeHtml(m)}</span><code class="api-p">${escapeHtml(p)}</code><span class="api-d">${escapeHtml(d)}</span></div>`
+    ).join('') + `</div></div>`
+  ).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docs · MemoryVault</title>
+<meta name="description" content="MemoryVault docs: quickstart, connect your agent over MCP, the API reference, and how the living-memory model works.">
+${FONT_LINK_TAGS}
+${constellationHeadTags}
+<style>
+${constellationTokensCss}  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--ui); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; line-height: 1.6; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
+
+  nav { display: flex; align-items: center; gap: 18px; max-width: 1120px; margin: 0 auto; padding: 24px 32px; position: relative; z-index: 1; }
+  .brand { font-family: var(--doc); font-size: 18px; font-weight: 600; color: var(--ink); }
+  nav .r { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+  nav .r a { font-size: 14px; color: var(--dim); }
+  nav .r a:hover { color: var(--ink); text-decoration: none; }
+
+  .dlayout { display: grid; grid-template-columns: 210px 1fr; gap: 40px; padding-top: 12px; padding-bottom: 80px; align-items: start; }
+  .dside { position: sticky; top: 24px; display: flex; flex-direction: column; gap: 2px; }
+  .dside-title { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin-bottom: 0.6rem; }
+  .dside a { color: var(--dim); font-size: 0.92rem; padding: 0.4rem 0; }
+  .dside a:hover { color: var(--ink); text-decoration: none; }
+  .dside-sep { height: 1px; background: var(--rule); margin: 0.7rem 0; }
+
+  .dmain { min-width: 0; }
+  .dmain section { padding-bottom: 3.2rem; }
+  .dmain section + section { border-top: 1px solid var(--rule); padding-top: 2.4rem; }
+  .dmain h1 { font-family: var(--doc); font-weight: 500; font-size: 2rem; letter-spacing: -0.02em; color: var(--ink); margin-bottom: 0.5rem; }
+  .dmain h2 { font-family: var(--doc); font-weight: 500; font-size: 1.5rem; letter-spacing: -0.01em; color: var(--ink); margin-bottom: 0.7rem; }
+  .dmain h3 { font-family: var(--doc); font-weight: 500; font-size: 1.05rem; color: var(--ink); margin: 1.4rem 0 0.5rem; }
+  .dmain p { color: var(--dim); font-size: 0.96rem; margin-bottom: 0.9rem; max-width: 68ch; }
+  .dmain ol, .dmain ul { color: var(--dim); font-size: 0.96rem; margin: 0 0 0.9rem 1.2rem; }
+  .dmain li { margin-bottom: 0.35rem; }
+  .lead { color: var(--dim); font-size: 1.05rem; max-width: 64ch; margin-bottom: 1.4rem; }
+  code { font-family: var(--mono); font-size: 0.85em; color: var(--ink); }
+  .code { font-family: var(--mono); font-size: 0.8rem; line-height: 1.8; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 1rem 1.1rem; overflow-x: auto; white-space: pre; margin-bottom: 1rem; }
+
+  .tracks { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 18px; margin-bottom: 1.2rem; align-items: start; }
+  .track { background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; padding: 1.1rem 1.2rem; }
+  .track h3 { margin-top: 0; }
+  .track .tag { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+  .track.alt .tag { color: var(--good); }
+  .btn { display: inline-block; font-family: var(--ui); font-weight: 600; font-size: 0.85rem; color: #070810; background: var(--accent); border-radius: 9px; padding: 0.55rem 1rem; margin-top: 0.4rem; }
+  .btn:hover { text-decoration: none; filter: brightness(1.05); }
+
+  .kv { display: flex; gap: 0.7rem; align-items: baseline; padding: 0.3rem 0; }
+  .kv span { color: var(--faint); min-width: 96px; font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  .note { background: var(--surface); border: 1px solid var(--rule); border-left: 2px solid var(--accent); border-radius: 8px; padding: 0.7rem 0.9rem; font-size: 0.88rem; color: var(--dim); margin-bottom: 1rem; }
+
+  .api-group { margin-bottom: 1.3rem; }
+  .api-rows { border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; }
+  .api-row { display: grid; grid-template-columns: 70px minmax(0, 1.1fr) 1.4fr; gap: 0.8rem; align-items: baseline; padding: 0.6rem 0.9rem; border-top: 1px solid var(--rule); }
+  .api-row:first-child { border-top: none; }
+  .api-m { font-family: var(--mono); font-size: 0.68rem; color: var(--accent); letter-spacing: 0.04em; }
+  .api-p { font-family: var(--mono); font-size: 0.8rem; color: var(--ink); overflow-x: auto; }
+  .api-d { color: var(--dim); font-size: 0.84rem; }
+
+  .tiers { display: grid; gap: 0.5rem; margin: 0.6rem 0 1.1rem; }
+  .tier { display: flex; gap: 0.7rem; align-items: baseline; }
+  .tier i { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transform: translateY(1px); }
+  .tier b { color: var(--ink); font-weight: 600; min-width: 78px; display: inline-block; }
+  .tier-active i { background: var(--good); }
+  .tier-settling i { background: var(--warm); }
+  .tier-resting i { background: var(--faint); }
+  .rels { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.3rem 0 1rem; }
+  .rels code { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 0.2rem 0.5rem; font-size: 0.78rem; }
+
+  footer { border-top: 1px solid var(--rule); padding: 30px 0; color: var(--faint); font-size: 13px; }
+  .fi { max-width: 1120px; margin: 0 auto; padding: 0 32px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 820px) {
+    .dlayout { grid-template-columns: 1fr; gap: 18px; }
+    .dside { position: static; flex-flow: row wrap; gap: 0.4rem 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule); }
+    .dside-title { width: 100%; margin-bottom: 0.2rem; }
+    .dside-sep { display: none; }
+    .tracks { grid-template-columns: 1fr; }
+    .api-row { grid-template-columns: 56px 1fr; }
+    .api-row .api-d { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+  ${constellationCalmField}
+  <nav>
+    <a class="brand" href="${origin}/">MemoryVault</a>
+    <div class="r"><a href="${app}">Viewer</a><a href="${deploy}">Deploy</a><a href="${repo}" target="_blank" rel="noopener">GitHub</a></div>
+  </nav>
+
+  <div class="dlayout container">
+    <aside class="dside">
+      <div class="dside-title">Docs</div>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#connect">Connect your agent</a>
+      <a href="#api">API reference</a>
+      <a href="#concepts">How it works</a>
+      <div class="dside-sep"></div>
+      <a href="${endpointsRef}">Full endpoint reference</a>
+      <a href="${app}">Open the viewer</a>
+    </aside>
+
+    <main class="dmain">
+      <section id="quickstart">
+        <h1>Quickstart</h1>
+        <p class="lead">Deploy MemoryVault, connect an agent, and watch your first memory land. Pick a track, then connect.</p>
+        <div class="tracks">
+          <div class="track">
+            <div class="tag">Self-host, about 5 minutes</div>
+            <h3>Run it on your own Cloudflare account</h3>
+            <p>Free and open source, your data under your keys. You need Node and a Cloudflare account.</p>
+            <div class="code">${selfHost}</div>
+            <p>That stands up Workers, D1, and Vectorize under your account. The schema also applies itself on first request, so the explicit <code>d1 execute</code> is optional.</p>
+          </div>
+          <div class="track alt">
+            <div class="tag">Hosted</div>
+            <h3>Let us run it for you</h3>
+            <p>Managed hosting is in waitlist. Billing is not open yet, so there is nothing to buy today. Join the list and we will email you when it opens.</p>
+            <a class="btn" href="${deploy}">Join the waitlist</a>
+          </div>
+        </div>
+        <h3>Then connect and write your first memory</h3>
+        <ol>
+          <li>Point your agent at your endpoint. See <a href="#connect">Connect your agent</a>.</li>
+          <li>Ask the agent to remember something, or open the <a href="${app}">viewer</a> and use the first-run panel to write a test memory.</li>
+          <li>Watch recall and the graph populate. See <a href="#concepts">How it works</a> for what the strengths and tiers mean.</li>
+        </ol>
+      </section>
+
+      <section id="connect">
+        <h1>Connect your agent</h1>
+        <p class="lead">Your MCP endpoint is the same URL for every client. Auth is OAuth, so there is no token to paste: the client opens a sign-in once. These snippets are the single source of truth, identical to the in-app onboarding panel.</p>
+        <div class="kv"><span>Endpoint</span><code>${escapeHtml(mcpUrl)}</code></div>
+        <div class="kv"><span>Transport</span><code>${escapeHtml(MCP_TRANSPORT_LABEL)}</code></div>
+        <div class="kv"><span>Auth</span><code>${escapeHtml(MCP_AUTH_LABEL)}</code></div>
+
+        <h3>Claude Code</h3>
+        <p>Add the server, then sign in when your browser opens.</p>
+        <div class="code">${claudeCmd}</div>
+
+        <h3>Codex, Cursor, and other MCP clients</h3>
+        <p>Add a remote MCP server with the endpoint above. Many clients accept a config like this:</p>
+        <div class="code">${jsonCfg}</div>
+
+        <h3>REST API</h3>
+        <p>Every <code>/api</code> and <code>/mcp</code> route is scoped to your brain by your bearer token. <code>YOUR_TOKEN</code> is an OAuth access token from the connect flow, or your <code>AUTH_SECRET</code> in legacy bearer mode.</p>
+        <div class="code">${restExample}</div>
+        <p>The MCP endpoint itself is plain JSON-RPC over POST:</p>
+        <div class="code">${mcpCurl}</div>
+      </section>
+
+      <section id="api">
+        <h1>API reference</h1>
+        <p class="lead">The routes that actually exist in this server, grouped. For the full per-endpoint guides (methods, auth, payloads), see the <a href="${endpointsRef}">endpoint reference</a>.</p>
+        <div class="note">Everything under <code>/api</code> and <code>/mcp</code> requires your bearer token or OAuth and only ever touches your own brain. <code>POST /api/waitlist</code> is the one public, write-only endpoint.</div>
+        ${apiHtml}
+      </section>
+
+      <section id="concepts">
+        <h1>How it works</h1>
+        <p class="lead">MemoryVault is a living memory, not a static file. Memories carry weight, strengthen with use, fade when ignored, and link into a graph. Here is the model behind what you see in the viewer.</p>
+
+        <h3>Every memory has weight</h3>
+        <p>Each memory carries an <b>importance</b> and a <b>confidence</b> score, and the viewer factors in <b>recency</b> to show a single strength. Concretely the viewer reads strength as <code>0.45 importance + 0.20 confidence + 0.35 recency</code>, where recency decays over about two weeks. Use a memory and it is reinforced; leave it and recency pulls its strength down.</p>
+
+        <h3>Strength tiers</h3>
+        <p>The viewer groups recall into three tiers by that strength, the same ones you see in the index:</p>
+        <div class="tiers">
+          <div class="tier tier-active"><i></i><b>Active</b><span>Reinforced this week. Top of recall.</span></div>
+          <div class="tier tier-settling"><i></i><b>Settling</b><span>Quiet for a few days, still solid.</span></div>
+          <div class="tier tier-resting"><i></i><b>Resting</b><span>Fading from lack of use. Review soon.</span></div>
+        </div>
+
+        <h3>A graph, not a list</h3>
+        <p>Memories link to each other, and the viewer's graph view shows it. Links carry a relation type:</p>
+        <div class="rels"><code>related</code><code>supports</code><code>contradicts</code><code>supersedes</code><code>causes</code><code>example_of</code></div>
+        <p>That is what makes recall connected: pulling one memory can surface the ones it supports, contradicts, or supersedes.</p>
+
+        <h3>Your data stays yours</h3>
+        <p>Each account gets its own isolated brain. Nothing crosses between tenants: reads, writes, search, graph, import, and export are all scoped by brain. That isolation is not just asserted, it is covered by an adversarial test suite that tries to reach across brains and must fail every time.</p>
+      </section>
+    </main>
+  </div>
+
+  <footer><div class="fi"><span>&copy; 2026 MemoryVault &middot; MIT licensed</span><span>built on Cloudflare</span></div></footer>
+
+  <script src="/starfield.js" defer></script>
 </body>
 </html>`;
 }

@@ -246,3 +246,11 @@ VALUES (
   CAST(strftime('%s', 'now') AS INTEGER),
   CAST(strftime('%s', 'now') AS INTEGER)
 );
+
+-- Hosted-tier waitlist: unauthenticated email capture from the /deploy page.
+-- Write-only from the public endpoint; no public read is exposed. The email is
+-- the primary key so re-submitting the same address is an idempotent no-op.
+CREATE TABLE IF NOT EXISTS waitlist (
+  email TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);

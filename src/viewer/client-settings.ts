@@ -311,17 +311,37 @@ export const clientSettings = `  function fillSettingsForm() {
   }
 
   function syncFilterPills(type) {
-    ['all','note','fact','journal','graph'].forEach(t => {
-      document.getElementById('stat-' + t).classList.toggle('active', (type === '' ? 'all' : type) === t);
+    ['all','note','fact','journal'].forEach(t => {
+      const el = document.getElementById('stat-' + t);
+      if (el) el.classList.toggle('active', (type === '' ? 'all' : type) === t);
     });
   }
 
-  function setFilter(type) {
+  // The top-bar segmented control: 'memories' = the list home, 'graph' = the
+  // full graph view. Kept in sync with whichever view is actually shown.
+  function syncModeSwitch(mode) {
+    const mem = document.getElementById('mode-memories');
+    const gr = document.getElementById('mode-graph');
+    if (mem) { mem.classList.toggle('active', mode === 'memories'); mem.setAttribute('aria-selected', mode === 'memories' ? 'true' : 'false'); }
+    if (gr) { gr.classList.toggle('active', mode === 'graph'); gr.setAttribute('aria-selected', mode === 'graph' ? 'true' : 'false'); }
+  }
+
+  // Return to the list home from the graph view without disturbing the active
+  // type filter (so the 'Memories' tab is not a reset).
+  function showList() {
     graphVisible = false;
     const graphView = document.getElementById('graph-view');
-    graphView.classList.remove('visible');
-    graphView.style.display = 'none';
-    document.querySelector('.grid-wrap').style.display = 'grid';
+    if (graphView) { graphView.classList.remove('visible'); graphView.style.display = 'none'; }
+    const wrap = document.querySelector('.grid-wrap');
+    if (wrap) wrap.style.display = '';
+    syncModeSwitch('memories');
+    if (typeof railSync === 'function') railSync();
+    // Leaving the graph view: tear down the WebGL renderer if 3D was on.
+    if (typeof teardownGraph3d === 'function') teardownGraph3d();
+  }
+
+  function setFilter(type) {
+    showList();
     activeFilter = type;
     syncFilterPills(type);
     loadMemories();
@@ -337,25 +357,25 @@ export const clientSettings = `  function fillSettingsForm() {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  // Select a memory by id and open its detail. Resolves from the filtered list
+  // first (full record) and falls back to the graph payload, so clicking a graph
+  // node or a linked memory outside the current filter always opens.
   function expandById(id) {
-    const idx = displayedMemories.findIndex(m => m.id === id);
-    if (idx !== -1) {
-      expandCard(idx);
-    } else {
-      // Memory not found in current view (may be filtered out or not yet loaded)
-      const connEl = document.getElementById('expand-connections');
-      if (connEl) {
-        const note = document.createElement('div');
-        note.style.cssText = 'font-size:12px;color:var(--cream-faint);margin-top:0.5rem';
-        note.textContent = 'That linked memory is not visible in the current filter.';
-        const existing = connEl.querySelector('.connections-section');
-        if (existing) {
-          existing.appendChild(note);
-        } else {
-          connEl.appendChild(note);
-        }
-      }
+    const key = String(id);
+    const idx = displayedMemories.findIndex(m => String(m.id) === key);
+    let m = idx !== -1 ? displayedMemories[idx] : null;
+    if (!m && lastGraphData && Array.isArray(lastGraphData.nodes)) {
+      m = lastGraphData.nodes.find(n => String(n.id) === key) || null;
     }
+    if (!m) return;
+    selectedMemoryIndex = idx;
+    selectedMemoryId = m.id;
+    document.querySelectorAll('#grid .r').forEach((el) => {
+      el.classList.toggle('sel', Number(el.getAttribute('data-card-index')) === idx);
+    });
+    if (typeof updateRailSelection === 'function') updateRailSelection(m);
+    if (graphVisible && typeof focusGraphNode === 'function') focusGraphNode(key);
+    openMemoryDetail(m);
   }
 
   let lastPollSig = '';
@@ -475,6 +495,8 @@ export const clientSettings = `  function fillSettingsForm() {
   function rerenderGraphFromCache() {
     const data = cloneGraphData();
     renderGraph(data.nodes, data.edges, data.inferred_edges);
+    // Keep the 3D view's data in step with filter/relation/search changes.
+    if (typeof graph3dUpdateData === 'function') graph3dUpdateData();
   }
 
   function toggleGraphInferred() {
@@ -519,11 +541,10 @@ export const clientSettings = `  function fillSettingsForm() {
   async function showGraph() {
     graphVisible = true;
     syncGraphToolbarState();
-    ['all','note','fact','journal'].forEach(t => {
-      document.getElementById('stat-' + t).classList.remove('active');
-    });
-    document.getElementById('stat-graph').classList.add('active');
-    document.querySelector('.grid-wrap').style.display = 'none';
+    syncModeSwitch('graph');
+    if (typeof railSync === 'function') railSync();
+    const wrap = document.querySelector('.grid-wrap');
+    if (wrap) wrap.style.display = 'none';
     const graphView = document.getElementById('graph-view');
     graphView.classList.remove('visible');
     graphView.style.display = 'block';
@@ -552,6 +573,8 @@ export const clientSettings = `  function fillSettingsForm() {
       }
       syncGraphToolbarState();
       rerenderGraphFromCache();
+      // Render in 3D instead if the per-brain preference is on (lazy-loads CDN).
+      if (typeof applyGraphMode === 'function') applyGraphMode();
       showToast('Graph loaded: ' + lastGraphData.nodes.length + ' nodes.', 'success');
     } catch(e) {
       document.getElementById('graph-svg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" style="fill:var(--clay);font-family:var(--mono);font-size:12px;letter-spacing:0.06em">The graph could not load — try again.</text>';
