@@ -41,6 +41,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `/view` buttons and interactive controls now work under the strict Content-Security-Policy without relaxing `script-src`.
 - Concurrent auth attempts now rate-limit consistently by recording one expiring KV key per request instead of racing on a shared counter key.
 
+## [1.12.0] - 2026-07-24
+
+### Added
+- Retrieval access tracking: `memory_search`, `memory_get`, `memory_get_fact`, and `memory_activate` now record `access_count` and `last_accessed_at` on returned memories, so recall strengthens memories over time.
+- Dynamic scoring model `memoryvault-dynamic-v2` with `usage_signal` (log-scaled access frequency) and `recall_recency_signal` components; staleness and recency now count from the last write *or* recall instead of write-time only.
+- `memory_decay` responses include per-memory `idle_days` and `decay_periods` for explainability.
+
+### Changed
+- `memory_decay` decrements now scale with idle periods elapsed (time-proportional) instead of applying a flat amount per invocation, and `older_than_days` defaults to the brain policy `decay_days` instead of a hardcoded 30.
+- `memory_decay` protects recently recalled memories: idle time counts from the last write, recall, or prior decay (tracked via a new `last_decayed_at` column).
+- `memory_spaced_repetition` staleness now measures time since last write or recall, and results include `access_count`.
+
+### Fixed
+- `memory_decay` and `memory_reinforce` no longer bump `updated_at` on score-only writes. Previously this reset the staleness penalty and granted a recency bonus, so decaying a stale memory could *increase* its dynamic importance.
+
 ## [1.11.0] - 2026-03-30
 
 ### Added

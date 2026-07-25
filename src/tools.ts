@@ -40,6 +40,7 @@ import {
 import {
   parseJsonObject,
   loadMemoryRowsByIds,
+  recordMemoryAccess,
   runLexicalMemorySearch,
   loadLinkStatsMap,
   loadSourceTrustMap,
@@ -66,6 +67,7 @@ import {
 import {
   clamp01,
   round3,
+  computeDecayPeriods,
   computeDynamicScoreBreakdown,
   computeDynamicScores,
   enrichAndProjectRows,
@@ -346,6 +348,7 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       if (typeof id !== 'string' || !id) return { content: [{ type: 'text', text: 'id must be a non-empty string.' }] };
       const row = await env.DB.prepare('SELECT * FROM memories WHERE brain_id = ? AND id = ?').bind(brainId, id).first<Record<string, unknown>>();
       if (!row) return { content: [{ type: 'text', text: 'Memory not found.' }] };
+      await recordMemoryAccess(env, brainId, [id]);
       const [scored] = await enrichAndProjectRows(env, brainId, [row]);
       return { content: [{ type: 'text', text: JSON.stringify(scored ?? row, null, 2) }] };
     }
@@ -357,6 +360,7 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         'SELECT * FROM memories WHERE brain_id = ? AND type = ? AND key = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1'
       ).bind(brainId, 'fact', key).first<Record<string, unknown>>();
       if (!row) return { content: [{ type: 'text', text: `No fact found with key: ${key}` }] };
+      await recordMemoryAccess(env, brainId, [String(row.id ?? '')]);
       const [scored] = await enrichAndProjectRows(env, brainId, [row]);
       return { content: [{ type: 'text', text: JSON.stringify(scored ?? row, null, 2) }] };
     }
@@ -415,6 +419,7 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       const fusedRows = fuseSearchRows(mode, lexicalRows, semanticRows, semanticCandidates, limit);
       if (!fusedRows.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
 
+      await recordMemoryAccess(env, brainId, fusedRows.map((row) => String(row.id ?? '')));
       const scored = await enrichAndProjectRows(env, brainId, fusedRows);
       return { content: [{ type: 'text', text: JSON.stringify(scored, null, 2) }] };
     }
@@ -1236,7 +1241,7 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       const includeInferred = include_inferred === undefined ? true : Boolean(include_inferred);
 
       const memoriesResult = await env.DB.prepare(
-        'SELECT id, type, title, key, content, tags, source, confidence, importance, created_at, updated_at FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 2000'
+        'SELECT id, type, title, key, content, tags, source, confidence, importance, access_count, last_accessed_at, created_at, updated_at FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 2000'
       ).bind(brainId).all<Record<string, unknown>>();
       const memories = memoriesResult.results;
       if (!memories.length) return { content: [{ type: 'text', text: 'No active memories found.' }] };
@@ -1413,6 +1418,8 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         .sort((a, b) => b.neural_score - a.neural_score)
         .slice(0, limit);
 
+      await recordMemoryAccess(env, brainId, ranked.map((r) => r.id));
+
       return {
         content: [{
           type: 'text',
@@ -1503,7 +1510,6 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         .slice(0, 300)
         .map(([memoryId]) => memoryId);
 
-      const ts = now();
       const changedIds: string[] = [];
       const changeSummary: Array<Record<string, unknown>> = [];
       for (const memoryId of rankedUpdateIds) {
@@ -1513,9 +1519,10 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         const newConfidence = round3(clamp01(current.confidence + update.delta_confidence));
         const newImportance = round3(clamp01(current.importance + update.delta_importance));
         if (newConfidence === current.confidence && newImportance === current.importance) continue;
+        // guirguispierre 2026-07-24: score-only write; bumping updated_at here would reset staleness in dynamic scoring.
         await env.DB.prepare(
-          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
-        ).bind(newConfidence, newImportance, ts, brainId, memoryId).run();
+          'UPDATE memories SET confidence = ?, importance = ? WHERE brain_id = ? AND id = ?'
+        ).bind(newConfidence, newImportance, brainId, memoryId).run();
         changedIds.push(memoryId);
         changeSummary.push({
           id: memoryId,
@@ -1532,7 +1539,7 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
           env,
           brainId,
           (await env.DB.prepare(
-            `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND id IN (${changedIds.map(() => '?').join(',')})`
+            `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance, access_count, last_accessed_at FROM memories WHERE brain_id = ? AND id IN (${changedIds.map(() => '?').join(',')})`
           ).bind(brainId, ...changedIds).all<Record<string, unknown>>()).results
         )
         : [];
@@ -1568,30 +1575,34 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         decay_importance?: unknown;
         limit?: unknown;
       };
-      const olderThanDays = Math.max(0, Number.isFinite(Number(older_than_days)) ? Number(older_than_days) : 30);
+      const policy = await getBrainPolicy(env, brainId);
+      const olderThanDays = Math.max(0, Number.isFinite(Number(older_than_days)) ? Number(older_than_days) : policy.decay_days);
       const maxLinkCount = Math.max(0, Number.isFinite(Number(max_link_count)) ? Math.floor(Number(max_link_count)) : 1);
       const decayConf = Math.min(Math.max(Number.isFinite(Number(decay_confidence)) ? Number(decay_confidence) : 0.01, 0), 0.5);
       const decayImp = Math.min(Math.max(Number.isFinite(Number(decay_importance)) ? Number(decay_importance) : 0.03, 0), 0.5);
       const limit = Math.min(Math.max(Number.isInteger(rawLimit) ? (rawLimit as number) : 200, 1), 1000);
-      const cutoffTs = now() - Math.floor(olderThanDays * 86400);
+      const ts = now();
+      const cutoffTs = ts - Math.floor(olderThanDays * 86400);
 
+      // guirguispierre 2026-07-24: idle = no write, recall, or prior decay; recently recalled memories are protected.
       const candidates = await env.DB.prepare(
         `SELECT
           m.id,
           m.confidence,
           m.importance,
           m.updated_at,
+          m.last_accessed_at,
+          m.last_decayed_at,
           (SELECT COUNT(*) FROM memory_links ml WHERE ml.brain_id = ? AND (ml.from_id = m.id OR ml.to_id = m.id)) AS link_count
         FROM memories m
         WHERE m.brain_id = ?
           AND m.archived_at IS NULL
-          AND m.updated_at <= ?
+          AND MAX(m.updated_at, COALESCE(m.last_accessed_at, 0), COALESCE(m.last_decayed_at, 0)) <= ?
           AND (SELECT COUNT(*) FROM memory_links ml2 WHERE ml2.brain_id = ? AND (ml2.from_id = m.id OR ml2.to_id = m.id)) <= ?
-        ORDER BY m.updated_at ASC
+        ORDER BY MAX(m.updated_at, COALESCE(m.last_accessed_at, 0), COALESCE(m.last_decayed_at, 0)) ASC
         LIMIT ?`
       ).bind(brainId, brainId, cutoffTs, brainId, maxLinkCount, limit).all<Record<string, unknown>>();
 
-      const ts = now();
       const decayedIds: string[] = [];
       const updates: Array<Record<string, unknown>> = [];
       for (const row of candidates.results) {
@@ -1599,16 +1610,25 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         if (!memoryId) continue;
         const currentConf = clamp01(toFiniteNumber(row.confidence, 0.7));
         const currentImp = clamp01(toFiniteNumber(row.importance, 0.5));
-        const newConf = round3(clamp01(currentConf - decayConf));
-        const newImp = round3(clamp01(currentImp - decayImp));
+        const lastActivity = Math.max(
+          toFiniteNumber(row.updated_at, 0),
+          toFiniteNumber(row.last_accessed_at, 0),
+          toFiniteNumber(row.last_decayed_at, 0)
+        );
+        const idleDays = Math.max(0, (ts - lastActivity) / 86400);
+        const periods = computeDecayPeriods(idleDays, olderThanDays);
+        const newConf = round3(clamp01(currentConf - decayConf * periods));
+        const newImp = round3(clamp01(currentImp - decayImp * periods));
         if (newConf === currentConf && newImp === currentImp) continue;
         await env.DB.prepare(
-          'UPDATE memories SET confidence = ?, importance = ?, updated_at = ? WHERE brain_id = ? AND id = ?'
+          'UPDATE memories SET confidence = ?, importance = ?, last_decayed_at = ? WHERE brain_id = ? AND id = ?'
         ).bind(newConf, newImp, ts, brainId, memoryId).run();
         decayedIds.push(memoryId);
         updates.push({
           id: memoryId,
           link_count: toFiniteNumber(row.link_count, 0),
+          idle_days: round3(idleDays),
+          decay_periods: round3(periods),
           confidence_before: round3(currentConf),
           confidence_after: newConf,
           importance_before: round3(currentImp),
@@ -3865,14 +3885,14 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       const candidates = await env.DB.prepare(
         `SELECT
           m.id, m.type, m.title, m.key, m.content, m.tags, m.source,
-          m.confidence, m.importance, m.created_at, m.updated_at,
+          m.confidence, m.importance, m.access_count, m.last_accessed_at, m.created_at, m.updated_at,
           (SELECT COUNT(*) FROM memory_links ml WHERE ml.brain_id = ? AND (ml.from_id = m.id OR ml.to_id = m.id)) AS link_count
         FROM memories m
         WHERE m.brain_id = ?
           AND m.archived_at IS NULL
           AND m.importance >= ?
           AND m.created_at <= ?
-        ORDER BY m.updated_at ASC
+        ORDER BY MAX(m.updated_at, COALESCE(m.last_accessed_at, 0)) ASC
         LIMIT 500`
       ).bind(brainId, brainId, minImp, ageCutoff).all<Record<string, unknown>>();
 
@@ -3885,11 +3905,13 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         const updatedAt = Number(row.updated_at ?? row.created_at ?? 0);
         const createdAt = Number(row.created_at ?? 0);
         const linkCount = toFiniteNumber(row.link_count, 0);
+        const accessCount = toFiniteNumber(row.access_count, 0);
+        const lastActivity = Math.max(updatedAt, toFiniteNumber(row.last_accessed_at, 0));
 
         // Skip if confidence is already high (doesn't need review)
         if (confidence > maxConf) continue;
 
-        const daysSinceUpdate = (tsNow - updatedAt) / 86400;
+        const daysSinceActivity = (tsNow - lastActivity) / 86400;
         const daysSinceCreation = (tsNow - createdAt) / 86400;
 
         // Urgency scoring: higher = more urgently needs review
@@ -3897,8 +3919,8 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         const importanceSignal = importance * 0.35;
         // Low confidence = needs reinforcement
         const confidenceGap = (1 - confidence) * 0.25;
-        // Staleness: longer since last update = more urgent
-        const stalenessSignal = Math.min(daysSinceUpdate / 90, 1) * 0.25;
+        // Staleness: longer since last write or recall = more urgent
+        const stalenessSignal = Math.min(daysSinceActivity / 90, 1) * 0.25;
         // Isolation: fewer links = more likely to be forgotten
         const isolationSignal = (1 / (1 + linkCount)) * 0.15;
 
@@ -3918,8 +3940,9 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
             created_at: createdAt,
             updated_at: updatedAt,
             link_count: linkCount,
+            access_count: accessCount,
             age_days: round3(daysSinceCreation),
-            stale_days: round3(daysSinceUpdate),
+            stale_days: round3(daysSinceActivity),
           },
           urgency,
           breakdown: {

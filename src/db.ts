@@ -48,6 +48,10 @@ export async function ensureSchema(env: Env): Promise<void> {
       await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.5");
       await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN archived_at INTEGER");
       await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN brain_id TEXT");
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0");
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN last_accessed_at INTEGER");
+      await runMigrationStatement(env, "ALTER TABLE memories ADD COLUMN last_decayed_at INTEGER");
+      await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_memories_brain_accessed ON memories(brain_id, last_accessed_at DESC)");
       await runMigrationStatement(env, "ALTER TABLE memory_links ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'related'");
       await runMigrationStatement(env, "ALTER TABLE memory_links ADD COLUMN brain_id TEXT");
       await runMigrationStatement(env, "CREATE INDEX IF NOT EXISTS idx_archived ON memories(archived_at)");
@@ -340,6 +344,27 @@ export async function loadMemoryRowsByIds(
     if (rowId) byId.set(rowId, row);
   }
   return requestedIds.map((id) => byId.get(id)).filter((row): row is Record<string, unknown> => Boolean(row));
+}
+
+// guirguispierre 2026-07-24: best-effort by design — a failed stats write must never fail the read path.
+export async function recordMemoryAccess(
+  env: Env,
+  brainId: string,
+  memoryIds: string[],
+  tsNow = now()
+): Promise<void> {
+  const uniqueIds = Array.from(new Set(memoryIds.map((id) => id.trim()).filter(Boolean)));
+  if (!uniqueIds.length) return;
+  try {
+    for (let i = 0; i < uniqueIds.length; i += 50) {
+      const chunk = uniqueIds.slice(i, i + 50);
+      await env.DB.prepare(
+        `UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE brain_id = ? AND id IN (${chunk.map(() => '?').join(', ')})`
+      ).bind(tsNow, brainId, ...chunk).run();
+    }
+  } catch (err) {
+    console.warn('[memory-access]', err);
+  }
 }
 
 export async function runLexicalMemorySearch(

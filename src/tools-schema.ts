@@ -152,6 +152,38 @@ export const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
 
 export const TOOL_CHANGELOG: ToolChangelogEntry[] = [
   {
+    id: 'usage-activation-1.12.0',
+    version: '1.12.0',
+    released_at: 1784851200,
+    summary: 'Usage-aware memory activation: retrieval strengthens memories, decay respects recall, scoring model v2.',
+    changes: [
+      {
+        type: 'updated',
+        target: 'scoring',
+        name: 'memoryvault-dynamic-v2',
+        description: 'Dynamic scoring adds usage and recall-recency signals from access tracking; staleness and recency now count from the last write or recall.',
+      },
+      {
+        type: 'updated',
+        target: 'tool',
+        name: 'memory_search',
+        description: 'memory_search, memory_get, memory_get_fact, and memory_activate record access on returned memories (access_count, last_accessed_at).',
+      },
+      {
+        type: 'fix',
+        target: 'tool',
+        name: 'memory_decay',
+        description: 'Decay no longer bumps updated_at (which reset staleness and could raise dynamic scores); decrements scale with idle time, recalled memories are protected, and older_than_days defaults to brain policy decay_days.',
+      },
+      {
+        type: 'fix',
+        target: 'tool',
+        name: 'memory_reinforce',
+        description: 'Reinforcement writes scores without bumping updated_at, so it no longer resets content staleness.',
+      },
+    ],
+  },
+  {
     id: 'cognitive-1.11.0',
     version: '1.11.0',
     released_at: 1774934400,
@@ -404,7 +436,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'memory_search',
-    description: 'Search memories with lexical, semantic, or hybrid retrieval across title/key/id/source/content.',
+    description: 'Search memories with lexical, semantic, or hybrid retrieval across title/key/id/source/content. Returned memories are recorded as accessed, which strengthens their recall-based scoring.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -598,7 +630,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'memory_activate',
-    description: 'Run spreading-activation retrieval from seed memories (id/query) across the memory graph.',
+    description: 'Run spreading-activation retrieval from seed memories (id/query) across the memory graph. Returned memories are recorded as accessed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -628,14 +660,14 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'memory_decay',
-    description: 'Apply homeostatic decay to stale low-connectivity memories.',
+    description: 'Apply homeostatic decay to idle low-connectivity memories. Idle time counts from the last write, recall, or decay; decrements scale with idle periods elapsed. Recently recalled memories are protected.',
     inputSchema: {
       type: 'object',
       properties: {
-        older_than_days: { type: 'number', description: 'Only decay memories older than N days (default 30)' },
+        older_than_days: { type: 'number', description: 'Only decay memories idle for more than N days (default: brain policy decay_days)' },
         max_link_count: { type: 'number', description: 'Only decay memories with links <= this count (default 1)' },
-        decay_confidence: { type: 'number', description: 'Confidence decrement per memory (default 0.01)' },
-        decay_importance: { type: 'number', description: 'Importance decrement per memory (default 0.03)' },
+        decay_confidence: { type: 'number', description: 'Confidence decrement per idle period (default 0.01)' },
+        decay_importance: { type: 'number', description: 'Importance decrement per idle period (default 0.03)' },
         limit: { type: 'number', description: 'Max memories to decay (default 200)' },
       },
       required: [],
