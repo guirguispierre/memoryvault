@@ -41,6 +41,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `/view` buttons and interactive controls now work under the strict Content-Security-Policy without relaxing `script-src`.
 - Concurrent auth attempts now rate-limit consistently by recording one expiring KV key per request instead of racing on a shared counter key.
 
+## [1.13.0] - 2026-07-24
+
+### Added
+- `memory_search` results include a `retrieval` block per row (`fused_score`, `relevance_score`, plus `superseded_by` / `conflict_loser` annotations when applicable).
+- New `src/retrieval.ts` module with pure, unit-tested ranking functions (`rankLexicalRows`, `rankSearchResults`).
+
+### Changed
+- Lexical search candidates are now ranked by weighted field relevance (title > key > tags > source > content, with phrase bonus) instead of `created_at DESC`, so rank fusion receives genuine relevance order.
+- Final search order blends normalized fused retrieval scores (75%) with dynamic importance/confidence (25%) across the full candidate pool *before* slicing to the limit — dynamic scores now affect what gets retrieved, not just how results are decorated.
+- Memories that have been superseded, or that lost a resolved conflict, are down-ranked and annotated instead of ranking identically to their canonical counterparts.
+- Lexical candidate pool widened (up to 120 rows) so re-ranking has more to work with.
+- Access recording now applies to the final returned results rather than the pre-ranking candidate set.
+
 ## [1.12.0] - 2026-07-24
 
 ### Added
