@@ -367,6 +367,26 @@ export async function recordMemoryAccess(
   }
 }
 
+export async function loadLinksForMemoryIds(
+  env: Env,
+  brainId: string,
+  memoryIds: string[]
+): Promise<Array<{ from_id: string; to_id: string; relation_type: string }>> {
+  const out: Array<{ from_id: string; to_id: string; relation_type: string }> = [];
+  const uniqueIds = Array.from(new Set(memoryIds.map((id) => id.trim()).filter(Boolean)));
+  if (!uniqueIds.length) return out;
+  for (let i = 0; i < uniqueIds.length; i += 50) {
+    const chunk = uniqueIds.slice(i, i + 50);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const rows = await env.DB.prepare(
+      `SELECT from_id, to_id, relation_type FROM memory_links
+       WHERE brain_id = ? AND (from_id IN (${placeholders}) OR to_id IN (${placeholders}))`
+    ).bind(brainId, ...chunk, ...chunk).all<{ from_id: string; to_id: string; relation_type: string }>();
+    out.push(...rows.results.filter((row) => !!row.from_id && !!row.to_id));
+  }
+  return out;
+}
+
 export async function loadSupersededByMap(
   env: Env,
   brainId: string,
