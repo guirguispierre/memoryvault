@@ -54,6 +54,66 @@ export function rankLexicalRows(
     .map((entry) => entry.row);
 }
 
+export function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+export type ContextPackEntry = {
+  id: string;
+  text: string;
+  utility: number;
+  tokens: number;
+};
+
+export type PackedContextEntry = {
+  id: string;
+  text: string;
+  tokens: number;
+  truncated: boolean;
+  utility: number;
+};
+
+export type PackedContext = {
+  selected: PackedContextEntry[];
+  used_tokens: number;
+  skipped_over_budget: number;
+};
+
+// guirguispierre 2026-07-24: greedy by utility; one partial (truncated) entry allowed when >=120 tokens remain.
+export function packContextEntries(
+  entries: ContextPackEntry[],
+  tokenBudget: number,
+  maxEntries: number
+): PackedContext {
+  const sorted = [...entries].sort((a, b) => b.utility - a.utility);
+  const selected: PackedContextEntry[] = [];
+  let used = 0;
+  let skipped = 0;
+  for (const entry of sorted) {
+    if (selected.length >= maxEntries) {
+      skipped++;
+      continue;
+    }
+    const remaining = tokenBudget - used;
+    if (remaining <= 0) {
+      skipped++;
+      continue;
+    }
+    if (entry.tokens <= remaining) {
+      selected.push({ id: entry.id, text: entry.text, tokens: entry.tokens, truncated: false, utility: entry.utility });
+      used += entry.tokens;
+    } else if (remaining >= 120) {
+      const text = `${entry.text.slice(0, Math.max(0, remaining * 4 - 2))}…`;
+      const tokens = estimateTokens(text);
+      selected.push({ id: entry.id, text, tokens, truncated: true, utility: entry.utility });
+      used += tokens;
+    } else {
+      skipped++;
+    }
+  }
+  return { selected, used_tokens: used, skipped_over_budget: skipped };
+}
+
 export type SearchRankingContext = {
   fusedScores: Map<string, number>;
   supersededBy: Map<string, string[]>;

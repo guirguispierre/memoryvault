@@ -41,6 +41,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `/view` buttons and interactive controls now work under the strict Content-Security-Policy without relaxing `script-src`.
 - Concurrent auth attempts now rate-limit consistently by recording one expiring KV key per request instead of racing on a shared counter key.
 
+## [1.14.0] - 2026-07-24
+
+### Added
+- `memory_context_pack` MCP tool — one-call working-memory assembly. Retrieves relevant memories for a task (lexical/semantic/hybrid), expands 0-2 hops through positively weighted graph relations, excludes superseded memories and resolved-conflict losers (reported in an `excluded` block), and greedily packs the highest-utility memories into a token budget. Returns a citation-ready `context` string plus per-memory metadata (`ref`, `relevance`, `utility`, `tokens_estimate`, `truncated`, `included_via`).
+- Packed memories are recorded as accessed, so using context strengthens the memories it draws on.
+- New pure helpers in `src/retrieval.ts`: `estimateTokens`, `packContextEntries` (greedy utility packing with one truncated partial entry when ≥120 tokens remain).
+
 ## [1.13.0] - 2026-07-24
 
 ### Added

@@ -148,9 +148,27 @@ export const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
     introduced_in: '1.11.0',
     notes: 'Surface decaying but important memories that need reinforcement, like human spaced repetition.',
   },
+  memory_context_pack: {
+    introduced_in: '1.14.0',
+    notes: 'One-call working-memory assembly: retrieval + graph expansion + trust filtering + token-budgeted packing.',
+  },
 };
 
 export const TOOL_CHANGELOG: ToolChangelogEntry[] = [
+  {
+    id: 'context-pack-1.14.0',
+    version: '1.14.0',
+    released_at: 1784851200,
+    summary: 'Working-memory assembly: memory_context_pack builds a token-budgeted, citation-ready context block in one call.',
+    changes: [
+      {
+        type: 'added',
+        target: 'tool',
+        name: 'memory_context_pack',
+        description: 'Retrieve relevant memories for a task, expand through the graph, exclude superseded/conflict-loser memories, and greedily pack the highest-utility set into a token budget with per-memory citations and an exclusion report.',
+      },
+    ],
+  },
   {
     id: 'search-relevance-1.13.0',
     version: '1.13.0',
@@ -1019,6 +1037,22 @@ export const TOOLS: ToolDefinition[] = [
         include_score_breakdown: { type: 'boolean', description: 'Include urgency score breakdown per memory (default true)' },
       },
       required: [],
+    },
+  },
+  {
+    name: 'memory_context_pack',
+    description: 'Assemble a ready-to-use context block for a task in one call: retrieve relevant memories, expand one or two hops through the graph, drop superseded memories and conflict losers, and greedily pack the highest-utility memories into a token budget with citations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The task or question to assemble context for' },
+        token_budget: { type: 'number', description: 'Approximate token budget for the packed context (200-12000, default 2000)' },
+        mode: { type: 'string', enum: ['lexical', 'semantic', 'hybrid'], description: 'Retrieval mode for seed memories (default: hybrid)' },
+        hops: { type: 'number', description: 'Graph expansion depth from retrieved seeds (0-2, default 1)' },
+        type: { type: 'string', enum: ['note', 'fact', 'journal'], description: 'Optional type filter for seed retrieval' },
+        max_memories: { type: 'number', description: 'Max memories in the pack (1-50, default 25)' },
+      },
+      required: ['query'],
     },
   },
 ];
