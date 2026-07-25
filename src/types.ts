@@ -89,6 +89,7 @@ export type DynamicScoreBreakdown = {
   memory_type: string;
   source: string | null;
   age_days: number;
+  activity_age_days: number;
   link_stats: LinkStats;
   base_confidence: number;
   base_importance: number;
@@ -106,6 +107,8 @@ export type DynamicScoreBreakdown = {
     high_signal_source: boolean;
     low_signal_source: boolean;
     content_length: number;
+    access_count: number;
+    recall_age_days: number | null;
   };
 };
 
@@ -160,6 +163,8 @@ export type MemoryGraphNode = {
   updated_at: number;
   confidence: number;
   importance: number;
+  access_count?: number;
+  last_accessed_at?: number | null;
 };
 
 export type MemoryGraphLink = {

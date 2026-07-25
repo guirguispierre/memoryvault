@@ -1,9 +1,10 @@
 {
   "name": "memoryvault",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "MemoryVault MCP server on Cloudflare Workers + D1 with OAuth and graph-based memory tools.",
   "scripts": {
-    "test": "npm run type-check",
+    "test": "npm run type-check && npm run test:unit",
+    "test:unit": "vitest run",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "type-check": "tsc",
@@ -38,6 +39,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260329.1",
     "typescript": "^6.0.2",
+    "vitest": "^4.1.10",
     "wrangler": "^4.78.0"
   }
 }

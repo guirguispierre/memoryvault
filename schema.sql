@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS memories (
   confidence REAL NOT NULL DEFAULT 0.7 CHECK(confidence >= 0 AND confidence <= 1),
   importance REAL NOT NULL DEFAULT 0.5 CHECK(importance >= 0 AND importance <= 1),
   archived_at INTEGER,
+  access_count INTEGER NOT NULL DEFAULT 0,
+  last_accessed_at INTEGER,
+  last_decayed_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (brain_id) REFERENCES brains(id) ON DELETE CASCADE
@@ -106,6 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_confidence ON memories(confidence DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_brain_created ON memories(brain_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_brain_key ON memories(brain_id, key);
+CREATE INDEX IF NOT EXISTS idx_memories_brain_accessed ON memories(brain_id, last_accessed_at DESC);
 
 CREATE TABLE IF NOT EXISTS rate_limits (
   ip TEXT NOT NULL,

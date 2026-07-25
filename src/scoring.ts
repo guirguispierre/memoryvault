@@ -39,6 +39,13 @@ export function countKeywordHits(haystack: string, terms: string[]): number {
 }
 
 
+// guirguispierre 2026-07-24: scales decay by idle periods elapsed so repeated runs are time-proportional, not compounding.
+export function computeDecayPeriods(idleDays: number, olderThanDays: number, cap = 3): number {
+  if (!Number.isFinite(idleDays) || idleDays <= 0) return 0;
+  if (!Number.isFinite(olderThanDays) || olderThanDays <= 0) return Math.min(1, cap);
+  return Math.min(idleDays / olderThanDays, cap);
+}
+
 export function computeDynamicScoreBreakdown(
   memory: Record<string, unknown>,
   rawStats?: Partial<LinkStats>,
@@ -51,6 +58,11 @@ export function computeDynamicScoreBreakdown(
   const createdAt = toFiniteNumber(memory.created_at, tsNow);
   const updatedAt = toFiniteNumber(memory.updated_at, createdAt);
   const ageDays = Math.max(0, (tsNow - updatedAt) / 86400);
+  const accessCount = Math.max(0, Math.floor(toFiniteNumber(memory.access_count, 0)));
+  const lastAccessedAt = toFiniteNumber(memory.last_accessed_at, 0);
+  const recallAgeDays = lastAccessedAt > 0 ? Math.max(0, (tsNow - lastAccessedAt) / 86400) : null;
+  // guirguispierre 2026-07-24: staleness counts from the last write OR recall, so retrieval keeps memories fresh.
+  const activityAgeDays = recallAgeDays === null ? ageDays : Math.min(ageDays, recallAgeDays);
   const memoryType = typeof memory.type === 'string' ? memory.type.toLowerCase() : '';
   const sourceText = typeof memory.source === 'string' ? memory.source.trim().toLowerCase() : '';
   const textBlob = [
@@ -98,14 +110,24 @@ export function computeDynamicScoreBreakdown(
   const causeSignal = Math.min(0.14, stats.causes_count * 0.04);
   const exampleSignal = Math.min(0.08, stats.example_of_count * 0.02);
   const supersedeSignal = Math.min(0.08, stats.supersedes_count * 0.02);
-  const stalePenalty = Math.min(0.2, ageDays / 365 * 0.16);
-  const recencyImportance = ageDays < 3
+  const stalePenalty = Math.min(0.2, activityAgeDays / 365 * 0.16);
+  const recencyImportance = activityAgeDays < 3
     ? 0.12
-    : ageDays < 14
+    : activityAgeDays < 14
       ? 0.07
-      : ageDays < 60
+      : activityAgeDays < 60
         ? 0.03
-        : -Math.min(0.18, (ageDays - 60) / 365 * 0.18);
+        : -Math.min(0.18, (activityAgeDays - 60) / 365 * 0.18);
+  const usageSignal = Math.min(0.16, Math.log1p(accessCount) * 0.05);
+  const recallRecencySignal = recallAgeDays === null
+    ? 0
+    : recallAgeDays < 2
+      ? 0.08
+      : recallAgeDays < 14
+        ? 0.04
+        : recallAgeDays < 60
+          ? 0.015
+          : 0;
 
   const confidenceComponentsRaw: ScoreComponent[] = [
     { name: 'base_confidence', delta: baseConfidence },
@@ -114,6 +136,7 @@ export function computeDynamicScoreBreakdown(
     { name: 'certainty_signal', delta: certaintySignal },
     { name: 'type_confidence_bias', delta: typeConfidenceBias },
     { name: 'support_signal', delta: supportSignal },
+    { name: 'usage_signal', delta: usageSignal * 0.25 },
     { name: 'link_signal', delta: linkSignal * 0.35 },
     { name: 'example_signal', delta: exampleSignal * 0.25 },
     { name: 'contradiction_penalty', delta: -contradictionPenalty },
@@ -131,6 +154,8 @@ export function computeDynamicScoreBreakdown(
     { name: 'cause_signal', delta: causeSignal },
     { name: 'example_signal', delta: exampleSignal },
     { name: 'supersede_signal', delta: supersedeSignal },
+    { name: 'usage_signal', delta: usageSignal },
+    { name: 'recall_recency_signal', delta: recallRecencySignal },
     { name: 'recency_signal', delta: recencyImportance },
     { name: 'contradiction_penalty', delta: -(contradictionPenalty * 0.25) },
   ];
@@ -141,11 +166,12 @@ export function computeDynamicScoreBreakdown(
   const dynamicImportance = round3(clamp01(rawImportance));
 
   return {
-    score_model: 'memoryvault-dynamic-v1',
+    score_model: 'memoryvault-dynamic-v2',
     evaluated_at: tsNow,
     memory_type: memoryType || 'unknown',
     source: sourceText || null,
     age_days: round3(ageDays),
+    activity_age_days: round3(activityAgeDays),
     link_stats: stats,
     base_confidence: round3(baseConfidence),
     base_importance: round3(baseImportance),
@@ -163,6 +189,8 @@ export function computeDynamicScoreBreakdown(
       high_signal_source: highSignalSource,
       low_signal_source: lowSignalSource,
       content_length: contentLength,
+      access_count: accessCount,
+      recall_age_days: recallAgeDays === null ? null : round3(recallAgeDays),
     },
   };
 }
