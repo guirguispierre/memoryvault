@@ -614,7 +614,7 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       const byType = await env.DB.prepare('SELECT type, COUNT(*) as count FROM memories WHERE brain_id = ? AND archived_at IS NULL GROUP BY type').bind(brainId).all();
       const relationStats = await env.DB.prepare('SELECT relation_type, COUNT(*) as count FROM memory_links WHERE brain_id = ? GROUP BY relation_type').bind(brainId).all();
       const recent = await env.DB.prepare(
-        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 5'
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance, access_count, last_accessed_at FROM memories WHERE brain_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 5'
       ).bind(brainId).all<Record<string, unknown>>();
       const recentScored = await enrichAndProjectRows(env, brainId, recent.results);
       const avgDynamicConfidence = recentScored.length
@@ -1738,7 +1738,7 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       const includeResolved = rawIncludeResolved === true;
 
       const factsResult = await env.DB.prepare(
-        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? LIMIT 3000'
+        'SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance, access_count, last_accessed_at FROM memories WHERE brain_id = ? AND archived_at IS NULL AND type = ? LIMIT 3000'
       ).bind(brainId, 'fact').all<Record<string, unknown>>();
       const scoredFacts = await enrichAndProjectRows(env, brainId, factsResult.results);
       const factMap = new Map<string, Record<string, unknown>>();

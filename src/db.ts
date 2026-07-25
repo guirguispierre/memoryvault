@@ -504,7 +504,7 @@ export async function setBrainPolicy(env: Env, brainId: string, patch: Record<st
 
 export async function loadActiveMemoryNodes(env: Env, brainId: string, limit = 1500): Promise<MemoryGraphNode[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance
+    `SELECT id, type, title, key, content, tags, source, created_at, updated_at, confidence, importance, access_count, last_accessed_at
      FROM memories
      WHERE brain_id = ? AND archived_at IS NULL
      ORDER BY created_at DESC

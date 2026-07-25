@@ -163,6 +163,8 @@ export type MemoryGraphNode = {
   updated_at: number;
   confidence: number;
   importance: number;
+  access_count?: number;
+  last_accessed_at?: number | null;
 };
 
 export type MemoryGraphLink = {
