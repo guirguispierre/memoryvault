@@ -152,6 +152,26 @@ export const TOOL_RELEASE_META: Record<string, ToolReleaseMeta> = {
 
 export const TOOL_CHANGELOG: ToolChangelogEntry[] = [
   {
+    id: 'search-relevance-1.13.0',
+    version: '1.13.0',
+    released_at: 1784851200,
+    summary: 'Relevance-ranked search: lexical scoring, dynamic-score-aware ranking, supersession and conflict awareness.',
+    changes: [
+      {
+        type: 'updated',
+        target: 'tool',
+        name: 'memory_search',
+        description: 'Lexical candidates are ranked by weighted field relevance instead of recency; final order blends rank fusion with dynamic importance/confidence before the limit is applied; each result carries a retrieval block with fused and relevance scores.',
+      },
+      {
+        type: 'updated',
+        target: 'tool',
+        name: 'memory_search',
+        description: 'Superseded memories and losers of resolved conflicts are down-ranked and annotated (superseded_by, conflict_loser) instead of ranking identically to their canonical counterparts.',
+      },
+    ],
+  },
+  {
     id: 'usage-activation-1.12.0',
     version: '1.12.0',
     released_at: 1784851200,
@@ -436,7 +456,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'memory_search',
-    description: 'Search memories with lexical, semantic, or hybrid retrieval across title/key/id/source/content. Returned memories are recorded as accessed, which strengthens their recall-based scoring.',
+    description: 'Search memories with lexical, semantic, or hybrid retrieval across title/key/id/source/content. Results are ranked by fused retrieval relevance blended with dynamic importance/confidence; superseded memories and resolved-conflict losers are down-ranked and annotated. Returned memories are recorded as accessed, which strengthens their recall-based scoring.',
     inputSchema: {
       type: 'object',
       properties: {

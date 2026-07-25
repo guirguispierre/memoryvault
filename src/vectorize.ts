@@ -416,13 +416,19 @@ export async function querySemanticMemoryCandidates(
 }
 
 
-export function fuseSearchRows(
+export type FusedSearchCandidate = {
+  row: Record<string, unknown>;
+  fused_score: number;
+  lexical_rank: number | null;
+  semantic_rank: number | null;
+};
+
+export function fuseSearchCandidates(
   mode: MemorySearchMode,
   lexicalRows: Record<string, unknown>[],
   semanticRows: Record<string, unknown>[],
-  semanticCandidates: SemanticMemoryCandidate[],
-  limit: number
-): Record<string, unknown>[] {
+  semanticCandidates: SemanticMemoryCandidate[]
+): FusedSearchCandidate[] {
   const rowById = new Map<string, Record<string, unknown>>();
   const lexicalRank = new Map<string, number>();
   const semanticRank = new Map<string, number>();
@@ -444,32 +450,26 @@ export function fuseSearchRows(
     semanticScore.set(candidate.memory_id, candidate.score);
   });
 
-  const ids = Array.from(rowById.keys());
-  ids.sort((a, b) => {
-    const lexA = lexicalRank.has(a) ? 1 / (MEMORY_SEARCH_FUSION_K + (lexicalRank.get(a) ?? 0)) : 0;
-    const lexB = lexicalRank.has(b) ? 1 / (MEMORY_SEARCH_FUSION_K + (lexicalRank.get(b) ?? 0)) : 0;
-    const semA = semanticRank.has(a) ? 1 / (MEMORY_SEARCH_FUSION_K + (semanticRank.get(a) ?? 0)) : 0;
-    const semB = semanticRank.has(b) ? 1 / (MEMORY_SEARCH_FUSION_K + (semanticRank.get(b) ?? 0)) : 0;
-    const semScoreA = normalizeSemanticScore(toFiniteNumber(semanticScore.get(a), -1));
-    const semScoreB = normalizeSemanticScore(toFiniteNumber(semanticScore.get(b), -1));
+  const fusedFor = (id: string): number => {
+    const lex = lexicalRank.has(id) ? 1 / (MEMORY_SEARCH_FUSION_K + (lexicalRank.get(id) ?? 0)) : 0;
+    const sem = semanticRank.has(id) ? 1 / (MEMORY_SEARCH_FUSION_K + (semanticRank.get(id) ?? 0)) : 0;
+    const semScore = normalizeSemanticScore(toFiniteNumber(semanticScore.get(id), -1));
+    if (mode === 'semantic') return sem + (semScore * 0.25);
+    if (mode === 'hybrid') return (sem * 0.7) + (lex * 0.3) + (semScore * 0.15);
+    return lex;
+  };
 
-    let fusedA = lexA;
-    let fusedB = lexB;
-    if (mode === 'semantic') {
-      fusedA = semA + (semScoreA * 0.25);
-      fusedB = semB + (semScoreB * 0.25);
-    } else if (mode === 'hybrid') {
-      fusedA = (semA * 0.7) + (lexA * 0.3) + (semScoreA * 0.15);
-      fusedB = (semB * 0.7) + (lexB * 0.3) + (semScoreB * 0.15);
-    }
-    if (fusedB !== fusedA) return fusedB - fusedA;
-
-    const rowA = rowById.get(a);
-    const rowB = rowById.get(b);
-    const updatedA = toFiniteNumber(rowA?.updated_at, toFiniteNumber(rowA?.created_at, 0));
-    const updatedB = toFiniteNumber(rowB?.updated_at, toFiniteNumber(rowB?.created_at, 0));
-    return updatedB - updatedA;
-  });
-
-  return ids.slice(0, limit).map((id) => rowById.get(id)).filter((row): row is Record<string, unknown> => Boolean(row));
+  return Array.from(rowById.entries())
+    .map(([id, row]) => ({
+      row,
+      fused_score: fusedFor(id),
+      lexical_rank: lexicalRank.get(id) ?? null,
+      semantic_rank: semanticRank.get(id) ?? null,
+    }))
+    .sort((a, b) => {
+      if (b.fused_score !== a.fused_score) return b.fused_score - a.fused_score;
+      const updatedA = toFiniteNumber(a.row.updated_at, toFiniteNumber(a.row.created_at, 0));
+      const updatedB = toFiniteNumber(b.row.updated_at, toFiniteNumber(b.row.created_at, 0));
+      return updatedB - updatedA;
+    });
 }

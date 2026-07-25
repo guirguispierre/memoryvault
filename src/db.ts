@@ -367,6 +367,62 @@ export async function recordMemoryAccess(
   }
 }
 
+export async function loadSupersededByMap(
+  env: Env,
+  brainId: string,
+  memoryIds: string[]
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const uniqueIds = Array.from(new Set(memoryIds.map((id) => id.trim()).filter(Boolean)));
+  if (!uniqueIds.length) return out;
+  try {
+    for (let i = 0; i < uniqueIds.length; i += 50) {
+      const chunk = uniqueIds.slice(i, i + 50);
+      const rows = await env.DB.prepare(
+        `SELECT to_id, from_id FROM memory_links WHERE brain_id = ? AND relation_type = 'supersedes' AND to_id IN (${chunk.map(() => '?').join(', ')})`
+      ).bind(brainId, ...chunk).all<{ to_id: string; from_id: string }>();
+      for (const row of rows.results) {
+        if (!row.to_id || !row.from_id) continue;
+        const list = out.get(row.to_id) ?? [];
+        if (!list.includes(row.from_id)) list.push(row.from_id);
+        out.set(row.to_id, list);
+      }
+    }
+  } catch (err) {
+    console.warn('[superseded-lookup]', err);
+  }
+  return out;
+}
+
+export async function loadConflictLoserSet(
+  env: Env,
+  brainId: string,
+  memoryIds: string[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  const uniqueIds = Array.from(new Set(memoryIds.map((id) => id.trim()).filter(Boolean)));
+  if (!uniqueIds.length) return out;
+  const candidateSet = new Set(uniqueIds);
+  try {
+    for (let i = 0; i < uniqueIds.length; i += 50) {
+      const chunk = uniqueIds.slice(i, i + 50);
+      const placeholders = chunk.map(() => '?').join(', ');
+      const rows = await env.DB.prepare(
+        `SELECT a_id, b_id, canonical_id FROM memory_conflict_resolutions
+         WHERE brain_id = ? AND status IN ('resolved', 'superseded') AND canonical_id IS NOT NULL
+           AND (a_id IN (${placeholders}) OR b_id IN (${placeholders}))`
+      ).bind(brainId, ...chunk, ...chunk).all<{ a_id: string; b_id: string; canonical_id: string }>();
+      for (const row of rows.results) {
+        const loser = row.canonical_id === row.a_id ? row.b_id : row.a_id;
+        if (loser && candidateSet.has(loser)) out.add(loser);
+      }
+    }
+  } catch (err) {
+    console.warn('[conflict-loser-lookup]', err);
+  }
+  return out;
+}
+
 export async function runLexicalMemorySearch(
   env: Env,
   brainId: string,

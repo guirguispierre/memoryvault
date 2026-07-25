@@ -44,6 +44,8 @@ import {
   runLexicalMemorySearch,
   loadLinkStatsMap,
   loadSourceTrustMap,
+  loadSupersededByMap,
+  loadConflictLoserSet,
   getBrainPolicy,
   setBrainPolicy,
   loadActiveMemoryNodes,
@@ -59,10 +61,15 @@ import {
   syncMemoriesToVectorIndex,
   safeDeleteMemoryVectors,
   querySemanticMemoryCandidates,
-  fuseSearchRows,
+  fuseSearchCandidates,
   waitForVectorMutationReady,
   waitForVectorQueryReady,
 } from './vectorize.js';
+
+import {
+  rankLexicalRows,
+  rankSearchResults,
+} from './retrieval.js';
 
 import {
   clamp01,
@@ -388,11 +395,11 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
         : Math.min(Math.max(toFiniteNumber(rawMinScore, -1), -1), 1);
       const typeFilter = type as MemoryType | undefined;
 
-      const lexicalFetchLimit = Math.min(Math.max(limit * 3, limit), 60);
+      const lexicalFetchLimit = Math.min(Math.max(limit * 5, 40), 120);
       const semanticFetchLimit = Math.min(Math.max(limit * 3, limit), VECTORIZE_QUERY_TOP_K_MAX);
       const lexicalRows = mode === 'semantic'
         ? []
-        : await runLexicalMemorySearch(env, brainId, query, typeFilter, lexicalFetchLimit);
+        : rankLexicalRows(await runLexicalMemorySearch(env, brainId, query, typeFilter, lexicalFetchLimit), query);
 
       let semanticCandidates: SemanticMemoryCandidate[] = [];
       if (mode !== 'lexical') {
@@ -416,12 +423,20 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
       const semanticRows = semanticCandidates.length
         ? await loadMemoryRowsByIds(env, brainId, semanticCandidates.map((candidate) => candidate.memory_id), typeFilter)
         : [];
-      const fusedRows = fuseSearchRows(mode, lexicalRows, semanticRows, semanticCandidates, limit);
-      if (!fusedRows.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
+      const fusedCandidates = fuseSearchCandidates(mode, lexicalRows, semanticRows, semanticCandidates);
+      if (!fusedCandidates.length) return { content: [{ type: 'text', text: 'No memories found.' }] };
 
-      await recordMemoryAccess(env, brainId, fusedRows.map((row) => String(row.id ?? '')));
-      const scored = await enrichAndProjectRows(env, brainId, fusedRows);
-      return { content: [{ type: 'text', text: JSON.stringify(scored, null, 2) }] };
+      // guirguispierre 2026-07-24: dynamic scores and supersession state now shape ranking before the limit slice, not after.
+      const fusedScores = new Map(fusedCandidates.map((c) => [String(c.row.id ?? ''), c.fused_score]));
+      const candidateIds = fusedCandidates.map((c) => String(c.row.id ?? '')).filter(Boolean);
+      const projected = await enrichAndProjectRows(env, brainId, fusedCandidates.map((c) => c.row));
+      const [supersededBy, conflictLosers] = await Promise.all([
+        loadSupersededByMap(env, brainId, candidateIds),
+        loadConflictLoserSet(env, brainId, candidateIds),
+      ]);
+      const ranked = rankSearchResults(projected, { fusedScores, supersededBy, conflictLosers }, limit);
+      await recordMemoryAccess(env, brainId, ranked.map((row) => String(row.id ?? '')));
+      return { content: [{ type: 'text', text: JSON.stringify(ranked, null, 2) }] };
     }
 
     case 'memory_reindex': {
