@@ -117,7 +117,7 @@ https://<your-worker>.<your-subdomain>.workers.dev/mcp
 
 ## Available MCP Tools
 
-**Memory operations:** `memory_save`, `memory_get`, `memory_get_fact`, `memory_search`, `memory_list`, `memory_update`, `memory_delete`, `memory_reindex`, `memory_stats`
+**Memory operations:** `memory_save`, `memory_get`, `memory_get_fact`, `memory_search`, `memory_context_pack`, `memory_list`, `memory_update`, `memory_delete`, `memory_reindex`, `memory_stats`
 
 **Graph:** `memory_link`, `memory_unlink`, `memory_links`, `memory_link_suggest`, `memory_path_find`, `memory_subgraph`, `memory_neighbors`, `memory_graph_stats`, `memory_tag_stats`
 

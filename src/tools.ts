@@ -46,6 +46,7 @@ import {
   loadSourceTrustMap,
   loadSupersededByMap,
   loadConflictLoserSet,
+  loadLinksForMemoryIds,
   getBrainPolicy,
   setBrainPolicy,
   loadActiveMemoryNodes,
@@ -69,6 +70,8 @@ import {
 import {
   rankLexicalRows,
   rankSearchResults,
+  estimateTokens,
+  packContextEntries,
 } from './retrieval.js';
 
 import {
@@ -3985,6 +3988,176 @@ export async function callTool(name: string, args: ToolArgs, env: Env, brainId: 
               urgency_score: r.urgency,
               ...(wantBreakdown ? { urgency_breakdown: r.breakdown } : {}),
             })),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'memory_context_pack': {
+      const { query, token_budget, mode: rawMode, hops: rawHops, type, max_memories } = args as {
+        query: unknown;
+        token_budget?: unknown;
+        mode?: unknown;
+        hops?: unknown;
+        type?: unknown;
+        max_memories?: unknown;
+      };
+      if (typeof query !== 'string' || query.trim() === '') return { content: [{ type: 'text', text: 'query must be a non-empty string.' }] };
+      if (type !== undefined && !isValidType(type)) return { content: [{ type: 'text', text: 'Invalid type filter.' }] };
+      if (rawMode !== undefined && !isMemorySearchMode(rawMode)) {
+        return { content: [{ type: 'text', text: 'mode must be lexical, semantic, or hybrid.' }] };
+      }
+      const mode: MemorySearchMode = rawMode ?? 'hybrid';
+      const tokenBudget = Math.min(Math.max(Math.floor(toFiniteNumber(token_budget, 2000)), 200), 12000);
+      const hops = Math.min(Math.max(Number.isInteger(rawHops) ? (rawHops as number) : 1, 0), 2);
+      const maxMemories = Math.min(Math.max(Number.isInteger(max_memories) ? (max_memories as number) : 25, 1), 50);
+      const typeFilter = type as MemoryType | undefined;
+
+      const lexicalRows = mode === 'semantic'
+        ? []
+        : rankLexicalRows(await runLexicalMemorySearch(env, brainId, query, typeFilter, 120), query);
+      let semanticCandidates: SemanticMemoryCandidate[] = [];
+      if (mode !== 'lexical') {
+        if (!hasSemanticSearchBindings(env)) {
+          if (mode === 'semantic') {
+            return { content: [{ type: 'text', text: 'Semantic search unavailable: AI and MEMORY_INDEX bindings are not configured.' }] };
+          }
+        } else {
+          try {
+            semanticCandidates = await querySemanticMemoryCandidates(env, brainId, query, VECTORIZE_QUERY_TOP_K_MAX, -1);
+          } catch (err) {
+            if (mode === 'semantic') {
+              const message = err instanceof Error ? err.message : 'Semantic query failed.';
+              return { content: [{ type: 'text', text: `Semantic search failed: ${message}` }] };
+            }
+            console.warn('[memory_context_pack:semantic]', err);
+          }
+        }
+      }
+      const semanticRows = semanticCandidates.length
+        ? await loadMemoryRowsByIds(env, brainId, semanticCandidates.map((c) => c.memory_id), typeFilter)
+        : [];
+      const fusedCandidates = fuseSearchCandidates(mode, lexicalRows, semanticRows, semanticCandidates).slice(0, 40);
+      if (!fusedCandidates.length) return { content: [{ type: 'text', text: 'No memories found for context pack.' }] };
+
+      const maxFused = fusedCandidates[0]?.fused_score ?? 0;
+      const rowById = new Map<string, Record<string, unknown>>();
+      const relevanceById = new Map<string, number>();
+      const viaById = new Map<string, { via: string; relation: string }>();
+      for (const candidate of fusedCandidates) {
+        const id = String(candidate.row.id ?? '');
+        if (!id) continue;
+        rowById.set(id, candidate.row);
+        relevanceById.set(id, maxFused > 0 ? candidate.fused_score / maxFused : 0);
+      }
+
+      let frontier = Array.from(rowById.keys());
+      for (let depth = 1; depth <= hops && frontier.length; depth++) {
+        const links = await loadLinksForMemoryIds(env, brainId, frontier);
+        const gains = new Map<string, { score: number; via: string; relation: string }>();
+        for (const link of links) {
+          const relation = normalizeRelation(link.relation_type);
+          const weight = relationSignalWeight(relation);
+          // guirguispierre 2026-07-24: negative-weight relations (contradicts) never pull neighbors into the pack.
+          if (weight <= 0) continue;
+          const pairs: Array<[string, string]> = [[link.from_id, link.to_id], [link.to_id, link.from_id]];
+          for (const [nodeId, neighborId] of pairs) {
+            const sourceRelevance = relevanceById.get(nodeId);
+            if (sourceRelevance === undefined || rowById.has(neighborId)) continue;
+            const score = sourceRelevance * weight * Math.pow(0.5, depth);
+            if (score < 0.05) continue;
+            const existing = gains.get(neighborId);
+            if (!existing || score > existing.score) gains.set(neighborId, { score, via: nodeId, relation });
+          }
+        }
+        if (!gains.size) break;
+        const neighborRows = await loadMemoryRowsByIds(env, brainId, Array.from(gains.keys()));
+        frontier = [];
+        for (const row of neighborRows) {
+          const id = String(row.id ?? '');
+          const gain = id ? gains.get(id) : undefined;
+          if (!id || !gain) continue;
+          rowById.set(id, row);
+          relevanceById.set(id, gain.score);
+          viaById.set(id, { via: gain.via, relation: gain.relation });
+          frontier.push(id);
+        }
+      }
+
+      const allIds = Array.from(rowById.keys());
+      const projected = await enrichAndProjectRows(env, brainId, Array.from(rowById.values()));
+      const [supersededBy, conflictLosers] = await Promise.all([
+        loadSupersededByMap(env, brainId, allIds),
+        loadConflictLoserSet(env, brainId, allIds),
+      ]);
+
+      const excludedSuperseded: string[] = [];
+      const excludedConflicts: string[] = [];
+      const entries: Array<{ id: string; text: string; utility: number; tokens: number }> = [];
+      const metaById = new Map<string, Record<string, unknown>>();
+      for (const row of projected) {
+        const id = String(row.id ?? '');
+        if (!id) continue;
+        if ((supersededBy.get(id) ?? []).length) {
+          excludedSuperseded.push(id);
+          continue;
+        }
+        if (conflictLosers.has(id)) {
+          excludedConflicts.push(id);
+          continue;
+        }
+        const relevance = relevanceById.get(id) ?? 0;
+        const importance = clamp01(toFiniteNumber(row.importance, 0.5));
+        const confidence = clamp01(toFiniteNumber(row.confidence, 0.7));
+        const utility = 0.6 * relevance + 0.4 * (0.6 * importance + 0.4 * confidence);
+        const label = typeof row.title === 'string' && row.title
+          ? row.title
+          : (typeof row.key === 'string' && row.key ? row.key : id);
+        const content = String(row.content ?? '').trim();
+        const text = `(${String(row.type ?? 'note')}) ${label} [id: ${id}]\n${content}`;
+        entries.push({ id, text, utility, tokens: estimateTokens(text) });
+        metaById.set(id, row);
+      }
+
+      const packed = packContextEntries(entries, tokenBudget, maxMemories);
+      if (!packed.selected.length) return { content: [{ type: 'text', text: 'No memories fit the requested token budget.' }] };
+      const contextText = packed.selected.map((entry, idx) => `[${idx + 1}] ${entry.text}`).join('\n\n');
+      await recordMemoryAccess(env, brainId, packed.selected.map((entry) => entry.id));
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            query,
+            mode,
+            hops,
+            token_budget: tokenBudget,
+            used_tokens_estimate: packed.used_tokens,
+            memory_count: packed.selected.length,
+            context: contextText,
+            memories: packed.selected.map((entry, idx) => {
+              const row = metaById.get(entry.id) ?? {};
+              const via = viaById.get(entry.id);
+              return {
+                ref: idx + 1,
+                id: entry.id,
+                type: row.type ?? null,
+                title: row.title ?? null,
+                key: row.key ?? null,
+                relevance: round3(relevanceById.get(entry.id) ?? 0),
+                utility: round3(entry.utility),
+                confidence: row.confidence ?? null,
+                importance: row.importance ?? null,
+                tokens_estimate: entry.tokens,
+                truncated: entry.truncated,
+                ...(via ? { included_via: via } : {}),
+              };
+            }),
+            excluded: {
+              superseded: excludedSuperseded,
+              conflict_losers: excludedConflicts,
+              over_budget_count: packed.skipped_over_budget,
+            },
           }, null, 2),
         }],
       };
